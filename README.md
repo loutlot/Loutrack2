@@ -45,6 +45,13 @@ loutrack2/
 │   ├── control.json           # Host→Pi 制御メッセージ
 │   └── calibration_intrinsics_v1.json  # 較正成果物
 ├── src/
+│   ├── pi/                   # Pi側キャプチャサービス
+│   │   ├── capture.py         # エントリポイント
+│   │   └── README.md
+│   ├── deploy/                # Piデプロイスクリプト
+│   │   ├── hosts.ini          # Piインベントリ
+│   │   ├── deploy.sh          # デプロイスクリプト
+│   │   └── rollback.sh        # ロールバックスクリプト
 │   └── host/                  # Host側Pythonモジュール
 │       ├── logger.py          # フレームログ記録
 │       ├── replay.py          # ログリプレイ
@@ -55,10 +62,6 @@ loutrack2/
 │       ├── pipeline.py        # 統合パイプライン
 │       ├── sync_eval.py       # 同期評価 (許容窓/欠損/ドリフト)
 │       └── visualize.py       # 可視化ユーティリティ
-├── deploy/                    # Piデプロイスクリプト
-│   ├── hosts.ini              # Piインベントリ
-│   ├── deploy.sh              # デプロイスクリプト
-│   └── rollback.sh            # ロールバックスクリプト
 ├── docs/                      # 設計ドキュメント
 ├── tests/                     # テストコード
 └── requirements.txt           # Python依存パッケージ
@@ -115,7 +118,7 @@ ssh-keygen -t ed25519 -f ~/.ssh/loutrack_deploy_key
 ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@192.168.1.101
 
 # デプロイ実行
-./deploy/deploy.sh
+./src/deploy/deploy.sh
 ```
 
 ## 依存関係
@@ -164,3 +167,14 @@ MIT License
 ## 参考プロジェクト
 
 - [Low-Cost-Mocap](https://github.com/jyjblrd/Low-Cost-Mocap) - jyjblrd氏の参考実装
+
+## Piサービス統合の整合
+新しいPiサービス環境へのデプロイと制御プロトコルの整合を明確化します。
+
+- Pi 側エントリポイント: src/pi/capture.py を使用します。
+- TCP 制御: NDJSON 形式のコマンドを受け付けるポート 8554 をデフォルトとします。実行は PYTHONPATH=src .venv/bin/python -m host.control ... の形式で行います。
+- UDP フレーム: Pi 側から Host へ送信されるデータは JSON 形式。デフォルトのブロードキャスト先は 255.255.255.255:5000 です。
+- systemd の例: capture.py をコマンドライン引数付きで実行、または EnvironmentFile で環境変数を指定します。
+- src/deploy/hosts.ini の camera_id: pi-cam-01 などの文字列を使用します。
+- 未実装または検討中: マスク/LED 制御、および picamera2 バックエンドは現状未実装または今後の計画として記述します。
+- 参照: docs/pi_control_transport.md に制御プロトコルの詳細を記載しています。

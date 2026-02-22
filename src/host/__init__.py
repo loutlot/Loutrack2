@@ -32,6 +32,16 @@ from .pipeline import TrackingPipeline, TrackingSession
 from .visualize import TrackingVisualizer, SimpleGraph
 from .sync_eval import SyncEvaluator
 
+from .control import (
+    send_request,
+    ping,
+    start,
+    stop,
+    set_exposure,
+    set_gain,
+    set_fps,
+)
+
 __all__ = [
     # Logger
     "FrameLogger",
@@ -70,6 +80,13 @@ __all__ = [
     "TrackingPipeline",
     "TrackingSession",
     "SyncEvaluator",
+    "send_request",
+    "ping",
+    "start",
+    "stop",
+    "set_exposure",
+    "set_gain",
+    "set_fps",
     # Visualize
     "TrackingVisualizer",
     "SimpleGraph",

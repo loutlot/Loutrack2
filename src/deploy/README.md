@@ -9,7 +9,7 @@ SSH/rsyncベースのRaspberry Pi配布・管理ツール。
 ## ファイル構成
 
 ```
-deploy/
+src/deploy/
 ├── hosts.ini       # Piインベントリ (IP/camera_id)
 ├── deploy.sh       # デプロイスクリプト
 ├── rollback.sh     # ロールバックスクリプト
@@ -71,37 +71,37 @@ sudo echo "pi ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart loutrack.service" >
 
 ```ini
 # hostname    ip_address         camera_id
-pi-cam-01     192.168.1.101      1
-pi-cam-02     192.168.1.102      2
-pi-cam-03     192.168.1.103      3
+pi-cam-01     192.168.1.101    pi-cam-01
+pi-cam-02     192.168.1.102    pi-cam-02
+pi-cam-03     192.168.1.103    pi-cam-03
 ```
 
 - `#` で始まる行はコメントとして無視
 - 各フィールドはスペース/タブ区切り
 - `hostname`: 識別用名前 (任意)
 - `ip_address`: PiのIPアドレス
-- `camera_id`: カメラ識別子 (メッセージで使用)
+- `camera_id`: カメラ識別子の文字列。メッセージ/制御で使用します。
 
 ## デプロイ手順
 
 ### 基本的なデプロイ
 
 ```bash
-# ./pi/ ディレクトリの内容を全Piに配布
-./deploy/deploy.sh
+# ./src/pi/ ディレクトリの内容を全Piに配布
+./src/deploy/deploy.sh
 ```
 
 ### オプション
 
 ```bash
 # ドライラン (実際には変更しない)
-./deploy/deploy.sh --dry-run
+./src/deploy/deploy.sh --dry-run
 
 # 順次実行 (デバッグ用)
-./deploy/deploy.sh --no-parallel
+./src/deploy/deploy.sh --no-parallel
 
 # バージョンタグ指定
-./deploy/deploy.sh --version v1.2.3
+./src/deploy/deploy.sh --version v1.2.3
 ```
 
 ### デプロイの動作
@@ -117,7 +117,7 @@ pi-cam-03     192.168.1.103      3
 
 ```bash
 # 前のバージョンに戻す
-./deploy/rollback.sh
+./src/deploy/rollback.sh
 ```
 
 ### ロールバックの動作
@@ -211,10 +211,21 @@ sudo systemctl restart loutrack.service
 
 ## ログ
 
-- `deploy/deploy.log` - デプロイログ
-- `deploy/rollback.log` - ロールバックログ
+- `src/deploy/deploy.log` - デプロイログ
+- `src/deploy/rollback.log` - ロールバックログ
 
 ```bash
 # ログをリアルタイムで確認
-tail -f deploy/deploy.log
+tail -f src/deploy/deploy.log
 ```
+
+## Piサービス統合の整合
+このセクションは、新しいPiサービス環境にデプロイ構成と制御プロトコルを統合するためのポイントをまとめたものです。
+
+- エントリポイント: Pi 側のキャプチャ処理は src/pi/capture.py を使用します。
+- TCP 制御 NDJSON ポート: 8554 をデフォルトとして、制御コマンドは PYTHONPATH=src .venv/bin/python -m host.control ... 形式で実行します。
+- UDP フレーム: Pi から Host へ送信される各データグラムは JSON 形式。デフォルトのブロードキャスト先は 255.255.255.255:5000 です。
+- systemd の例: capture.py を引数付きで実行するか、EnvironmentFile を用いて環境変数を読み込む形で起動します。
+- src/deploy/hosts.ini の camera_id: 文字列で pi-cam-01 等を使用します。
+- 未実装/検討中: mask/LED の制御欄は現時点では未実装、または今後の計画として記載します。
+- 参照: docs/pi_control_transport.md に制御プロトコルの詳細を記載しています。
