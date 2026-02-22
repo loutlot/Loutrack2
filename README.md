@@ -61,11 +61,8 @@ loutrack2/
 │   └── rollback.sh            # ロールバックスクリプト
 ├── docs/                      # 設計ドキュメント
 ├── tests/                     # テストコード
-├── references/                # 任意: 外部参照コード置き場（Git管理外）
 └── requirements.txt           # Python依存パッケージ
 ```
-
-`references/` は外部プロジェクトをローカル参照するための任意ディレクトリです。公開リポジトリには含めません。
 
 ## クイックスタート
 
@@ -167,5 +164,3 @@ MIT License
 ## 参考プロジェクト
 
 - [Low-Cost-Mocap](https://github.com/jyjblrd/Low-Cost-Mocap) - jyjblrd氏の参考実装
-
-必要な場合は各自ローカル環境で取得し、`references/` 配下に配置して参照してください。
