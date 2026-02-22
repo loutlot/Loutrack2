@@ -1,0 +1,241 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://loutrack2.local/schema/calibration_intrinsics_v1.json",
+  "title": "Camera Intrinsic Calibration",
+  "description": "Schema for camera intrinsic calibration results from Charuco board detection",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "camera_model",
+    "resolution",
+    "camera_matrix",
+    "distortion_coefficients",
+    "rms_error",
+    "captured_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0",
+      "description": "Schema version for future compatibility"
+    },
+    "camera_id": {
+      "type": "string",
+      "description": "Unique identifier for this camera (optional, for tracking)",
+      "examples": ["pi-cam-01", "pi-cam-02"]
+    },
+    "camera_model": {
+      "type": "string",
+      "enum": ["pinhole", "fisheye"],
+      "default": "pinhole",
+      "description": "Camera projection model"
+    },
+    "resolution": {
+      "type": "object",
+      "required": ["width", "height"],
+      "properties": {
+        "width": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Image width in pixels"
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Image height in pixels"
+        }
+      },
+      "additionalProperties": false
+    },
+    "camera_matrix": {
+      "type": "object",
+      "description": "Intrinsic camera matrix K (3x3)",
+      "required": ["fx", "fy", "cx", "cy"],
+      "properties": {
+        "fx": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Focal length in x (pixels)"
+        },
+        "fy": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Focal length in y (pixels)"
+        },
+        "cx": {
+          "type": "number",
+          "description": "Principal point x coordinate (pixels)"
+        },
+        "cy": {
+          "type": "number",
+          "description": "Principal point y coordinate (pixels)"
+        },
+        "matrix": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": { "type": "number" },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "minItems": 3,
+          "maxItems": 3,
+          "description": "Full 3x3 camera matrix [[fx, 0, cx], [0, fy, cy], [0, 0, 1]]"
+        }
+      },
+      "additionalProperties": false
+    },
+    "distortion_coefficients": {
+      "type": "object",
+      "description": "Lens distortion coefficients",
+      "required": ["k1", "k2", "p1", "p2", "k3"],
+      "properties": {
+        "k1": {
+          "type": "number",
+          "description": "Radial distortion coefficient 1"
+        },
+        "k2": {
+          "type": "number",
+          "description": "Radial distortion coefficient 2"
+        },
+        "k3": {
+          "type": "number",
+          "description": "Radial distortion coefficient 3"
+        },
+        "k4": {
+          "type": "number",
+          "description": "Radial distortion coefficient 4 (optional, for 8-coefficient model)"
+        },
+        "k5": {
+          "type": "number",
+          "description": "Radial distortion coefficient 5 (optional, for 8-coefficient model)"
+        },
+        "k6": {
+          "type": "number",
+          "description": "Radial distortion coefficient 6 (optional, for 8-coefficient model)"
+        },
+        "p1": {
+          "type": "number",
+          "description": "Tangential distortion coefficient 1"
+        },
+        "p2": {
+          "type": "number",
+          "description": "Tangential distortion coefficient 2"
+        },
+        "array": {
+          "type": "array",
+          "items": { "type": "number" },
+          "minItems": 5,
+          "maxItems": 14,
+          "description": "Distortion coefficients as array [k1, k2, p1, p2, k3, ...]"
+        }
+      },
+      "additionalProperties": false
+    },
+    "rms_error": {
+      "type": "number",
+      "minimum": 0,
+      "description": "RMS reprojection error in pixels. Target: < 1.0 px, Good: < 0.5 px"
+    },
+    "captured_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when calibration was performed"
+    },
+    "quality": {
+      "type": "object",
+      "description": "Quality metrics for calibration validation",
+      "properties": {
+        "mean_error": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Mean reprojection error in pixels"
+        },
+        "max_error": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Maximum reprojection error across all frames"
+        },
+        "per_view_errors": {
+          "type": "array",
+          "items": { "type": "number", "minimum": 0 },
+          "description": "Reprojection error for each calibration image"
+        },
+        "pixel_aspect_ratio": {
+          "type": "number",
+          "description": "Ratio of fx/fy, should be close to 1.0 (0.99-1.01 is good)"
+        },
+        "num_valid_frames": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Number of valid calibration images used (target: 25-50)"
+        },
+        "total_points": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Total number of corner points used for calibration"
+        }
+      },
+      "additionalProperties": false
+    },
+    "board": {
+      "type": "object",
+      "description": "Charuco board configuration used for calibration",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "charuco",
+          "description": "Board type"
+        },
+        "squares_x": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Number of squares in X direction"
+        },
+        "squares_y": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Number of squares in Y direction"
+        },
+        "square_length_m": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Square side length in meters"
+        },
+        "marker_length_m": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "ArUco marker side length in meters"
+        },
+        "dictionary": {
+          "type": "string",
+          "description": "ArUco dictionary used (e.g., DICT_5X5_1000)",
+          "examples": ["DICT_4X4_50", "DICT_5X5_1000", "DICT_6X6_250"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "environment": {
+      "type": "object",
+      "description": "Environmental conditions during calibration (optional)",
+      "properties": {
+        "lighting": {
+          "type": "string",
+          "description": "Lighting conditions",
+          "examples": ["controlled", "natural", "mixed"]
+        },
+        "board_material": {
+          "type": "string",
+          "description": "Board backing material",
+          "examples": ["foamboard", "aluminum", "acrylic", "paper"]
+        },
+        "notes": {
+          "type": "string",
+          "description": "Additional notes about calibration session"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": true
+}

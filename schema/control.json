@@ -1,0 +1,155 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://loutrack2.local/schema/control.json",
+  "title": "Host to Pi Control Message",
+  "description": "Schema for control messages sent from Host to Raspberry Pi via TCP/JSON (JSON-RPC style)",
+  "definitions": {
+    "command": {
+      "type": "string",
+      "enum": [
+        "start",
+        "stop",
+        "set_exposure",
+        "set_gain",
+        "set_fps",
+        "mask_start",
+        "mask_stop",
+        "led_on",
+        "led_off",
+        "set_resolution",
+        "ping"
+      ],
+      "description": "Command to execute on the Pi"
+    },
+    "params_start": {
+      "type": "object",
+      "description": "Parameters for start command",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["capture", "mask"],
+          "default": "capture"
+        }
+      }
+    },
+    "params_exposure": {
+      "type": "object",
+      "description": "Parameters for exposure setting",
+      "required": ["value"],
+      "properties": {
+        "value": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000,
+          "description": "Exposure time in microseconds"
+        }
+      }
+    },
+    "params_gain": {
+      "type": "object",
+      "description": "Parameters for gain setting",
+      "required": ["value"],
+      "properties": {
+        "value": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Analog gain value"
+        }
+      }
+    },
+    "params_fps": {
+      "type": "object",
+      "description": "Parameters for FPS setting",
+      "required": ["value"],
+      "properties": {
+        "value": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 120,
+          "description": "Target frames per second"
+        }
+      }
+    },
+    "params_led": {
+      "type": "object",
+      "description": "Parameters for LED control",
+      "properties": {
+        "ir": {
+          "type": "boolean",
+          "description": "IR flash LED (GPIO 6)"
+        },
+        "status_r": {
+          "type": "boolean",
+          "description": "Status LED Red (GPIO 26)"
+        },
+        "status_g": {
+          "type": "boolean",
+          "description": "Status LED Green (GPIO 22)"
+        },
+        "status_b": {
+          "type": "boolean",
+          "description": "Status LED Blue (GPIO 5)"
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "title": "Request Message",
+      "type": "object",
+      "required": ["request_id", "camera_id", "cmd"],
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "description": "Unique request identifier for request-response matching"
+        },
+        "camera_id": {
+          "type": "string",
+          "description": "Target camera/Pi identifier, or 'broadcast' for all"
+        },
+        "cmd": {
+          "$ref": "#/definitions/command"
+        },
+        "params": {
+          "type": "object",
+          "description": "Command-specific parameters"
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "title": "Response Message",
+      "type": "object",
+      "required": ["request_id", "camera_id", "ack"],
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "description": "Matches the request_id from the request"
+        },
+        "camera_id": {
+          "type": "string",
+          "description": "Responding camera/Pi identifier"
+        },
+        "ack": {
+          "type": "boolean",
+          "description": "True if command was accepted, false otherwise"
+        },
+        "error_code": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Error code if ack is false (0 = no error, >0 = error)"
+        },
+        "error_message": {
+          "type": "string",
+          "description": "Human-readable error message"
+        },
+        "result": {
+          "type": "object",
+          "description": "Optional result data from command execution"
+        }
+      },
+      "additionalProperties": false
+    }
+  ]
+}

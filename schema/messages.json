@@ -1,0 +1,53 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://loutrack2.local/schema/messages.json",
+  "title": "Pi to Host Frame Message",
+  "description": "Schema for frame messages sent from Raspberry Pi to Host via UDP/JSON",
+  "type": "object",
+  "required": ["camera_id", "timestamp", "frame_index", "blobs"],
+  "properties": {
+    "camera_id": {
+      "type": "string",
+      "description": "Unique identifier for the camera/Raspberry Pi",
+      "examples": ["pi-cam-01", "pi-cam-02"]
+    },
+    "timestamp": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Unix epoch timestamp in microseconds (int64). Represents the frame capture completion time, PTP-synchronized if available.",
+      "examples": [1708594800000000]
+    },
+    "frame_index": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295,
+      "description": "Monotonically increasing frame counter per camera (uint32). Used as secondary pairing key if timestamp fails.",
+      "examples": [0, 1, 2]
+    },
+    "blobs": {
+      "type": "array",
+      "description": "Array of detected reflective marker blobs in image coordinates",
+      "items": {
+        "type": "object",
+        "required": ["x", "y", "area"],
+        "properties": {
+          "x": {
+            "type": "number",
+            "description": "X coordinate in pixels (image coordinates, unrectified)"
+          },
+          "y": {
+            "type": "number",
+            "description": "Y coordinate in pixels (image coordinates, unrectified)"
+          },
+          "area": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Blob area in square pixels"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
