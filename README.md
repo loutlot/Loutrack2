@@ -78,9 +78,19 @@ pip install -r requirements.txt
 ### 2. カメラ較正
 
 ```bash
-# Charucoボードを使用して較正画像を撮影
-# 較正スクリプトを実行（Step 9で実装予定）
-python scripts/calibrate.py --camera pi-cam-01
+# 1. Charucoボード生成
+python src/camera-calibration/charuco_board.py --output "./calibration/boards/charuco_6x8_30mm_a4.pdf" --write-metadata
+
+# 2. 100%印刷（fit-to-page禁止）
+# （手動で印刷設定を調整）
+
+# 3. 1マス実測 → その値を <MEASURED_MM> に入れる
+# （例: 30.2）
+
+# 4. カメラ較正（OpenCVウィンドウ表示可能なOSで実行）
+# (1) メインパイプラインはヘッドレスで実行されます（GUI不要）
+# (2) 出力は calibration/calibration_intrinsics_v1_{camera_id}.json に保存されます（camera_id は --camera から取得）
+python src/camera-calibration/calibrate.py --camera pi-cam-01 --square-length-mm <MEASURED_MM> --output "./calibration/calibration_intrinsics_v1_pi-cam-01.json"
 ```
 
 ### 3. Host側の起動
