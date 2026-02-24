@@ -177,14 +177,3 @@ MIT License
 ## 参考プロジェクト
 
 - [Low-Cost-Mocap](https://github.com/jyjblrd/Low-Cost-Mocap) - jyjblrd氏の参考実装
-
-## Piサービス統合の整合
-新しいPiサービス環境へのデプロイと制御プロトコルの整合を明確化します。
-
-- Pi 側エントリポイント: src/pi/capture.py を使用します。
-- TCP 制御: NDJSON 形式のコマンドを受け付けるポート 8554 をデフォルトとします。実行は PYTHONPATH=src .venv/bin/python -m host.control ... の形式で行います。
-- UDP フレーム: Pi 側から Host へ送信されるデータは JSON 形式。デフォルトのブロードキャスト先は 255.255.255.255:5000 です。
-- systemd の例: capture.py をコマンドライン引数付きで実行、または EnvironmentFile で環境変数を指定します。
-- src/deploy/hosts.ini の camera_id: pi-cam-01 などの文字列を使用します。
-- 未実装または検討中: マスク/LED 制御、および picamera2 バックエンドは現状未実装または今後の計画として記述します。
-- 参照: docs/pi_control_transport.md に制御プロトコルの詳細を記載しています。
