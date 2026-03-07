@@ -151,8 +151,13 @@ ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@192.168.1.101
 
 ## TODO (Current Sprint)
 
-- [x] Charuco 印刷ボードの実測値を確定（5マス=138mm → 1マス=27.6mm）
-- [ ] `pi-cam-01` の内部較正を実測値ベースで再実施する
+- [x] Charuco 印刷ボードの実測値を確定（5マス=150mm → 1マス=30.0mm）
+- [x] Charuco 較正メモを追記（`LensPosition=5.2` が現時点ベスト）
+- [x] `docs/next_steps_charuco.md` を実機ゼロベース手順へ更新（sim前提を除去）
+- [x] `docs/next_steps_charuco.md` Step 1 に `SPACE`/`C` の詳細手順を追記
+- [x] `docs/next_steps_charuco.md` に `picamera2 is required` エラー対処（venv再作成手順）を追記
+- [x] `docs/next_steps_charuco.md` に「構図を被らせない撮影ルール」を追記
+- [ ] `pi-cam-01` の内部較正を実測値ベースで再実施する（まずこの1台で手順検証）
 - [ ] `pi-cam-02` の内部較正を実施し、成果物 JSON を保存する
 - [ ] 内部較正の品質判定基準を「暫定」から「運用基準」に確定する
 - [ ] `src/camera-calibration/calibrate_extrinsics.py` を実装する
@@ -167,6 +172,7 @@ ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@192.168.1.101
 3. `docs/requirements_def.md`（要件定義）
 4. `docs/pi_control_transport.md`（Pi 制御通信仕様）
 5. `schema/README.md`（JSON Schema の参照）
+6. `docs/next_steps_charuco.md`（内部較正の実行手順。Step 0 にまっさらな Pi 初期セットアップを記載）
 
 補足: `docs/pre_doc/` は検討メモ・背景資料であり、現行仕様の正本ではありません。
 
