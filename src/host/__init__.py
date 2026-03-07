@@ -31,6 +31,16 @@ from .rigid import (
 from .pipeline import TrackingPipeline, TrackingSession
 from .visualize import TrackingVisualizer, SimpleGraph
 from .sync_eval import SyncEvaluator
+from .wand_session import (
+    WAND_NAME,
+    WAND_MARKER_DIAMETER_MM,
+    WAND_OUTER_SHORT_MM,
+    WAND_OUTER_LONG_MM,
+    WAND_POINTS_MM,
+    CameraTarget,
+    SessionConfig,
+    WandSession,
+)
 
 from .control import (
     send_request,
@@ -87,6 +97,14 @@ __all__ = [
     "set_exposure",
     "set_gain",
     "set_fps",
+    "WAND_NAME",
+    "WAND_MARKER_DIAMETER_MM",
+    "WAND_OUTER_SHORT_MM",
+    "WAND_OUTER_LONG_MM",
+    "WAND_POINTS_MM",
+    "CameraTarget",
+    "SessionConfig",
+    "WandSession",
     # Visualize
     "TrackingVisualizer",
     "SimpleGraph",

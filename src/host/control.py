@@ -88,6 +88,49 @@ def set_fps(ip: str, port: int, camera_id: str, value: int, request_id: Optional
     return send_request(ip, port, req, timeout=timeout)
 
 
+def mask_start(
+    ip: str,
+    port: int,
+    camera_id: str,
+    threshold: Optional[int] = None,
+    frames: Optional[int] = None,
+    hit_ratio: Optional[float] = None,
+    min_area: Optional[int] = None,
+    dilate: Optional[int] = None,
+    request_id: Optional[str] = None,
+    timeout: float = 5.0,
+) -> Dict[str, Any]:
+    params: Dict[str, Any] = {}
+    if threshold is not None:
+        params["threshold"] = int(threshold)
+    if frames is not None:
+        params["frames"] = int(frames)
+    if hit_ratio is not None:
+        params["hit_ratio"] = float(hit_ratio)
+    if min_area is not None:
+        params["min_area"] = int(min_area)
+    if dilate is not None:
+        params["dilate"] = int(dilate)
+
+    req: Dict[str, Any] = {"cmd": "mask_start", "camera_id": camera_id, "params": params}
+    if request_id:
+        req["request_id"] = request_id
+    return send_request(ip, port, req, timeout=timeout)
+
+
+def mask_stop(
+    ip: str,
+    port: int,
+    camera_id: str,
+    request_id: Optional[str] = None,
+    timeout: float = 5.0,
+) -> Dict[str, Any]:
+    req: Dict[str, Any] = {"cmd": "mask_stop", "camera_id": camera_id}
+    if request_id:
+        req["request_id"] = request_id
+    return send_request(ip, port, req, timeout=timeout)
+
+
 def _print_json_and_exit(resp: Dict[str, Any]) -> None:
     print(json.dumps(resp))
     if isinstance(resp, dict) and resp.get("ack") is True:
@@ -121,6 +164,15 @@ def _build_cli_and_run() -> None:
     fps_p = sub.add_parser("set_fps", help="Set frames per second")
     fps_p.add_argument("--value", type=int, required=True, help="FPS value to set")
 
+    mask_start_p = sub.add_parser("mask_start", help="Initialize static mask on Pi")
+    mask_start_p.add_argument("--threshold", type=int, help="Threshold value")
+    mask_start_p.add_argument("--frames", type=int, help="Initialization frame count")
+    mask_start_p.add_argument("--hit-ratio", dest="hit_ratio", type=float, help="Hit ratio (0,1]")
+    mask_start_p.add_argument("--min-area", dest="min_area", type=int, help="Minimum mask area")
+    mask_start_p.add_argument("--dilate", type=int, help="Dilate radius")
+
+    sub.add_parser("mask_stop", help="Clear static mask on Pi")
+
     args = parser.parse_args()
 
     ip = args.ip
@@ -141,6 +193,20 @@ def _build_cli_and_run() -> None:
             resp = set_gain(ip, port, camera_id=camera_id, value=args.value, request_id=req_id)
         elif args.cmd == "set_fps":
             resp = set_fps(ip, port, camera_id=camera_id, value=args.value, request_id=req_id)
+        elif args.cmd == "mask_start":
+            resp = mask_start(
+                ip,
+                port,
+                camera_id=camera_id,
+                threshold=args.threshold,
+                frames=args.frames,
+                hit_ratio=args.hit_ratio,
+                min_area=args.min_area,
+                dilate=args.dilate,
+                request_id=req_id,
+            )
+        elif args.cmd == "mask_stop":
+            resp = mask_stop(ip, port, camera_id=camera_id, request_id=req_id)
         else:
             raise SystemExit("Unknown command")
 

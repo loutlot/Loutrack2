@@ -235,6 +235,30 @@ print(status["recommendation"])
 
 ---
 
+### wand_session.py - wand収録オーケストレーション
+
+Host主導で `ping -> set_exposure/set_gain/set_fps -> mask_start -> start(mode=wand_capture) -> stop` を実行。
+`hosts.ini` と `UDPReceiver.get_camera_addresses()` をマージして対象カメラを確定。
+
+```python
+from src.host.wand_session import SessionConfig, WandSession
+
+session = WandSession()
+result = session.run_session(
+    SessionConfig(exposure_us=1200, gain=4.0, fps=80, duration_s=60.0)
+)
+print(result["session_id"])
+```
+
+**主要クラス/定数**:
+| 名前 | 説明 |
+|------|------|
+| `WandSession` | wand収録制御の実行クラス |
+| `SessionConfig` | 収録パラメータ |
+| `WAND_POINTS_MM` | wand 3点の固定3D座標（mm） |
+
+---
+
 ### visualize.py - 可視化
 
 コンソール出力とファイルエクスポート。

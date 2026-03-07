@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import math
 import socket
 import threading
 import time
@@ -24,7 +25,16 @@ ERROR_BACKEND_UNAVAILABLE = 6
 ERROR_INTERNAL = 7
 
 STATE_IDLE = "IDLE"
+STATE_MASK_INIT = "MASK_INIT"
+STATE_READY = "READY"
 STATE_RUNNING = "RUNNING"
+
+MASK_INIT_FRAMES = 30
+MASK_THRESHOLD = 200
+MASK_HIT_RATIO = 0.7
+MASK_MIN_AREA_PX = 4
+MASK_DILATE_PX = 2
+MASK_MAX_RATIO_WARNING = 0.4
 
 MAX_LINE_BYTES = 65536
 LINE_TIMEOUT_SECONDS = 2.0
@@ -50,6 +60,8 @@ MVP_SUPPORTED_COMMANDS = {
     "set_exposure",
     "set_gain",
     "set_fps",
+    "mask_start",
+    "mask_stop",
 }
 
 
@@ -103,6 +115,7 @@ class UDPFrameEmitter:
         threshold: int = 200,
         time_us_fn: Callable[[], int] | None = None,
         max_frames: int | None = None,
+        mask: np.ndarray | None = None,
     ):
         self._camera_id: str = camera_id
         self._udp_host: str = udp_host
@@ -121,6 +134,9 @@ class UDPFrameEmitter:
         self._thread: threading.Thread | None = None
         self._socket: socket.socket | None = None
         self._frame_index: int = 0
+        self._mask: np.ndarray | None = (
+            mask.astype(bool, copy=False) if mask is not None else None
+        )
 
     def start(self) -> None:
         with self._lock:
@@ -162,6 +178,10 @@ class UDPFrameEmitter:
         with self._lock:
             self._target_fps = float(fps)
 
+    def set_mask(self, mask: np.ndarray | None) -> None:
+        with self._lock:
+            self._mask = mask.astype(bool, copy=False) if mask is not None else None
+
     def _loop(self) -> None:
         sent = 0
         next_tick = time.perf_counter()
@@ -170,12 +190,16 @@ class UDPFrameEmitter:
                 sock = self._socket
                 fps = self._target_fps
                 max_frames = self._max_frames
+                mask = self._mask
 
             if sock is None:
                 return
 
-            frame = self._backend.next_frame()
-            blobs = detect_blobs(frame, threshold=self._threshold)
+            try:
+                frame = self._backend.next_frame()
+                blobs = detect_blobs(frame, threshold=self._threshold, mask=mask)
+            except Exception:
+                return
             msg = {
                 "camera_id": self._camera_id,
                 "timestamp": int(self._time_us_fn()),
@@ -226,6 +250,8 @@ class FrameBackend(Protocol):
     def stop(self) -> None: ...
 
     def next_frame(self) -> np.ndarray: ...
+
+    def capture_array(self) -> np.ndarray: ...
 
     def set_exposure_us(self, value_us: int) -> None: ...
 
@@ -310,6 +336,9 @@ class DummyBackend:
 
         self._frame_index += 1
         return frame
+
+    def capture_array(self) -> np.ndarray:
+        return self.next_frame()
 
 
 @dataclass
@@ -405,6 +434,9 @@ class Picamera2Backend:
             raise RuntimeError("picamera2 capture_array returned non-ndarray")
         return cast(np.ndarray, frame)
 
+    def capture_array(self) -> np.ndarray:
+        return self.next_frame()
+
     def _apply_controls_if_running(self) -> None:
         if not self._running or self._picam2 is None:
             return
@@ -428,11 +460,24 @@ class Picamera2Backend:
             return
 
 
-def detect_blobs(frame: np.ndarray, threshold: int) -> list[dict[str, float]]:
+def detect_blobs(
+    frame: np.ndarray,
+    threshold: int,
+    mask: np.ndarray | None = None,
+) -> list[dict[str, float]]:
     if frame.ndim == 3:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     else:
         gray = frame
+
+    if mask is not None:
+        if mask.shape != gray.shape:
+            raise ValueError("mask dimensions must match the grayscale frame")
+        mask_bool = mask.astype(bool, copy=False)
+        if mask_bool.any():
+            masked_gray = gray.copy()
+            masked_gray[mask_bool] = 0
+            gray = masked_gray
 
     threshold_value = max(0, min(255, int(threshold)))
     _retval, binary = cv2.threshold(gray, threshold_value, 255, cv2.THRESH_BINARY)
@@ -469,6 +514,12 @@ class ControlServerConfig:
     backend: str = "dummy"
     target_fps: int = 60
     threshold: int = 200
+    mask_init_frames: int = MASK_INIT_FRAMES
+    mask_threshold: int = MASK_THRESHOLD
+    mask_hit_ratio: float = MASK_HIT_RATIO
+    mask_min_area_px: int = MASK_MIN_AREA_PX
+    mask_dilate_px: int = MASK_DILATE_PX
+    mask_max_ratio_warning: float = MASK_MAX_RATIO_WARNING
 
 
 class ControlServer:
@@ -485,6 +536,10 @@ class ControlServer:
         self._desired_exposure_us: int | None = None
         self._desired_gain: float | None = None
         self._desired_fps: int | None = int(self._config.target_fps)
+        self._static_mask: np.ndarray | None = None
+        self._mask_pixels: int = 0
+        self._mask_ratio: float = 0.0
+        self._mask_warning: str | None = None
 
     def serve_forever(self) -> None:
         self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -682,13 +737,21 @@ class ControlServer:
             )
 
         params = cast(dict[str, object], params_obj)
+        mode_param = params.get("mode", "capture")
 
         try:
             if cmd == "ping":
                 return self._ok_response(request_id, request_camera_id)
 
             if cmd == "start":
-                return self._handle_start(request_id, request_camera_id)
+                if not isinstance(mode_param, str):
+                    return self._error_response(
+                        request_id=request_id,
+                        request_camera_id=request_camera_id,
+                        error_code=ERROR_INVALID_REQUEST,
+                        error_message="invalid_request: start.mode must be string",
+                    )
+                return self._handle_start(request_id, request_camera_id, mode_param, params)
 
             if cmd == "stop":
                 return self._handle_stop(request_id, request_camera_id)
@@ -729,6 +792,12 @@ class ControlServer:
                 self._set_target_fps(value)
                 return self._ok_response(request_id, request_camera_id)
 
+            if cmd == "mask_start":
+                return self._handle_mask_start(request_id, request_camera_id, params)
+
+            if cmd == "mask_stop":
+                return self._handle_mask_stop(request_id, request_camera_id)
+
             return self._error_response(
                 request_id=request_id,
                 request_camera_id=request_camera_id,
@@ -743,19 +812,192 @@ class ControlServer:
                 error_message=f"internal_error: {exc}",
             )
 
-    def _handle_start(self, request_id: str, request_camera_id: str) -> dict[str, object]:
+    def _handle_mask_start(self, request_id: str, request_camera_id: str, params: dict[str, object]) -> dict[str, object]:
+        threshold = params.get("threshold", self._config.mask_threshold)
+        frames = params.get("frames", self._config.mask_init_frames)
+        hit_ratio = params.get("hit_ratio", self._config.mask_hit_ratio)
+        min_area = params.get("min_area", self._config.mask_min_area_px)
+        dilate = params.get("dilate", self._config.mask_dilate_px)
+
+        if not isinstance(threshold, int) or threshold < 0:
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message="invalid_request: threshold must be non-negative integer",
+            )
+        if not isinstance(frames, int) or frames <= 0:
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message="invalid_request: frames must be positive integer",
+            )
+        if not isinstance(hit_ratio, (int, float)) or not (0.0 < float(hit_ratio) <= 1.0):
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message="invalid_request: hit_ratio must be in (0,1]",
+            )
+        if not isinstance(min_area, int) or min_area < 0:
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message="invalid_request: min_area must be non-negative integer",
+            )
+        if not isinstance(dilate, int) or dilate < 0:
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message="invalid_request: dilate must be non-negative integer",
+            )
+
         with self._state_lock:
-            if self._state == STATE_RUNNING:
+            if self._state != STATE_IDLE:
                 return self._error_response(
                     request_id=request_id,
                     request_camera_id=request_camera_id,
+                    error_code=ERROR_INVALID_REQUEST,
+                    error_message="invalid_request: mask_start_not_allowed",
+                )
+            self._state = STATE_MASK_INIT
+
+        backend: FrameBackend | None = None
+        mask: np.ndarray | None = None
+        mask_pixels = 0
+        mask_ratio = 0.0
+        warning: str | None = None
+        try:
+            backend = self._ensure_backend()
+            backend.start()
+            mask, mask_pixels = self._build_static_mask(
+                backend,
+                frames,
+                threshold,
+                float(hit_ratio),
+                min_area,
+                dilate,
+            )
+            mask_ratio = mask_pixels / float(mask.size)
+            if mask_ratio > float(self._config.mask_max_ratio_warning):
+                warning = f"mask_ratio_high ({mask_ratio:.3f})"
+        except BackendUnavailableError as exc:
+            self._cancel_mask_state()
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_BACKEND_UNAVAILABLE,
+                error_message=f"backend_unavailable: {exc}",
+            )
+        except Exception as exc:
+            self._cancel_mask_state()
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INTERNAL,
+                error_message=f"internal_error: mask_start_failed: {exc}",
+            )
+        finally:
+            if backend is not None:
+                backend.stop()
+
+        with self._state_lock:
+            self._static_mask = mask
+            self._mask_pixels = mask_pixels
+            self._mask_ratio = mask_ratio
+            self._mask_warning = warning
+            self._state = STATE_READY
+
+        result: dict[str, object] = {
+            "mask_pixels": mask_pixels,
+            "mask_ratio": mask_ratio,
+            "mask_shape": list(mask.shape) if mask is not None else [],
+            "mask_params": {
+                "threshold": threshold,
+                "frames": frames,
+                "hit_ratio": hit_ratio,
+                "min_area": min_area,
+                "dilate": dilate,
+            },
+        }
+        if warning:
+            result["mask_warning"] = warning
+        return self._ok_response(
+            request_id=request_id,
+            request_camera_id=request_camera_id,
+            result=result,
+        )
+
+    def _handle_mask_stop(self, request_id: str, request_camera_id: str) -> dict[str, object]:
+        with self._state_lock:
+            if self._state not in (STATE_READY, STATE_IDLE):
+                return self._error_response(
+                    request_id=request_id,
+                    request_camera_id=request_camera_id,
+                    error_code=ERROR_INVALID_REQUEST,
+                    error_message="invalid_request: mask_stop_not_allowed",
+                )
+            self._state = STATE_IDLE
+            self._clear_mask()
+
+        emitter = self._udp_emitter
+        if emitter is not None:
+            emitter.set_mask(None)
+
+        return self._ok_response(
+            request_id=request_id,
+            request_camera_id=request_camera_id,
+            result={"mask_cleared": True},
+        )
+
+    def _handle_start(
+        self,
+        request_id: str,
+        camera_id: str,
+        mode: str,
+        params: dict[str, object],
+    ) -> dict[str, object]:
+        if mode not in ("capture", "wand_capture"):
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message=f"invalid_request: unsupported_mode ({mode})",
+            )
+
+        mask_required = mode == "wand_capture"
+
+        with self._state_lock:
+            prev_state = self._state
+            if prev_state == STATE_RUNNING:
+                return self._error_response(
+                    request_id=request_id,
+                    request_camera_id=camera_id,
                     error_code=ERROR_ALREADY_RUNNING,
                     error_message="already_running",
+                )
+            if prev_state == STATE_MASK_INIT:
+                return self._error_response(
+                    request_id=request_id,
+                    request_camera_id=camera_id,
+                    error_code=ERROR_INVALID_REQUEST,
+                    error_message="invalid_request: mask_initialization_in_progress",
+                )
+            if mask_required and prev_state != STATE_READY:
+                return self._error_response(
+                    request_id=request_id,
+                    request_camera_id=camera_id,
+                    error_code=ERROR_INVALID_REQUEST,
+                    error_message="invalid_request: mask_required_for_mode",
                 )
             self._state = STATE_RUNNING
 
         backend: FrameBackend | None = None
         emitter: UDPFrameEmitter | None = None
+        mask_to_apply = self._static_mask if mask_required else None
         try:
             backend = self._ensure_backend()
 
@@ -776,6 +1018,7 @@ class ControlServer:
                 backend=backend,
                 threshold=int(self._config.threshold),
             )
+            emitter.set_mask(mask_to_apply)
             emitter.start()
         except BackendUnavailableError as exc:
             if emitter is not None:
@@ -783,12 +1026,12 @@ class ControlServer:
             if backend is not None:
                 backend.stop()
             with self._state_lock:
-                self._state = STATE_IDLE
+                self._state = prev_state
                 self._udp_emitter = None
                 self._backend = None
             return self._error_response(
                 request_id=request_id,
-                request_camera_id=request_camera_id,
+                request_camera_id=camera_id,
                 error_code=ERROR_BACKEND_UNAVAILABLE,
                 error_message=f"backend_unavailable: {exc}",
             )
@@ -798,12 +1041,12 @@ class ControlServer:
             if backend is not None:
                 backend.stop()
             with self._state_lock:
-                self._state = STATE_IDLE
+                self._state = prev_state
                 self._udp_emitter = None
                 self._backend = None
             return self._error_response(
                 request_id=request_id,
-                request_camera_id=request_camera_id,
+                request_camera_id=camera_id,
                 error_code=ERROR_INTERNAL,
                 error_message=f"internal_error: udp_start_failed: {exc}",
             )
@@ -812,11 +1055,21 @@ class ControlServer:
             self._backend = backend
             self._udp_emitter = emitter
 
-        return self._ok_response(request_id, request_camera_id)
+        result: dict[str, object] = {
+            "mode": mode,
+            "mask_active": mask_required and mask_to_apply is not None,
+            "mask_ratio": self._mask_ratio if mask_required else None,
+            "mask_warning": self._mask_warning if mask_required else None,
+        }
+        return self._ok_response(
+            request_id=request_id,
+            request_camera_id=camera_id,
+            result={k: v for k, v in result.items() if v is not None},
+        )
 
     def _handle_stop(self, request_id: str, request_camera_id: str) -> dict[str, object]:
         with self._state_lock:
-            if self._state == STATE_IDLE:
+            if self._state != STATE_RUNNING:
                 return self._error_response(
                     request_id=request_id,
                     request_camera_id=request_camera_id,
@@ -843,7 +1096,61 @@ class ControlServer:
                 error_message=f"internal_error: udp_stop_failed: {exc}",
             )
 
+        with self._state_lock:
+            self._state = STATE_READY if self._static_mask is not None else STATE_IDLE
+
         return self._ok_response(request_id, request_camera_id)
+
+    def _cancel_mask_state(self) -> None:
+        with self._state_lock:
+            self._state = STATE_IDLE
+            self._clear_mask()
+
+    def _clear_mask(self) -> None:
+        self._static_mask = None
+        self._mask_pixels = 0
+        self._mask_ratio = 0.0
+        self._mask_warning = None
+
+    def _build_static_mask(
+        self,
+        backend: FrameBackend,
+        frames: int,
+        threshold: int,
+        hit_ratio: float,
+        min_area: int,
+        dilate: int,
+    ) -> tuple[np.ndarray, int]:
+        hit_counts: np.ndarray | None = None
+        for _ in range(frames):
+            frame = backend.capture_array()
+            gray = (
+                cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                if frame.ndim == 3
+                else frame
+            )
+            if hit_counts is None:
+                hit_counts = np.zeros(gray.shape, dtype=np.uint16)
+            hit_counts += (gray > threshold).astype(np.uint16)
+
+        assert hit_counts is not None
+        required = max(1, math.ceil(hit_ratio * frames))
+        mask_uint8 = (hit_counts >= required).astype(np.uint8) * 255
+
+        if min_area > 0:
+            contours_info = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            contours = contours_info[0] if len(contours_info) == 2 else contours_info[1]
+            for contour in contours:
+                if cv2.contourArea(contour) < min_area:
+                    cv2.drawContours(mask_uint8, [contour], -1, 0, thickness=-1)
+
+        if dilate > 0:
+            kernel_size = max(1, dilate) * 2 + 1
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+            mask_uint8 = cv2.dilate(mask_uint8, kernel)
+
+        mask = mask_uint8.astype(bool)
+        return mask, int(np.count_nonzero(mask))
 
     def _set_target_fps(self, fps: int) -> None:
         fps_value = int(fps)
@@ -898,15 +1205,23 @@ class ControlServer:
             return Picamera2Backend()
         raise BackendUnavailableError(f"unknown_backend: {backend_name}")
 
-    def _ok_response(self, request_id: str, request_camera_id: str) -> dict[str, object]:
+    def _ok_response(
+        self,
+        request_id: str,
+        request_camera_id: str,
+        result: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
         response_camera_id = (
             self._config.camera_id if request_camera_id == "broadcast" else request_camera_id
         )
-        return {
+        response: dict[str, object] = {
             "request_id": request_id,
             "camera_id": response_camera_id,
             "ack": True,
         }
+        if result is not None:
+            response["result"] = result
+        return response
 
     def _error_response(
         self,

@@ -157,10 +157,22 @@ ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@192.168.1.101
 - [x] `docs/next_steps_charuco.md` Step 1 に `SPACE`/`C` の詳細手順を追記
 - [x] `docs/next_steps_charuco.md` に `picamera2 is required` エラー対処（venv再作成手順）を追記
 - [x] `docs/next_steps_charuco.md` に「構図を被らせない撮影ルール」を追記
+- [x] wand 外部較正の実装計画を追加（`docs/wand_extrinsics_plan.md`）
+- [x] `docs/wand_extrinsics_plan.md` にコードロジック詳細（状態遷移、mask生成、solver手順）を追記
+- [x] `docs/wand_extrinsics_plan.md` を更新（受動発見優先、映像なし同期スライダーGUI方針を明記）
+- [x] Host wand control GUI/operation orchestration documented (`docs/wand_extrinsics_plan.md`)
+- [x] `WAND_POINTS_MM` を確定（center-to-center: 168mm / 243mm, blob 14mm, 直交）
+- [x] wand 次アクション手順書を追加（`docs/next_steps_wand_runbook.md`）
 - [ ] `pi-cam-01` の内部較正を実測値ベースで再実施する（まずこの1台で手順検証）
 - [ ] `pi-cam-02` の内部較正を実施し、成果物 JSON を保存する
 - [ ] 内部較正の品質判定基準を「暫定」から「運用基準」に確定する
-- [ ] `src/camera-calibration/calibrate_extrinsics.py` を実装する
+- [x] Host 主導の wand 収録制御（`mask_start` / `start` / `stop`）を `src/host/wand_session.py` で実装
+- [ ] 受動発見（`UDPReceiver`）+ `hosts.ini` 併用のカメラ確定ロジックを実装する
+- [ ] 映像なし Web GUI（同期スライダー: exposure/gain/fps）を実装する
+- [ ] `src/camera-calibration/calibrate_extrinsics.py` を wand 入力対応で実装する
+- [x] Pi 側 capture サービスに `mask_start`/`mask_stop` + `start(mode=wand_capture)` を実装
+- [x] Host 制御クライアントに `mask_start` / `mask_stop` API・CLIを追加
+- [x] `tests/test_pi_control_e2e.py` に wand マスクフロー E2E を追加
 - [ ] 外部較正スキーマ（`calibration_extrinsics_v1`）を `schema/` に追加する
 - [ ] Host 側で intrinsics + extrinsics を読み込んだ三角測量検証を実施する
 - [ ] 上記進捗に合わせて Phase 表とドキュメントを同期更新する
@@ -173,6 +185,8 @@ ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@192.168.1.101
 4. `docs/pi_control_transport.md`（Pi 制御通信仕様）
 5. `schema/README.md`（JSON Schema の参照）
 6. `docs/next_steps_charuco.md`（内部較正の実行手順。Step 0 にまっさらな Pi 初期セットアップを記載）
+7. `docs/wand_extrinsics_plan.md`（wand 外部較正の実装計画）
+8. `docs/next_steps_wand_runbook.md`（wand実装の実行手順）
 
 補足: `docs/pre_doc/` は検討メモ・背景資料であり、現行仕様の正本ではありません。
 

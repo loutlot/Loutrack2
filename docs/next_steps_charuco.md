@@ -190,13 +190,22 @@ python src/camera-calibration/calibrate.py \
 
 ---
 
-## Step 4: 外部較正（今後の実装）
+## Step 4: 外部較正（wand 方式）
 
-内部較正2台分が揃った後に、外部較正を実装・実行する。
+内部較正2台分が揃った後に、B5 L字 3点 wand（14mm blob）で外部較正を実装・実行する。
+
+Host 主導の基本シーケンス:
+
+1. `set_exposure` / `set_gain` / `set_fps` を配布
+2. `mask_start` で 30 フレーム初期化（背景明点マスク）
+3. `start` で wand 収録開始
+4. 20+ ポーズ収録（推奨 60 秒）
+5. `stop` で収録終了
+6. Host で extrinsics solver を実行
 
 - 実装予定: `src/camera-calibration/calibrate_extrinsics.py`
 - 出力予定: `calibration/calibration_extrinsics_v1.json`
-- 方式: `cv2.stereoCalibrate()` ベース
+- 詳細計画: `docs/wand_extrinsics_plan.md`
 
 ---
 
@@ -207,7 +216,7 @@ python src/camera-calibration/calibrate.py \
 1. Charuco ボード印刷と実測
 2. 各カメラで内部較正（intrinsics）
 3. 複数カメラ同時撮影データ取得
-4. 外部較正（extrinsics）
+4. wand 収録と外部較正（extrinsics）
 5. Host 側で読み込み、三角測量検証
 
 ---

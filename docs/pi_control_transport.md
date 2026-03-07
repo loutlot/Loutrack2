@@ -106,6 +106,9 @@ Control response の `error_code` は以下を固定する (1..7):
 {"request_id":"req-003","camera_id":"pi-cam-01","ack":false,"error_code":3,"error_message":"unknown_cmd: mask_start"}
 ```
 
+注記: Phase 2 の wand 外部較正実装では `mask_start` / `mask_stop` を実装対象とする。
+詳細は `docs/wand_extrinsics_plan.md` を参照。
+
 ## 6. 実装メモ (非規範)
 
 - Host は各 Pi に TCP 接続し、Control request を NDJSON で送る。応答も同一接続で受け取る。

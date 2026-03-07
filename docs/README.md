@@ -11,8 +11,10 @@
 1. `docs/requirements_def.md`
 2. `docs/theory.md`
 3. `docs/implementation_plan.md`
+4. `docs/wand_extrinsics_plan.md`
+5. `docs/next_steps_wand_runbook.md`
 
-※ 上記3本を現行の正本として扱います。
+※ 上記5本を現行の正本として扱います。
 
 ## pre_doc (検討メモ/下書き)
 

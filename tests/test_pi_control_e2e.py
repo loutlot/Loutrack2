@@ -49,6 +49,31 @@ class ControlModule(Protocol):
     ) -> dict[str, object]:
         ...
 
+    def mask_start(
+        self,
+        ip: str,
+        port: int,
+        camera_id: str,
+        threshold: int | None = None,
+        frames: int | None = None,
+        hit_ratio: float | None = None,
+        min_area: int | None = None,
+        dilate: int | None = None,
+        request_id: str | None = None,
+        timeout: float = 5.0,
+    ) -> dict[str, object]:
+        ...
+
+    def mask_stop(
+        self,
+        ip: str,
+        port: int,
+        camera_id: str,
+        request_id: str | None = None,
+        timeout: float = 5.0,
+    ) -> dict[str, object]:
+        ...
+
 
 class UDPReceiverClass(Protocol):
     def __init__(self, host: str = "0.0.0.0", port: int = 5000, buffer_size: int = 65536) -> None:
@@ -234,3 +259,53 @@ def test_pi_control_wrong_camera_id_returns_error(pi_capture_server: PiCaptureSe
     resp = control.ping(ip, tcp_port, camera_id="pi-cam-wrong", timeout=1.0)
     assert resp.get("ack") is False
     assert resp.get("error_code") == 2
+
+
+def test_pi_mask_and_wand_mode_flow(pi_capture_server: PiCaptureServerInfo) -> None:
+    ip = pi_capture_server["ip"]
+    tcp_port = pi_capture_server["tcp_port"]
+    udp_port = pi_capture_server["udp_port"]
+    camera_id = pi_capture_server["camera_id"]
+
+    frames_lock = threading.Lock()
+    frames: list[object] = []
+
+    def on_frame(frame: object) -> None:
+        with frames_lock:
+            frames.append(frame)
+
+    receiver = UDPReceiver(host="127.0.0.1", port=udp_port)
+    receiver.set_frame_callback(on_frame)
+    receiver.start()
+    try:
+        resp = control.mask_start(
+            ip,
+            tcp_port,
+            camera_id=camera_id,
+            frames=5,
+            threshold=200,
+            hit_ratio=0.6,
+            timeout=2.0,
+        )
+        assert resp.get("ack") is True
+
+        resp = control.start(ip, tcp_port, camera_id=camera_id, mode="wand_capture", timeout=1.0)
+        assert resp.get("ack") is True
+
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            with frames_lock:
+                if len(frames) >= 5:
+                    break
+            time.sleep(0.02)
+
+        with frames_lock:
+            assert len(frames) >= 5
+
+        resp = control.stop(ip, tcp_port, camera_id=camera_id, timeout=1.0)
+        assert resp.get("ack") is True
+
+        resp = control.mask_stop(ip, tcp_port, camera_id=camera_id, timeout=1.0)
+        assert resp.get("ack") is True
+    finally:
+        receiver.stop()

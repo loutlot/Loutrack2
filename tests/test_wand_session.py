@@ -1,0 +1,88 @@
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+from host.wand_session import WAND_POINTS_MM, SessionConfig, WandSession
+
+
+class _FakeReceiver:
+    def __init__(self, addresses):
+        self._addresses = addresses
+
+    def get_camera_addresses(self):
+        return dict(self._addresses)
+
+
+class _FakeControl:
+    def __init__(self):
+        self.calls = []
+
+    def _resp(self, name, camera_id):
+        self.calls.append((name, camera_id))
+        return {"ack": True}
+
+    def ping(self, ip, port, camera_id, timeout=2.0):
+        return self._resp("ping", camera_id)
+
+    def set_exposure(self, ip, port, camera_id, value, timeout=2.0):
+        return self._resp("set_exposure", camera_id)
+
+    def set_gain(self, ip, port, camera_id, value, timeout=2.0):
+        return self._resp("set_gain", camera_id)
+
+    def set_fps(self, ip, port, camera_id, value, timeout=2.0):
+        return self._resp("set_fps", camera_id)
+
+    def mask_start(self, ip, port, camera_id, timeout=2.0, **kwargs):
+        return self._resp("mask_start", camera_id)
+
+    def start(self, ip, port, camera_id, mode, timeout=2.0):
+        return self._resp("start", camera_id)
+
+    def stop(self, ip, port, camera_id, timeout=2.0):
+        return self._resp("stop", camera_id)
+
+
+def test_wand_points_mm_defaults() -> None:
+    assert WAND_POINTS_MM == ((0.0, 0.0, 0.0), (168.0, 0.0, 0.0), (0.0, 243.0, 0.0))
+
+
+def test_discovery_prefers_passive_ip(tmp_path: Path) -> None:
+    inventory = tmp_path / "hosts.ini"
+    inventory.write_text("pi-cam-01 192.168.1.101 pi-cam-01\n", encoding="utf-8")
+    receiver = _FakeReceiver({"pi-cam-01": ("192.168.1.250", 5000)})
+
+    session = WandSession(inventory_path=inventory, receiver=receiver, control=_FakeControl())
+    targets = session.discover_targets()
+
+    assert len(targets) == 1
+    assert targets[0].camera_id == "pi-cam-01"
+    assert targets[0].ip == "192.168.1.250"
+
+
+def test_run_session_control_order(monkeypatch, tmp_path: Path) -> None:
+    inventory = tmp_path / "hosts.ini"
+    inventory.write_text(
+        "pi-cam-01 192.168.1.101 pi-cam-01\npi-cam-02 192.168.1.102 pi-cam-02\n",
+        encoding="utf-8",
+    )
+    fake_control = _FakeControl()
+    session = WandSession(inventory_path=inventory, control=fake_control)
+    monkeypatch.setattr("host.wand_session.time.sleep", lambda _duration: None)
+
+    config = SessionConfig(exposure_us=1200, gain=4.0, fps=80, duration_s=0.01)
+    result = session.run_session(config)
+
+    assert result["targets"] == ["pi-cam-01", "pi-cam-02"]
+    assert [step["step"] for step in result["ack_history"]] == [
+        "set_exposure",
+        "set_gain",
+        "set_fps",
+        "mask_start",
+        "start",
+        "stop",
+    ]
