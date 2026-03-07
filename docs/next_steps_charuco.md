@@ -1,40 +1,40 @@
 # Charuco較正: 今後の手順
 
-## 現状サマリー
+## 現状サマリー（2026-03 時点）
 
 | 項目 | 状態 | 備考 |
 |------|------|------|
 | Charucoボード生成 | ✅ 完了 | `calibration/boards/charuco_6x8_30mm_a4.pdf` |
 | 内部較正スクリプト | ✅ 完了 | `src/camera-calibration/calibrate.py` |
-| pi-cam-01 内部較正 | ⚠️ 品質問題あり | per_view_errors が異常値、RMS=2.77px |
+| pi-cam-01 内部較正 | ⚠️ 要実測確認 | 既存結果はダミー/暫定値が混在している可能性あり |
 | pi-cam-02 内部較正 | ❌ 未実施 | hosts.ini に定義あり |
 | 外部較正スクリプト | ❌ 未実装 | stereoCalibrate ベースが必要 |
 | 外部較正スキーマ | ❌ 未定義 | calibration_extrinsics_v1.json 的なもの |
 
+### 実測メモ
+
+- Charuco 印刷ボードの実測値: 5マス = 138 mm
+- 1マス換算値: `138 / 5 = 27.6 mm`
+- 較正コマンドでは `--square-length-mm 27.6` を使用する
+
 ---
 
-## Step 1: 既存較正データの品質確認
+## Step 1: 既存較正データの棚卸しと品質確認
 
-### 問題点
+### 方針
 
-`calibration/calibration_intrinsics_v1_pi-cam-01.json` の品質指標が異常:
+現状はダミー/暫定データの混在可能性があるため、特定の数値を前提にせず、
+まず「実測由来かどうか」を判定してから品質評価を行う。
 
-```json
-"per_view_errors": [
-  1.1882719076588155e+23,  // ← 異常値
-  ...
-  1.388264875814573e+27,   // ← 異常値
-]
-```
+- 既存 JSON の `captured_at` / `quality` / `board` を確認
+- 実機採取ログや画像セットの有無を確認
+- 実測由来でない場合は「参考値」に降格し、再較正を優先
 
-- per_view_errors が指数関数的に爆発している
-- RMS誤差 2.77px も理想（<0.5px）より高い
-
-### 原因候補
+### 主な原因候補
 
 1. Charucoボード印刷時のスケール不一致
 2. `--square-length-mm` と実際のマス幅が合っていない
-3. 合成データ（self-test）での実行だった可能性
+3. 合成データ（self-test）起源の結果が混在している
 4. キャリブレーション画像の画質・角度不足
 
 ### 対応
@@ -44,7 +44,7 @@
    # Pi上で実行（要 picamera2）
    python src/camera-calibration/calibrate.py \
      --camera pi-cam-01 \
-     --square-length-mm <実測値_mm> \
+     --square-length-mm 27.6 \
      --output "./calibration/calibration_intrinsics_v1_pi-cam-01.json"
    ```
 
@@ -70,15 +70,15 @@
 # Pi上で実行
 python src/camera-calibration/calibrate.py \
   --camera pi-cam-02 \
-  --square-length-mm <実測値_mm> \
+  --square-length-mm 27.6 \
   --output "./calibration/calibration_intrinsics_v1_pi-cam-02.json"
 ```
 
-### 完了条件
+### 完了条件（暫定）
 
 - `calibration/calibration_intrinsics_v1_pi-cam-02.json` が生成される
 - RMS誤差 < 1.0px（理想 < 0.5px）
-- per_view_errors が正常な範囲（< 5px）
+- `per_view_errors` が極端な外れ値を連発しない
 
 ---
 
@@ -88,7 +88,7 @@ python src/camera-calibration/calibrate.py \
 
 複数カメラ間の相対位置（R, t）を推定するスクリプトを作成する。
 
-### API設計案
+### API 設計案
 
 ```bash
 # 実行例
@@ -110,7 +110,7 @@ python src/camera-calibration/calibrate_extrinsics.py \
    - 回転ベクトル R と並進ベクトル t を推定
    - 基本行列 F と本質行列 E も計算
 
-3. **出力スキーマ案**
+3. **出力スキーマ案（ドラフト）**
 
 ```json
 {
@@ -169,7 +169,7 @@ python src/camera-calibration/calibrate_extrinsics.py \
 
 | 優先度 | タスク | 依存 |
 |--------|--------|------|
-| P0 | pi-cam-01 再較正（品質改善） | なし |
+| P0 | pi-cam-01 再較正（実測データで再生成） | なし |
 | P0 | pi-cam-02 内部較正 | なし |
 | P1 | 外部較正スクリプト実装 | P0完了 |
 | P1 | 外部較正スキーマ定義 | なし |
@@ -182,3 +182,10 @@ python src/camera-calibration/calibrate_extrinsics.py \
 - OpenCV Camera Calibration: https://docs.opencv.org/4.x/dc/dbb/tutorial_py_calibration.html
 - OpenCV Stereo Calibration: https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html#ga3207604e4b1a1758aa66acb6ed5aa65d
 - 参考実装: `references/jyjblrd/Low-Cost-Mocap/computer_code/api/helpers.py`
+
+---
+
+## メモ（運用ルール）
+
+- 本書の数値は、実測で検証完了するまで「暫定値」として扱う。
+- 進捗が出たら `README.md` の TODO と Phase 状態を必ず同時更新する。

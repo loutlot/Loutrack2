@@ -149,6 +149,27 @@ ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@192.168.1.101
 | Phase 4 | SteamVR出力 | ⏳ 未着手 |
 | Phase 5 | 運用/更新 (SCP/SSH配布) | ✅ 完了 |
 
+## TODO (Current Sprint)
+
+- [x] Charuco 印刷ボードの実測値を確定（5マス=138mm → 1マス=27.6mm）
+- [ ] `pi-cam-01` の内部較正を実測値ベースで再実施する
+- [ ] `pi-cam-02` の内部較正を実施し、成果物 JSON を保存する
+- [ ] 内部較正の品質判定基準を「暫定」から「運用基準」に確定する
+- [ ] `src/camera-calibration/calibrate_extrinsics.py` を実装する
+- [ ] 外部較正スキーマ（`calibration_extrinsics_v1`）を `schema/` に追加する
+- [ ] Host 側で intrinsics + extrinsics を読み込んだ三角測量検証を実施する
+- [ ] 上記進捗に合わせて Phase 表とドキュメントを同期更新する
+
+## ドキュメントの読み順
+
+1. `README.md`（現況 / TODO / 実行入口）
+2. `docs/implementation_plan.md`（フェーズ計画と短期実装順）
+3. `docs/requirements_def.md`（要件定義）
+4. `docs/pi_control_transport.md`（Pi 制御通信仕様）
+5. `schema/README.md`（JSON Schema の参照）
+
+補足: `docs/pre_doc/` は検討メモ・背景資料であり、現行仕様の正本ではありません。
+
 ### 完了したStep
 
 - ✅ Step 1: Pi→Host メッセージスキーマ凍結
