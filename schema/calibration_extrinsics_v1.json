@@ -1,0 +1,125 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://loutrack2.local/schema/calibration_extrinsics_v1.json",
+  "title": "Camera Extrinsic Calibration",
+  "description": "Schema for wand-based multi-camera extrinsic calibration results",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "reference_camera_id",
+    "created_at",
+    "wand",
+    "cameras"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "reference_camera_id": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "wand": {
+      "type": "object",
+      "required": ["name", "marker_diameter_mm", "points_mm"],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "marker_diameter_mm": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "points_mm": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": { "type": "number" }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "session_meta": {
+      "type": "object",
+      "properties": {
+        "session_id": { "type": "string" },
+        "log_path": { "type": "string" },
+        "pair_window_us": { "type": "integer", "minimum": 1 },
+        "min_pairs": { "type": "integer", "minimum": 1 },
+        "target_camera_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "cameras": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "camera_id",
+          "rotation_matrix",
+          "translation_m"
+        ],
+        "properties": {
+          "camera_id": {
+            "type": "string"
+          },
+          "rotation_matrix": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 3,
+              "items": { "type": "number" }
+            }
+          },
+          "translation_m": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": { "type": "number" }
+          },
+          "quality": {
+            "type": "object",
+            "properties": {
+              "pair_count": { "type": "integer", "minimum": 0 },
+              "point_count": { "type": "integer", "minimum": 0 },
+              "inlier_ratio": { "type": "number", "minimum": 0 },
+              "median_reproj_error_px": { "type": "number", "minimum": 0 },
+              "baseline_m": { "type": "number", "minimum": 0 },
+              "scale_m_per_unit": { "type": "number", "minimum": 0 }
+            },
+            "additionalProperties": true
+          },
+          "essential_matrix": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 3,
+              "items": { "type": "number" }
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

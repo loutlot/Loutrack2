@@ -56,6 +56,7 @@ class ControlModule(Protocol):
         camera_id: str,
         threshold: int | None = None,
         frames: int | None = None,
+        seconds: float | None = None,
         hit_ratio: float | None = None,
         min_area: int | None = None,
         dilate: int | None = None,
@@ -233,6 +234,7 @@ def test_pi_dummy_control_e2e(pi_capture_server: PiCaptureServerInfo) -> None:
     try:
         resp = control.ping(ip, tcp_port, camera_id=camera_id, timeout=1.0)
         assert resp.get("ack") is True
+        assert isinstance(resp.get("result"), dict)
 
         resp = control.start(ip, tcp_port, camera_id=camera_id, mode="capture", timeout=1.0)
         assert resp.get("ack") is True
@@ -282,12 +284,16 @@ def test_pi_mask_and_wand_mode_flow(pi_capture_server: PiCaptureServerInfo) -> N
             ip,
             tcp_port,
             camera_id=camera_id,
-            frames=5,
             threshold=200,
+            seconds=0.1,
             hit_ratio=0.6,
             timeout=2.0,
         )
         assert resp.get("ack") is True
+        result = cast(dict[str, object], resp.get("result"))
+        mask_params = cast(dict[str, object], result.get("mask_params"))
+        assert float(mask_params["seconds"]) == 0.1
+        assert int(mask_params["frames"]) >= 1
 
         resp = control.start(ip, tcp_port, camera_id=camera_id, mode="wand_capture", timeout=1.0)
         assert resp.get("ack") is True

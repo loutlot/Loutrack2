@@ -77,6 +77,10 @@ HostからPiへ送信する制御コマンド。TCP/JSON (JSON-RPC風)。
 | `set_exposure` | `value` (μs) | 露出時間設定 |
 | `set_gain` | `value` | アナログゲイン設定 |
 | `set_fps` | `value` | FPS設定 |
+| `set_focus` | `value` | フォーカス設定（LensPosition） |
+| `set_threshold` | `value` | blob 二値化しきい値（0-255） |
+| `set_blob_diameter` | `min_px`, `max_px` | blob 直径pxフィルタ |
+| `set_circularity_min` | `value` | blob circularity 下限（0-1） |
 | `led_on` / `led_off` | `ir`, `status_r/g/b` | LED制御 |
 | `ping` | - | 生存確認 |
 
@@ -136,6 +140,55 @@ Charucoボードを使用した内部較正の成果物。
 | RMS再投影誤差 | < 0.5 px | < 1.0 px |
 | 有効フレーム数 | 40-50 | 25+ |
 | Pixel Aspect比 | 0.99-1.01 | 0.95-1.05 |
+
+---
+
+### calibration_extrinsics_v1.json - カメラ外部較正
+
+wand 収録ログから推定した world-to-camera extrinsics。
+参照カメラは `rotation_matrix = I`, `translation_m = [0, 0, 0]`。
+
+```json
+{
+  "schema_version": "1.0",
+  "reference_camera_id": "pi-cam-01",
+  "created_at": "2026-03-08T12:00:00Z",
+  "wand": {
+    "name": "wand_l_b5_v1",
+    "marker_diameter_mm": 14.0,
+    "points_mm": [[0, 0, 0], [168, 0, 0], [0, 243, 0]]
+  },
+  "cameras": [
+    {
+      "camera_id": "pi-cam-01",
+      "rotation_matrix": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+      "translation_m": [0, 0, 0]
+    },
+    {
+      "camera_id": "pi-cam-02",
+      "rotation_matrix": [[0.99, 0.01, 0.1], [0.0, 1.0, 0.0], [-0.1, 0.0, 0.99]],
+      "translation_m": [0.52, 0.0, 0.02],
+      "quality": {
+        "pair_count": 84,
+        "median_reproj_error_px": 0.48,
+        "baseline_m": 0.52
+      }
+    }
+  ]
+}
+```
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| `schema_version` | string | ✅ | スキーマバージョン ("1.0") |
+| `reference_camera_id` | string | ✅ | ワールド座標系の基準カメラ |
+| `created_at` | string | ✅ | 推定実施日時 (ISO 8601) |
+| `wand` | object | ✅ | wand 定義（名称、blob径、3D点） |
+| `session_meta` | object | | 収録ログや pair 窓などの補助情報 |
+| `cameras[]` | array | ✅ | カメラごとの world-to-camera extrinsics |
+| `cameras[].rotation_matrix` | 3x3 array | ✅ | 回転行列 `R` |
+| `cameras[].translation_m` | 3 array | ✅ | 並進ベクトル `t`（メートル） |
+| `cameras[].quality` | object | | inlier比、再投影誤差、基線長など |
 
 ---
 

@@ -51,6 +51,10 @@ from .control import (
     set_exposure,
     set_gain,
     set_fps,
+    set_focus,
+    set_threshold,
+    set_blob_diameter,
+    set_circularity_min,
 )
 
 __all__ = [
@@ -101,6 +105,10 @@ __all__ = [
     "set_exposure",
     "set_gain",
     "set_fps",
+    "set_focus",
+    "set_threshold",
+    "set_blob_diameter",
+    "set_circularity_min",
     "WAND_NAME",
     "WAND_MARKER_DIAMETER_MM",
     "WAND_OUTER_SHORT_MM",

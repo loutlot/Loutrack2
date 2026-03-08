@@ -37,6 +37,18 @@ class _FakeControl:
     def set_fps(self, ip, port, camera_id, value, timeout=2.0):
         return self._resp("set_fps", camera_id)
 
+    def set_focus(self, ip, port, camera_id, value, timeout=2.0):
+        return self._resp("set_focus", camera_id)
+
+    def set_threshold(self, ip, port, camera_id, value, timeout=2.0):
+        return self._resp("set_threshold", camera_id)
+
+    def set_blob_diameter(self, ip, port, camera_id, min_px=None, max_px=None, timeout=2.0):
+        return self._resp("set_blob_diameter", camera_id)
+
+    def set_circularity_min(self, ip, port, camera_id, value, timeout=2.0):
+        return self._resp("set_circularity_min", camera_id)
+
     def mask_start(self, ip, port, camera_id, timeout=2.0, **kwargs):
         return self._resp("mask_start", camera_id)
 
@@ -74,15 +86,42 @@ def test_run_session_control_order(monkeypatch, tmp_path: Path) -> None:
     session = WandSession(inventory_path=inventory, control=fake_control)
     monkeypatch.setattr("host.wand_session.time.sleep", lambda _duration: None)
 
-    config = SessionConfig(exposure_us=1200, gain=4.0, fps=80, duration_s=0.01)
+    config = SessionConfig(
+        exposure_us=1200,
+        gain=4.0,
+        fps=80,
+        focus=5.215,
+        threshold=200,
+        blob_min_diameter_px=2.0,
+        blob_max_diameter_px=20.0,
+        circularity_min=0.4,
+        duration_s=0.01,
+        output_dir=tmp_path,
+    )
     result = session.run_session(config)
 
-    assert result["targets"] == ["pi-cam-01", "pi-cam-02"]
+    assert [target["camera_id"] for target in result["targets"]] == ["pi-cam-01", "pi-cam-02"]
     assert [step["step"] for step in result["ack_history"]] == [
         "set_exposure",
         "set_gain",
         "set_fps",
+        "set_focus",
+        "set_threshold",
+        "set_blob_diameter",
+        "set_circularity_min",
         "mask_start",
         "start",
         "stop",
     ]
+    metadata_path = Path(result["metadata_path"])
+    assert metadata_path.exists()
+    assert metadata_path.parent == tmp_path
+
+
+if __name__ == "__main__":
+    from tempfile import TemporaryDirectory
+
+    test_wand_points_mm_defaults()
+    with TemporaryDirectory() as tmp:
+        test_discovery_prefers_passive_ip(Path(tmp))
+    print("wand_session smoke tests passed")

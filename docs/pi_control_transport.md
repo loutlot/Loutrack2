@@ -92,6 +92,10 @@ Control response の `error_code` は以下を固定する (1..7):
 - `set_exposure`
 - `set_gain`
 - `set_fps`
+- `set_focus`
+- `set_threshold`
+- `set_blob_diameter`
+- `set_circularity_min`
 
 ### 5.2 Schema-valid but not supported (MVP)
 
@@ -107,6 +111,7 @@ Control response の `error_code` は以下を固定する (1..7):
 ```
 
 注記: Phase 2 の wand 外部較正実装では `mask_start` / `mask_stop` を実装対象とする。
+`mask_start` は `frames` に加えて `seconds` 指定も許容し、その時点の FPS 設定から初期化フレーム数を計算する。
 詳細は `docs/wand_extrinsics_plan.md` を参照。
 
 ## 6. 実装メモ (非規範)

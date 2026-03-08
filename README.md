@@ -163,6 +163,7 @@ ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@192.168.1.101
 - [x] Host wand control GUI/operation orchestration documented (`docs/wand_extrinsics_plan.md`)
 - [x] `WAND_POINTS_MM` を確定（center-to-center: 168mm / 243mm, blob 14mm, 直交）
 - [x] wand 次アクション手順書を追加（`docs/next_steps_wand_runbook.md`）
+- [x] `docs/wand_extrinsics_plan.md` に進捗状況セクションを追記（2026-03-08）
 - [x] 5剛体向け marker 形状の探索結果を整理（`docs/rigid_body_design_exploration.md`）
 - [x] 剛体デザインを「中心(0,0,7)の半径65mm半球、z>7」制約で再探索し更新（`docs/rigid_body_design_exploration.md`）
 - [x] `waist` は既存デザインを維持する方針で `src/host/rigid.py` と関連docを更新
@@ -172,14 +173,30 @@ ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@192.168.1.101
 - [ ] 内部較正の品質判定基準を「暫定」から「運用基準」に確定する
 - [x] Host 主導の wand 収録制御（`mask_start` / `start` / `stop`）を `src/host/wand_session.py` で実装
 - [ ] 受動発見（`UDPReceiver`）+ `hosts.ini` 併用のカメラ確定ロジックを実装する
-- [ ] 映像なし Web GUI（同期スライダー: exposure/gain/fps）を実装する
-- [ ] `src/camera-calibration/calibrate_extrinsics.py` を wand 入力対応で実装する
+- [x] 映像なし Web GUI（同期スライダー: exposure/gain/fps）を実装する
+- [x] `src/camera-calibration/calibrate_extrinsics.py` を wand 入力対応で実装する
 - [x] Pi 側 capture サービスに `mask_start`/`mask_stop` + `start(mode=wand_capture)` を実装
 - [x] Host 制御クライアントに `mask_start` / `mask_stop` API・CLIを追加
 - [x] `tests/test_pi_control_e2e.py` に wand マスクフロー E2E を追加
-- [ ] 外部較正スキーマ（`calibration_extrinsics_v1`）を `schema/` に追加する
-- [ ] Host 側で intrinsics + extrinsics を読み込んだ三角測量検証を実施する
+- [x] 外部較正スキーマ（`calibration_extrinsics_v1`）を `schema/` に追加する
+- [x] Host 側で intrinsics + extrinsics を読み込んだ三角測量検証を実施する
 - [ ] 上記進捗に合わせて Phase 表とドキュメントを同期更新する
+
+### 直近の実装更新（2026-03-08）
+
+- `src/camera-calibration/calibrate_extrinsics.py` を追加し、wand JSONL ログ + intrinsics から `calibration/calibration_extrinsics_v1.json` を生成できるようにした
+- `schema/calibration_extrinsics_v1.json` を追加し、`schema/README.md` に出力形式を追記した
+- `src/host/geo.py` が calibration ディレクトリから extrinsics を自動ロードできるようにした
+- `src/host/wand_session.py` が session metadata JSON を `logs/wand_sessions/` に永続化するようにした
+- `src/host/wand_gui.py` を追加し、受動発見 + inventory マージ前提の映像なし Web UI を実装した
+- `tests/test_wand_extrinsics.py` を追加し、synthetic wand 観測から solver と geo loader の接続を検証した
+- `tests/test_wand_gui.py` を追加し、GUI 状態管理の同期操作を smoke test で検証した
+- `docs/wand_extrinsics_plan.md` を現実装ベースの進捗・残課題へ更新した
+- `docs/next_steps_wand_runbook.md` を現行実装フロー準拠の作業手順書として新規作成した
+- `docs/next_steps_wand_runbook.md` の前提条件をコマンドベースの事前チェック手順として詳細化した
+- Host から `set_focus` を追加し、`wand_gui` で focus スライダー（既定 `5.215`）を同期操作できるようにした
+- `wand_gui` に「Generate Extrinsics」ボタンを追加し、GUI から `calibrate_extrinsics` を実行できるようにした
+- blob 検出条件として `set_threshold` / `set_blob_diameter(min/max px)` を追加し、GUI から同期調整できるようにした
 
 ## ドキュメントの読み順
 

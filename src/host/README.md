@@ -262,6 +262,19 @@ print(result["session_id"])
 
 ---
 
+### wand_gui.py - 映像なし Web GUI
+
+同期スライダー（exposure/gain/fps）と `ping` / `mask_start` / `start` / `stop` をブラウザから操作する最小 GUI。
+`UDPReceiver` を起動して受動発見し、`WandSession` の inventory merge をそのまま利用する。
+
+```bash
+python3 src/host/wand_gui.py --host 127.0.0.1 --port 8765
+```
+
+ブラウザで `http://127.0.0.1:8765/` を開く。
+
+---
+
 ### visualize.py - 可視化
 
 コンソール出力とファイルエクスポート。

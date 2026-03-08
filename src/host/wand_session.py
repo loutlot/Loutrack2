@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -33,10 +34,16 @@ class SessionConfig:
     exposure_us: int
     gain: float
     fps: int
+    focus: float = 5.215
+    threshold: int = 200
+    blob_min_diameter_px: Optional[float] = None
+    blob_max_diameter_px: Optional[float] = None
+    circularity_min: float = 0.0
     duration_s: float = 60.0
     camera_ids: Optional[List[str]] = None
     mask_params: Optional[Dict[str, Any]] = None
     mask_retry: int = 1
+    output_dir: Optional[Path] = None
 
 
 class WandSession:
@@ -53,6 +60,7 @@ class WandSession:
         self.receiver = receiver
         self.control = control
         self.timeout_s = timeout_s
+        self.default_output_dir = Path("logs") / "wand_sessions"
 
     def load_inventory(self) -> Dict[str, CameraTarget]:
         targets: Dict[str, CameraTarget] = {}
@@ -131,6 +139,7 @@ class WandSession:
             raise RuntimeError("No healthy cameras found")
 
         session_id = str(uuid.uuid4())
+        started_at = datetime.now(timezone.utc).isoformat()
         ack_history: List[Dict[str, Any]] = []
 
         def record(step: str, responses: Dict[str, Dict[str, Any]]) -> None:
@@ -144,6 +153,23 @@ class WandSession:
 
         fps_resp = self._broadcast(targets, "set_fps", value=config.fps)
         record("set_fps", fps_resp)
+
+        focus_resp = self._broadcast(targets, "set_focus", value=config.focus)
+        record("set_focus", focus_resp)
+
+        threshold_resp = self._broadcast(targets, "set_threshold", value=config.threshold)
+        record("set_threshold", threshold_resp)
+
+        blob_diameter_resp = self._broadcast(
+            targets,
+            "set_blob_diameter",
+            min_px=config.blob_min_diameter_px,
+            max_px=config.blob_max_diameter_px,
+        )
+        record("set_blob_diameter", blob_diameter_resp)
+
+        circularity_resp = self._broadcast(targets, "set_circularity_min", value=config.circularity_min)
+        record("set_circularity_min", circularity_resp)
 
         mask_kwargs = dict(config.mask_params or {})
         mask_resp = self._broadcast(targets, "mask_start", **mask_kwargs)
@@ -169,17 +195,54 @@ class WandSession:
         stop_resp = self._broadcast(targets, "stop")
         record("stop", stop_resp)
 
-        return {
+        result = {
             "session_id": session_id,
+            "started_at": started_at,
+            "ended_at": datetime.now(timezone.utc).isoformat(),
+            "config": {
+                "exposure_us": config.exposure_us,
+                "gain": config.gain,
+                "fps": config.fps,
+                "focus": config.focus,
+                "threshold": config.threshold,
+                "blob_min_diameter_px": config.blob_min_diameter_px,
+                "blob_max_diameter_px": config.blob_max_diameter_px,
+                "circularity_min": config.circularity_min,
+                "duration_s": config.duration_s,
+                "mask_params": dict(config.mask_params or {}),
+                "mask_retry": config.mask_retry,
+            },
             "wand": {
                 "name": WAND_NAME,
                 "marker_diameter_mm": WAND_MARKER_DIAMETER_MM,
                 "points_mm": WAND_POINTS_MM,
             },
-            "targets": [t.camera_id for t in targets],
+            "targets": [
+                {
+                    "camera_id": t.camera_id,
+                    "ip": t.ip,
+                    "control_port": t.control_port,
+                }
+                for t in targets
+            ],
             "ack_history": ack_history,
         }
+        result["metadata_path"] = str(self._persist_session_metadata(result, config))
+        return result
 
     @staticmethod
     def _all_acked(responses: Dict[str, Dict[str, Any]]) -> bool:
         return all(bool(resp.get("ack")) for resp in responses.values())
+
+    def _persist_session_metadata(self, result: Dict[str, Any], config: SessionConfig) -> Path:
+        output_dir = config.output_dir or self.default_output_dir
+        output_dir.mkdir(parents=True, exist_ok=True)
+        path = output_dir / f"{result['session_id']}.json"
+        path.write_text(self._json_dumps(result), encoding="utf-8")
+        return path
+
+    @staticmethod
+    def _json_dumps(value: Dict[str, Any]) -> str:
+        import json
+
+        return json.dumps(value, indent=2, ensure_ascii=False)

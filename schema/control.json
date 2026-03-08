@@ -12,6 +12,10 @@
         "set_exposure",
         "set_gain",
         "set_fps",
+        "set_focus",
+        "set_threshold",
+        "set_blob_diameter",
+        "set_circularity_min",
         "mask_start",
         "mask_stop",
         "led_on",
@@ -68,6 +72,61 @@
           "minimum": 1,
           "maximum": 120,
           "description": "Target frames per second"
+        }
+      }
+    },
+    "params_focus": {
+      "type": "object",
+      "description": "Parameters for lens focus setting",
+      "required": ["value"],
+      "properties": {
+        "value": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 20,
+          "description": "LensPosition value"
+        }
+      }
+    },
+    "params_threshold": {
+      "type": "object",
+      "description": "Parameters for blob threshold setting",
+      "required": ["value"],
+      "properties": {
+        "value": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255,
+          "description": "Binary threshold brightness"
+        }
+      }
+    },
+    "params_blob_diameter": {
+      "type": "object",
+      "description": "Parameters for blob diameter filter",
+      "properties": {
+        "min_px": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Minimum blob diameter in pixels"
+        },
+        "max_px": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Maximum blob diameter in pixels"
+        }
+      }
+    },
+    "params_circularity": {
+      "type": "object",
+      "description": "Parameters for minimum blob circularity",
+      "required": ["value"],
+      "properties": {
+        "value": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Circularity lower bound"
         }
       }
     },

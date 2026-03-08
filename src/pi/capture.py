@@ -10,7 +10,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Protocol, cast
+from typing import Protocol, cast, Callable
 
 import cv2
 import numpy as np
@@ -35,6 +35,7 @@ MASK_HIT_RATIO = 0.7
 MASK_MIN_AREA_PX = 4
 MASK_DILATE_PX = 2
 MASK_MAX_RATIO_WARNING = 0.4
+DEFAULT_CIRCULARITY_MIN = 0.0
 
 MAX_LINE_BYTES = 65536
 LINE_TIMEOUT_SECONDS = 2.0
@@ -45,6 +46,10 @@ SCHEMA_COMMANDS = {
     "set_exposure",
     "set_gain",
     "set_fps",
+    "set_focus",
+    "set_threshold",
+    "set_blob_diameter",
+    "set_circularity_min",
     "mask_start",
     "mask_stop",
     "led_on",
@@ -60,6 +65,10 @@ MVP_SUPPORTED_COMMANDS = {
     "set_exposure",
     "set_gain",
     "set_fps",
+    "set_focus",
+    "set_threshold",
+    "set_blob_diameter",
+    "set_circularity_min",
     "mask_start",
     "mask_stop",
 }
@@ -113,6 +122,9 @@ class UDPFrameEmitter:
         target_fps: float,
         backend: "FrameBackend",
         threshold: int = 200,
+        min_diameter_px: float | None = None,
+        max_diameter_px: float | None = None,
+        circularity_min: float = DEFAULT_CIRCULARITY_MIN,
         time_us_fn: Callable[[], int] | None = None,
         max_frames: int | None = None,
         mask: np.ndarray | None = None,
@@ -121,6 +133,24 @@ class UDPFrameEmitter:
         self._udp_host: str = udp_host
         self._udp_port: int = udp_port
         self._threshold: int = int(threshold)
+        self._min_diameter_px: float | None = (
+            float(min_diameter_px) if min_diameter_px is not None else None
+        )
+        self._max_diameter_px: float | None = (
+            float(max_diameter_px) if max_diameter_px is not None else None
+        )
+        self._circularity_min: float = float(circularity_min)
+        self._last_detection_stats: dict[str, object] = {
+            "threshold": self._threshold,
+            "min_diameter_px": self._min_diameter_px,
+            "max_diameter_px": self._max_diameter_px,
+            "circularity_min": self._circularity_min,
+            "raw_contour_count": 0,
+            "accepted_blob_count": 0,
+            "rejected_by_diameter": 0,
+            "rejected_by_circularity": 0,
+            "last_blob_count": 0,
+        }
         self._backend: FrameBackend = backend
         self._time_us_fn: Callable[[], int] = (
             time_us_fn if time_us_fn is not None else (lambda: time.time_ns() // 1000)
@@ -178,6 +208,32 @@ class UDPFrameEmitter:
         with self._lock:
             self._target_fps = float(fps)
 
+    def set_threshold(self, threshold: int) -> None:
+        threshold_value = max(0, min(255, int(threshold)))
+        with self._lock:
+            self._threshold = threshold_value
+
+    def set_blob_diameter(
+        self,
+        min_diameter_px: float | None,
+        max_diameter_px: float | None,
+    ) -> None:
+        with self._lock:
+            self._min_diameter_px = (
+                float(min_diameter_px) if min_diameter_px is not None else None
+            )
+            self._max_diameter_px = (
+                float(max_diameter_px) if max_diameter_px is not None else None
+            )
+
+    def set_circularity_min(self, value: float) -> None:
+        with self._lock:
+            self._circularity_min = float(value)
+
+    def get_last_detection_stats(self) -> dict[str, object]:
+        with self._lock:
+            return dict(self._last_detection_stats)
+
     def set_mask(self, mask: np.ndarray | None) -> None:
         with self._lock:
             self._mask = mask.astype(bool, copy=False) if mask is not None else None
@@ -191,13 +247,26 @@ class UDPFrameEmitter:
                 fps = self._target_fps
                 max_frames = self._max_frames
                 mask = self._mask
+                threshold = self._threshold
+                min_diameter_px = self._min_diameter_px
+                max_diameter_px = self._max_diameter_px
+                circularity_min = self._circularity_min
 
             if sock is None:
                 return
 
             try:
                 frame = self._backend.next_frame()
-                blobs = detect_blobs(frame, threshold=self._threshold, mask=mask)
+                blobs, detection_stats = detect_blobs(
+                    frame,
+                    threshold=threshold,
+                    mask=mask,
+                    min_diameter_px=min_diameter_px,
+                    max_diameter_px=max_diameter_px,
+                    circularity_min=circularity_min,
+                )
+                with self._lock:
+                    self._last_detection_stats = detection_stats
             except Exception:
                 return
             msg = {
@@ -259,6 +328,8 @@ class FrameBackend(Protocol):
 
     def set_fps(self, fps: int) -> None: ...
 
+    def set_focus(self, value: float) -> None: ...
+
 
 class _Picamera2Api(Protocol):
     def create_video_configuration(self, *, main: dict[str, object]) -> object: ...
@@ -283,6 +354,7 @@ class DummyBackend:
         self._exposure_us: int | None = None
         self._gain: float | None = None
         self._fps: int | None = None
+        self._focus: float | None = None
 
     def start(self) -> None:
         return
@@ -298,6 +370,9 @@ class DummyBackend:
 
     def set_fps(self, fps: int) -> None:
         self._fps = int(fps)
+
+    def set_focus(self, value: float) -> None:
+        self._focus = float(value)
 
     @property
     def frame_index(self) -> int:
@@ -359,6 +434,7 @@ class Picamera2Backend:
         self._exposure_us: int | None = None
         self._gain: float | None = None
         self._fps: int | None = None
+        self._focus: float | None = None
 
     def set_exposure_us(self, value_us: int) -> None:
         self._exposure_us = int(value_us)
@@ -373,6 +449,10 @@ class Picamera2Backend:
         if fps_value <= 0:
             return
         self._fps = fps_value
+        self._apply_controls_if_running()
+
+    def set_focus(self, value: float) -> None:
+        self._focus = float(value)
         self._apply_controls_if_running()
 
     def start(self) -> None:
@@ -450,6 +530,8 @@ class Picamera2Backend:
         if self._fps is not None and self._fps > 0:
             frame_us = int(round(1_000_000 / float(self._fps)))
             controls["FrameDurationLimits"] = (frame_us, frame_us)
+        if self._focus is not None:
+            controls["LensPosition"] = float(self._focus)
 
         if not controls:
             return
@@ -464,7 +546,10 @@ def detect_blobs(
     frame: np.ndarray,
     threshold: int,
     mask: np.ndarray | None = None,
-) -> list[dict[str, float]]:
+    min_diameter_px: float | None = None,
+    max_diameter_px: float | None = None,
+    circularity_min: float = DEFAULT_CIRCULARITY_MIN,
+) -> tuple[list[dict[str, float]], dict[str, object]]:
     if frame.ndim == 3:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     else:
@@ -480,14 +565,34 @@ def detect_blobs(
             gray = masked_gray
 
     threshold_value = max(0, min(255, int(threshold)))
+    min_diameter = float(min_diameter_px) if min_diameter_px is not None else None
+    max_diameter = float(max_diameter_px) if max_diameter_px is not None else None
+    circularity_floor = max(0.0, min(1.0, float(circularity_min)))
     _retval, binary = cv2.threshold(gray, threshold_value, 255, cv2.THRESH_BINARY)
     contours_info = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     contours = contours_info[0] if len(contours_info) == 2 else contours_info[1]
 
     blobs: list[dict[str, float]] = []
+    rejected_by_diameter = 0
+    rejected_by_circularity = 0
     for contour in contours:
         area = float(cv2.contourArea(contour))
         if area <= 0.0:
+            continue
+        diameter_px = float(math.sqrt((4.0 * area) / math.pi))
+        if min_diameter is not None and diameter_px < min_diameter:
+            rejected_by_diameter += 1
+            continue
+        if max_diameter is not None and diameter_px > max_diameter:
+            rejected_by_diameter += 1
+            continue
+        perimeter = float(cv2.arcLength(contour, True))
+        if perimeter <= 0.0:
+            rejected_by_circularity += 1
+            continue
+        circularity = float((4.0 * math.pi * area) / (perimeter * perimeter))
+        if circularity < circularity_floor:
+            rejected_by_circularity += 1
             continue
         moments = cv2.moments(contour)
         m00 = float(moments.get("m00", 0.0))
@@ -500,7 +605,18 @@ def detect_blobs(
         blobs.append({"x": x, "y": y, "area": area})
 
     blobs.sort(key=lambda blob: (blob["y"], blob["x"]))
-    return blobs
+    diagnostics = {
+        "threshold": threshold_value,
+        "min_diameter_px": min_diameter,
+        "max_diameter_px": max_diameter,
+        "circularity_min": circularity_floor,
+        "raw_contour_count": len(contours),
+        "accepted_blob_count": len(blobs),
+        "rejected_by_diameter": rejected_by_diameter,
+        "rejected_by_circularity": rejected_by_circularity,
+        "last_blob_count": len(blobs),
+    }
+    return blobs, diagnostics
 
 
 @dataclass
@@ -536,6 +652,11 @@ class ControlServer:
         self._desired_exposure_us: int | None = None
         self._desired_gain: float | None = None
         self._desired_fps: int | None = int(self._config.target_fps)
+        self._desired_focus: float | None = 5.215
+        self._desired_threshold: int = int(self._config.threshold)
+        self._desired_blob_min_diameter_px: float | None = None
+        self._desired_blob_max_diameter_px: float | None = None
+        self._desired_circularity_min: float = DEFAULT_CIRCULARITY_MIN
         self._static_mask: np.ndarray | None = None
         self._mask_pixels: int = 0
         self._mask_ratio: float = 0.0
@@ -737,73 +858,9 @@ class ControlServer:
             )
 
         params = cast(dict[str, object], params_obj)
-        mode_param = params.get("mode", "capture")
 
         try:
-            if cmd == "ping":
-                return self._ok_response(request_id, request_camera_id)
-
-            if cmd == "start":
-                if not isinstance(mode_param, str):
-                    return self._error_response(
-                        request_id=request_id,
-                        request_camera_id=request_camera_id,
-                        error_code=ERROR_INVALID_REQUEST,
-                        error_message="invalid_request: start.mode must be string",
-                    )
-                return self._handle_start(request_id, request_camera_id, mode_param, params)
-
-            if cmd == "stop":
-                return self._handle_stop(request_id, request_camera_id)
-
-            if cmd == "set_exposure":
-                value = params.get("value")
-                if not isinstance(value, int):
-                    return self._error_response(
-                        request_id=request_id,
-                        request_camera_id=request_camera_id,
-                        error_code=ERROR_INVALID_REQUEST,
-                        error_message="invalid_request: set_exposure.value must be integer",
-                    )
-                self._set_exposure_us(value)
-                return self._ok_response(request_id, request_camera_id)
-
-            if cmd == "set_gain":
-                value = params.get("value")
-                if not isinstance(value, (int, float)):
-                    return self._error_response(
-                        request_id=request_id,
-                        request_camera_id=request_camera_id,
-                        error_code=ERROR_INVALID_REQUEST,
-                        error_message="invalid_request: set_gain.value must be number",
-                    )
-                self._set_gain(float(value))
-                return self._ok_response(request_id, request_camera_id)
-
-            if cmd == "set_fps":
-                value = params.get("value")
-                if not isinstance(value, int):
-                    return self._error_response(
-                        request_id=request_id,
-                        request_camera_id=request_camera_id,
-                        error_code=ERROR_INVALID_REQUEST,
-                        error_message="invalid_request: set_fps.value must be integer",
-                    )
-                self._set_target_fps(value)
-                return self._ok_response(request_id, request_camera_id)
-
-            if cmd == "mask_start":
-                return self._handle_mask_start(request_id, request_camera_id, params)
-
-            if cmd == "mask_stop":
-                return self._handle_mask_stop(request_id, request_camera_id)
-
-            return self._error_response(
-                request_id=request_id,
-                request_camera_id=request_camera_id,
-                error_code=ERROR_UNKNOWN_CMD,
-                error_message=f"unknown_cmd: {cmd}",
-            )
+            return self._dispatch_command(request_id, request_camera_id, cmd, params)
         except Exception as exc:
             return self._error_response(
                 request_id=request_id,
@@ -812,9 +869,182 @@ class ControlServer:
                 error_message=f"internal_error: {exc}",
             )
 
+    def _dispatch_command(
+        self,
+        request_id: str,
+        request_camera_id: str,
+        cmd: str,
+        params: dict[str, object],
+    ) -> dict[str, object]:
+        handlers: dict[str, Callable[[], dict[str, object]]] = {
+            "ping": lambda: self._handle_ping(request_id, request_camera_id),
+            "start": lambda: self._dispatch_start(request_id, request_camera_id, params),
+            "stop": lambda: self._handle_stop(request_id, request_camera_id),
+            "set_exposure": lambda: self._dispatch_set_int(
+                request_id, request_camera_id, params, "set_exposure", self._set_exposure_us
+            ),
+            "set_gain": lambda: self._dispatch_set_number(
+                request_id, request_camera_id, params, "set_gain", self._set_gain
+            ),
+            "set_fps": lambda: self._dispatch_set_int(
+                request_id, request_camera_id, params, "set_fps", self._set_target_fps
+            ),
+            "set_focus": lambda: self._dispatch_set_number(
+                request_id, request_camera_id, params, "set_focus", self._set_focus
+            ),
+            "set_threshold": lambda: self._dispatch_set_int(
+                request_id, request_camera_id, params, "set_threshold", self._set_threshold
+            ),
+            "set_blob_diameter": lambda: self._dispatch_set_blob_diameter(
+                request_id, request_camera_id, params
+            ),
+            "set_circularity_min": lambda: self._dispatch_set_circularity_min(
+                request_id, request_camera_id, params
+            ),
+            "mask_start": lambda: self._handle_mask_start(request_id, request_camera_id, params),
+            "mask_stop": lambda: self._handle_mask_stop(request_id, request_camera_id),
+        }
+        handler = handlers.get(cmd)
+        if handler is None:
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_UNKNOWN_CMD,
+                error_message=f"unknown_cmd: {cmd}",
+            )
+        return handler()
+
+    def _dispatch_start(
+        self,
+        request_id: str,
+        request_camera_id: str,
+        params: dict[str, object],
+    ) -> dict[str, object]:
+        mode = params.get("mode", "capture")
+        if not isinstance(mode, str):
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message="invalid_request: start.mode must be string",
+            )
+        return self._handle_start(request_id, request_camera_id, mode, params)
+
+    def _dispatch_set_int(
+        self,
+        request_id: str,
+        request_camera_id: str,
+        params: dict[str, object],
+        cmd_name: str,
+        setter: Callable[[int], None],
+    ) -> dict[str, object]:
+        value = params.get("value")
+        if not isinstance(value, int):
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message=f"invalid_request: {cmd_name}.value must be integer",
+            )
+        setter(value)
+        return self._ok_response(request_id, request_camera_id)
+
+    def _dispatch_set_number(
+        self,
+        request_id: str,
+        request_camera_id: str,
+        params: dict[str, object],
+        cmd_name: str,
+        setter: Callable[[float], None],
+    ) -> dict[str, object]:
+        value = params.get("value")
+        if not isinstance(value, (int, float)):
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message=f"invalid_request: {cmd_name}.value must be number",
+            )
+        setter(float(value))
+        return self._ok_response(request_id, request_camera_id)
+
+    def _dispatch_set_blob_diameter(
+        self,
+        request_id: str,
+        request_camera_id: str,
+        params: dict[str, object],
+    ) -> dict[str, object]:
+        min_px = params.get("min_px")
+        max_px = params.get("max_px")
+        if min_px is not None and not isinstance(min_px, (int, float)):
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message="invalid_request: set_blob_diameter.min_px must be number or null",
+            )
+        if max_px is not None and not isinstance(max_px, (int, float)):
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message="invalid_request: set_blob_diameter.max_px must be number or null",
+            )
+        min_value = float(min_px) if min_px is not None else None
+        max_value = float(max_px) if max_px is not None else None
+        if min_value is not None and min_value < 0:
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message="invalid_request: set_blob_diameter.min_px must be >= 0",
+            )
+        if max_value is not None and max_value <= 0:
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message="invalid_request: set_blob_diameter.max_px must be > 0",
+            )
+        if min_value is not None and max_value is not None and min_value > max_value:
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message="invalid_request: set_blob_diameter.min_px must be <= max_px",
+            )
+        self._set_blob_diameter(min_value, max_value)
+        return self._ok_response(request_id, request_camera_id)
+
+    def _dispatch_set_circularity_min(
+        self,
+        request_id: str,
+        request_camera_id: str,
+        params: dict[str, object],
+    ) -> dict[str, object]:
+        value = params.get("value")
+        if not isinstance(value, (int, float)):
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message="invalid_request: set_circularity_min.value must be number",
+            )
+        circularity_value = float(value)
+        if circularity_value < 0.0 or circularity_value > 1.0:
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message="invalid_request: set_circularity_min.value must be in [0,1]",
+            )
+        self._set_circularity_min(circularity_value)
+        return self._ok_response(request_id, request_camera_id)
+
     def _handle_mask_start(self, request_id: str, request_camera_id: str, params: dict[str, object]) -> dict[str, object]:
         threshold = params.get("threshold", self._config.mask_threshold)
         frames = params.get("frames", self._config.mask_init_frames)
+        seconds = params.get("seconds")
         hit_ratio = params.get("hit_ratio", self._config.mask_hit_ratio)
         min_area = params.get("min_area", self._config.mask_min_area_px)
         dilate = params.get("dilate", self._config.mask_dilate_px)
@@ -832,6 +1062,13 @@ class ControlServer:
                 request_camera_id=request_camera_id,
                 error_code=ERROR_INVALID_REQUEST,
                 error_message="invalid_request: frames must be positive integer",
+            )
+        if seconds is not None and (not isinstance(seconds, (int, float)) or float(seconds) <= 0.0):
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message="invalid_request: seconds must be positive number",
             )
         if not isinstance(hit_ratio, (int, float)) or not (0.0 < float(hit_ratio) <= 1.0):
             return self._error_response(
@@ -854,6 +1091,11 @@ class ControlServer:
                 error_code=ERROR_INVALID_REQUEST,
                 error_message="invalid_request: dilate must be non-negative integer",
             )
+
+        if seconds is not None:
+            with self._state_lock:
+                fps_for_mask = float(self._desired_fps or self._config.target_fps)
+            frames = max(1, int(round(float(seconds) * fps_for_mask)))
 
         with self._state_lock:
             if self._state != STATE_IDLE:
@@ -918,6 +1160,7 @@ class ControlServer:
             "mask_params": {
                 "threshold": threshold,
                 "frames": frames,
+                "seconds": float(seconds) if seconds is not None else None,
                 "hit_ratio": hit_ratio,
                 "min_area": min_area,
                 "dilate": dilate,
@@ -1007,6 +1250,8 @@ class ControlServer:
                 backend.set_gain(float(self._desired_gain))
             if self._desired_fps is not None:
                 backend.set_fps(int(self._desired_fps))
+            if self._desired_focus is not None:
+                backend.set_focus(float(self._desired_focus))
 
             backend.start()
 
@@ -1016,7 +1261,10 @@ class ControlServer:
                 udp_port=self._config.udp_port,
                 target_fps=float(self._config.target_fps),
                 backend=backend,
-                threshold=int(self._config.threshold),
+                threshold=int(self._desired_threshold),
+                min_diameter_px=self._desired_blob_min_diameter_px,
+                max_diameter_px=self._desired_blob_max_diameter_px,
+                circularity_min=self._desired_circularity_min,
             )
             emitter.set_mask(mask_to_apply)
             emitter.start()
@@ -1190,6 +1438,75 @@ class ControlServer:
                 backend.set_gain(gain_value)
             except Exception:
                 pass
+
+    def _set_focus(self, value: float) -> None:
+        focus_value = float(value)
+        with self._state_lock:
+            self._desired_focus = focus_value
+            backend = self._backend
+        if backend is not None:
+            try:
+                backend.set_focus(focus_value)
+            except Exception:
+                pass
+
+    def _set_threshold(self, value: int) -> None:
+        threshold_value = max(0, min(255, int(value)))
+        with self._state_lock:
+            self._desired_threshold = threshold_value
+            emitter = self._udp_emitter
+        if emitter is not None:
+            try:
+                emitter.set_threshold(threshold_value)
+            except Exception:
+                pass
+
+    def _set_blob_diameter(
+        self,
+        min_diameter_px: float | None,
+        max_diameter_px: float | None,
+    ) -> None:
+        with self._state_lock:
+            self._desired_blob_min_diameter_px = min_diameter_px
+            self._desired_blob_max_diameter_px = max_diameter_px
+            emitter = self._udp_emitter
+        if emitter is not None:
+            try:
+                emitter.set_blob_diameter(min_diameter_px, max_diameter_px)
+            except Exception:
+                pass
+
+    def _set_circularity_min(self, value: float) -> None:
+        circularity_value = max(0.0, min(1.0, float(value)))
+        with self._state_lock:
+            self._desired_circularity_min = circularity_value
+            emitter = self._udp_emitter
+        if emitter is not None:
+            try:
+                emitter.set_circularity_min(circularity_value)
+            except Exception:
+                pass
+
+    def _handle_ping(self, request_id: str, request_camera_id: str) -> dict[str, object]:
+        with self._state_lock:
+            diagnostics = {
+                "state": self._state,
+                "exposure_us": self._desired_exposure_us,
+                "gain": self._desired_gain,
+                "fps": self._desired_fps,
+                "focus": self._desired_focus,
+                "threshold": self._desired_threshold,
+                "blob_min_diameter_px": self._desired_blob_min_diameter_px,
+                "blob_max_diameter_px": self._desired_blob_max_diameter_px,
+                "circularity_min": self._desired_circularity_min,
+                "mask_ratio": self._mask_ratio,
+                "mask_pixels": self._mask_pixels,
+                "mask_warning": self._mask_warning,
+            }
+            emitter = self._udp_emitter
+        if emitter is not None:
+            diagnostics["blob_diagnostics"] = emitter.get_last_detection_stats()
+        return self._ok_response(request_id, request_camera_id, result=diagnostics)
 
     def _ensure_backend(self) -> FrameBackend:
         with self._state_lock:
