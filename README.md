@@ -216,6 +216,7 @@ ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@<PI_IP>
 - `MASK_INIT` 中は preview 更新と blob 検出を行わず、閾値超え画素の蓄積だけにして、完了後に mask overlay を出す形へ簡略化した
 - `mask_start` 完了直後の同期 preview 描画も外し、preview 再開は idle loop 側に一本化した
 - Pi 側 debug preview は `mask_start` 前後でも同一 `DebugPreview` / 同一 HighGUI window を維持し、`destroyWindow` による close/reopen を shutdown 時以外やめた
+- preview backend の handoff 中も preview thread 自体は終了させず待機させ、mask 完了後は同じ HighGUI owner thread 上で backend だけ再起動するようにした
 - `MASK_INIT` 中は HighGUI/Qt を別スレッドから触らないため、debug preview window は開いたまま最後の描画フレームで freeze させ、再描画は mask 完了後の idle loop 再開まで行わないようにした
 - `ping` の `debug_preview_active` は preview thread / emitter だけでなく、保持中の debug window 表示状態も含めて返すようにした
 - `wand_gui` の Blob Detection Adjustment 設定を host ローカル（`logs/wand_gui_settings.json`）へ保存・再読込するようにした

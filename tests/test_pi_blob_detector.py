@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -171,6 +172,23 @@ def test_start_preview_loop_reuses_existing_debug_preview(monkeypatch: pytest.Mo
         server._preview_thread.join(timeout=1.0)
 
     assert server._debug_preview is original_preview
+
+
+def test_start_preview_loop_resumes_existing_preview_thread() -> None:
+    server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=True))
+    server._running = True
+
+    class _AliveThread:
+        def is_alive(self) -> bool:
+            return True
+
+    server._preview_thread = _AliveThread()  # type: ignore[assignment]
+    server._preview_backend = None
+    server._preview_resume_event = threading.Event()
+
+    server._start_preview_loop()
+
+    assert server._preview_resume_event.is_set()
 
 
 def test_ping_reports_open_debug_preview_window_as_active() -> None:

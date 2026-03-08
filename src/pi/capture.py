@@ -884,6 +884,8 @@ class ControlServer:
         self._preview_stop_event: threading.Event | None = None
         self._preview_handoff_requested: bool = False
         self._preview_handoff_backend: FrameBackend | None = None
+        self._preview_handoff_ready_event: threading.Event | None = None
+        self._preview_resume_event: threading.Event | None = None
 
         self._desired_exposure_us: int | None = None
         self._desired_gain: float | None = None
@@ -974,33 +976,45 @@ class ControlServer:
         if not self._config.debug_preview:
             return
 
+        thread_to_start: threading.Thread | None = None
         with self._state_lock:
             if not self._running or self._state == STATE_RUNNING:
                 return
             if self._preview_thread is not None and self._preview_thread.is_alive():
+                if self._preview_backend is None and self._preview_resume_event is not None:
+                    self._preview_resume_event.set()
+                    self._log("preview loop resume requested")
                 return
             stop_event = threading.Event()
+            handoff_ready_event = threading.Event()
+            resume_event = threading.Event()
             thread = threading.Thread(
                 target=self._preview_loop,
                 args=(stop_event,),
                 daemon=True,
             )
             self._preview_stop_event = stop_event
+            self._preview_handoff_ready_event = handoff_ready_event
+            self._preview_resume_event = resume_event
             self._preview_thread = thread
+            thread_to_start = thread
 
-        thread.start()
+        if thread_to_start is not None:
+            thread_to_start.start()
 
     def _stop_preview_loop(self, timeout_s: float = PREVIEW_STOP_TIMEOUT_SECONDS) -> bool:
         with self._state_lock:
             stop_event = self._preview_stop_event
             thread = self._preview_thread
             backend = self._preview_backend
-            handoff_requested = self._preview_handoff_requested
             self._preview_stop_event = None
+            resume_event = self._preview_resume_event
 
         if stop_event is not None:
             stop_event.set()
-        if backend is not None and not handoff_requested:
+        if resume_event is not None:
+            resume_event.set()
+        if backend is not None:
             try:
                 backend.stop()
             except Exception:
@@ -1010,35 +1024,72 @@ class ControlServer:
         return thread is None or not thread.is_alive()
 
     def _preview_loop(self, stop_event: threading.Event) -> None:
-        try:
-            backend = self._make_backend()
-            self._apply_backend_settings(backend)
-            backend.start()
-            self._log("preview backend started")
-        except BackendUnavailableError:
-            self._log("preview backend unavailable")
-            return
-        except Exception:
-            self._log("preview backend start failed")
-            return
-
-        with self._state_lock:
-            self._preview_backend = backend
-
+        backend: FrameBackend | None = None
+        preview_frame_index = 0
         try:
             next_tick = time.perf_counter()
-            preview_frame_index = 0
             while self._running and not stop_event.is_set():
+                if backend is None:
+                    try:
+                        backend = self._make_backend()
+                        self._apply_backend_settings(backend)
+                        backend.start()
+                        self._log("preview backend started")
+                    except BackendUnavailableError:
+                        self._log("preview backend unavailable")
+                        return
+                    except Exception as exc:
+                        self._log(f"preview backend start failed: {exc}")
+                        return
+
+                    with self._state_lock:
+                        self._preview_backend = backend
+                    preview_frame_index = 0
+                    next_tick = time.perf_counter()
+
                 with self._state_lock:
                     if self._state == STATE_RUNNING:
                         return
-                    state_label = self._state
-                    threshold = self._desired_threshold
-                    min_diameter_px = self._desired_blob_min_diameter_px
-                    max_diameter_px = self._desired_blob_max_diameter_px
-                    circularity_min = self._desired_circularity_min
-                    mask = self._static_mask if self._static_mask is not None else None
-                    fps = float(self._desired_fps or self._config.target_fps or IDLE_PREVIEW_FPS)
+                    if self._preview_handoff_requested:
+                        state_label = self._state
+                        threshold = self._desired_threshold
+                        min_diameter_px = self._desired_blob_min_diameter_px
+                        max_diameter_px = self._desired_blob_max_diameter_px
+                        circularity_min = self._desired_circularity_min
+                        mask = self._static_mask if self._static_mask is not None else None
+                        fps = float(self._desired_fps or self._config.target_fps or IDLE_PREVIEW_FPS)
+                        handoff_requested = True
+                    else:
+                        state_label = self._state
+                        threshold = self._desired_threshold
+                        min_diameter_px = self._desired_blob_min_diameter_px
+                        max_diameter_px = self._desired_blob_max_diameter_px
+                        circularity_min = self._desired_circularity_min
+                        mask = self._static_mask if self._static_mask is not None else None
+                        fps = float(self._desired_fps or self._config.target_fps or IDLE_PREVIEW_FPS)
+                        handoff_requested = False
+
+                if handoff_requested:
+                    try:
+                        backend.stop()
+                    except Exception:
+                        pass
+                    with self._state_lock:
+                        self._preview_backend = None
+                        self._preview_handoff_backend = backend
+                        self._preview_handoff_requested = False
+                        handoff_ready_event = self._preview_handoff_ready_event
+                        resume_event = self._preview_resume_event
+                    self._log("preview backend handed off for mask init")
+                    if handoff_ready_event is not None:
+                        handoff_ready_event.set()
+                    backend = None
+                    while self._running and not stop_event.is_set():
+                        if resume_event is not None and resume_event.wait(0.1):
+                            resume_event.clear()
+                            self._log("preview loop resume acknowledged")
+                            break
+                    continue
 
                 frame_number = preview_frame_index + 1
                 trace_frame = frame_number <= 3
@@ -1090,25 +1141,18 @@ class ControlServer:
                 else:
                     next_tick = time.perf_counter()
         finally:
-            with self._state_lock:
-                handoff_backend = None
-                if self._preview_handoff_requested and self._preview_backend is backend:
-                    handoff_backend = backend
-                    self._preview_handoff_backend = backend
-                    self._preview_handoff_requested = False
-                else:
-                    self._preview_handoff_backend = None
-            if handoff_backend is None:
+            if backend is not None:
                 try:
                     backend.stop()
                 except Exception:
                     pass
                 self._log("preview backend stopped")
-            else:
-                self._log("preview backend handed off for mask init")
             with self._state_lock:
-                if self._preview_backend is backend:
-                    self._preview_backend = None
+                self._preview_backend = None
+                self._preview_handoff_requested = False
+                self._preview_handoff_backend = None
+                self._preview_handoff_ready_event = None
+                self._preview_resume_event = None
                 if self._preview_thread is threading.current_thread():
                     self._preview_thread = None
                     self._preview_stop_event = None
@@ -2059,15 +2103,18 @@ class ControlServer:
             if preview_thread is None or preview_backend is None or not preview_thread.is_alive():
                 self._log("mask init preview handoff unavailable")
                 return None
-            stop_event = self._preview_stop_event
+            handoff_ready_event = self._preview_handoff_ready_event
+            resume_event = self._preview_resume_event
             self._preview_handoff_requested = True
             self._preview_handoff_backend = None
-            self._preview_stop_event = None
+            if handoff_ready_event is not None:
+                handoff_ready_event.clear()
+            if resume_event is not None:
+                resume_event.clear()
         self._log("mask init preview handoff requested")
 
-        if stop_event is not None:
-            stop_event.set()
-        preview_thread.join(timeout=PREVIEW_STOP_TIMEOUT_SECONDS)
+        if handoff_ready_event is not None:
+            handoff_ready_event.wait(timeout=PREVIEW_STOP_TIMEOUT_SECONDS)
 
         with self._state_lock:
             backend = self._preview_handoff_backend
