@@ -105,10 +105,12 @@ def test_gui_state_apply_and_command(tmp_path: Path) -> None:
         "reference_camera_id": "pi-cam-01",
         "cameras": [{"camera_id": "pi-cam-01"}, {"camera_id": "pi-cam-02"}],
     }
+    log_path = tmp_path / "wand_capture.jsonl"
+    log_path.write_text("{}", encoding="utf-8")
     generated = state.generate_extrinsics(
         {
             "intrinsics_path": "calibration",
-            "log_path": "logs/wand_capture.jsonl",
+            "log_path": str(log_path),
             "output_path": "calibration/calibration_extrinsics_v1.json",
         }
     )
@@ -122,6 +124,25 @@ def test_gui_state_apply_and_command(tmp_path: Path) -> None:
 def test_gui_html_normalizes_blob_range() -> None:
     assert "function normalizedBlobRange()" in HTML_PAGE
     assert "maxValue = minValue;" in HTML_PAGE
+
+
+def test_generate_extrinsics_rejects_missing_log_path(tmp_path: Path) -> None:
+    state = WandGuiState(
+        session=_FakeSession(),
+        receiver=_FakeReceiver(),
+        settings_path=tmp_path / "wand_gui_settings.json",
+    )
+    state._extrinsics_solver = lambda **kwargs: {  # type: ignore[attr-defined]
+        "reference_camera_id": "pi-cam-01",
+        "cameras": [{"camera_id": "pi-cam-01"}],
+    }
+
+    try:
+        state.generate_extrinsics({"log_path": str(tmp_path / "missing.jsonl")})
+    except ValueError as exc:
+        assert "log_path does not exist" in str(exc)
+    else:
+        raise AssertionError("generate_extrinsics should reject missing log path")
 
 
 def test_gui_loads_persisted_settings(tmp_path: Path) -> None:

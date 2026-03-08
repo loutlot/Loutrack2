@@ -24,6 +24,8 @@ else:
 
 
 DEFAULT_SETTINGS_PATH = Path("logs") / "wand_gui_settings.json"
+DEFAULT_WAND_LOG_PATH = Path("logs") / "wand_capture.jsonl"
+DEFAULT_EXTRINSICS_OUTPUT_PATH = Path("calibration") / "calibration_extrinsics_v1.json"
 
 
 HTML_PAGE = """<!doctype html>
@@ -1071,18 +1073,30 @@ class WandGuiState:
 
     def generate_extrinsics(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         intrinsics_path = str(payload.get("intrinsics_path", "calibration")).strip()
-        log_path = str(payload.get("log_path", "")).strip()
+        log_path = str(payload.get("log_path", str(DEFAULT_WAND_LOG_PATH))).strip()
         output_path = str(
-            payload.get("output_path", "calibration/calibration_extrinsics_v1.json")
+            payload.get("output_path", str(DEFAULT_EXTRINSICS_OUTPUT_PATH))
         ).strip()
         if not log_path:
-            raise ValueError("log_path is required")
+            log_path = str(DEFAULT_WAND_LOG_PATH)
+        if not output_path:
+            output_path = str(DEFAULT_EXTRINSICS_OUTPUT_PATH)
 
-        result = self._extrinsics_solver(
-            intrinsics_path=intrinsics_path,
-            log_path=log_path,
-            output_path=output_path,
-        )
+        resolved_log_path = Path(log_path)
+        if not resolved_log_path.exists():
+            raise ValueError(f"log_path does not exist: {resolved_log_path}")
+        if not resolved_log_path.is_file():
+            raise ValueError(f"log_path is not a file: {resolved_log_path}")
+
+        try:
+            result = self._extrinsics_solver(
+                intrinsics_path=intrinsics_path,
+                log_path=str(resolved_log_path),
+                output_path=output_path,
+            )
+        except FileNotFoundError as exc:
+            missing_path = Path(getattr(exc, "filename", "") or str(resolved_log_path))
+            raise ValueError(f"log_path does not exist: {missing_path}") from exc
         summary = {
             "ok": True,
             "reference_camera_id": result.get("reference_camera_id"),
@@ -1128,6 +1142,8 @@ class WandGuiHandler(BaseHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND)
         except ValueError as exc:
             self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+        except Exception as exc:  # noqa: BLE001
+            self._send_json({"error": f"internal_error: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def log_message(self, format: str, *args: Any) -> None:
         return
