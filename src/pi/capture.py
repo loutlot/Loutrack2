@@ -387,12 +387,18 @@ class BackendUnavailableError(RuntimeError):
 
 
 class DebugPreview:
-    def __init__(self, window_name: str = "loutrack2-debug-preview") -> None:
+    def __init__(
+        self,
+        window_name: str = "loutrack2-debug-preview",
+        log_fn: Callable[[str], None] | None = None,
+    ) -> None:
         self._window_name = window_name
         self._enabled = True
         self._initialized = False
         self._lock = threading.Lock()
         self._last_canvas: np.ndarray | None = None
+        self._log_fn = log_fn
+        self._render_count = 0
 
     @property
     def enabled(self) -> bool:
@@ -418,7 +424,8 @@ class DebugPreview:
         try:
             canvas = self._build_canvas(frame, blobs, mask, stats, camera_id, extra_lines)
             self._render_canvas(canvas)
-        except Exception:
+        except Exception as exc:
+            self._trace(f"debug preview show failed: {exc}")
             self.close_window()
 
     def close(self) -> None:
@@ -431,24 +438,46 @@ class DebugPreview:
         with self._lock:
             if self._initialized:
                 try:
+                    self._trace("debug preview destroyWindow begin")
                     cv2.destroyWindow(self._window_name)
                     _ = cv2.waitKey(1)
+                    self._trace("debug preview destroyWindow ok")
                 except Exception:
                     pass
                 self._initialized = False
 
     def _render_canvas(self, canvas: np.ndarray) -> None:
         with self._lock:
+            render_count = self._render_count + 1
             if not self._initialized:
                 try:
                     cv2.startWindowThread()
                 except Exception:
                     pass
+                self._trace(
+                    f"debug preview render {render_count} namedWindow begin"
+                )
                 cv2.namedWindow(self._window_name, cv2.WINDOW_NORMAL)
                 self._initialized = True
+                self._trace(
+                    f"debug preview render {render_count} namedWindow ok"
+                )
+            self._trace(
+                "debug preview render "
+                f"{render_count} imshow begin shape={canvas.shape}"
+            )
             cv2.imshow(self._window_name, canvas)
+            self._trace(f"debug preview render {render_count} imshow ok")
             _ = cv2.waitKey(1)
+            self._trace(f"debug preview render {render_count} waitKey ok")
             self._last_canvas = canvas.copy()
+            self._render_count = render_count
+
+    def _trace(self, message: str) -> None:
+        if self._log_fn is None:
+            return
+        if self._render_count < 3 or "failed" in message or "destroyWindow" in message:
+            self._log_fn(message)
 
     def _build_canvas(
         self,
@@ -869,7 +898,7 @@ class ControlServer:
         self._mask_ratio: float = 0.0
         self._mask_warning: str | None = None
         self._debug_preview: DebugPreview | None = (
-            DebugPreview() if self._config.debug_preview else None
+            DebugPreview(log_fn=self._log) if self._config.debug_preview else None
         )
         self._last_blob_diagnostics: dict[str, object] = {
             "threshold": self._desired_threshold,
@@ -998,6 +1027,7 @@ class ControlServer:
 
         try:
             next_tick = time.perf_counter()
+            preview_frame_index = 0
             while self._running and not stop_event.is_set():
                 with self._state_lock:
                     if self._state == STATE_RUNNING:
@@ -1010,7 +1040,18 @@ class ControlServer:
                     mask = self._static_mask if self._static_mask is not None else None
                     fps = float(self._desired_fps or self._config.target_fps or IDLE_PREVIEW_FPS)
 
+                frame_number = preview_frame_index + 1
+                trace_frame = frame_number <= 3
+                if trace_frame:
+                    self._log(
+                        f"preview loop frame {frame_number} capture begin state={state_label}"
+                    )
                 frame = backend.capture_array()
+                if trace_frame:
+                    self._log(
+                        "preview loop frame "
+                        f"{frame_number} capture ok shape={getattr(frame, 'shape', None)}"
+                    )
                 blobs, stats = detect_blobs(
                     frame,
                     threshold=threshold,
@@ -1019,7 +1060,14 @@ class ControlServer:
                     max_diameter_px=max_diameter_px,
                     circularity_min=circularity_min,
                 )
+                if trace_frame:
+                    self._log(
+                        "preview loop frame "
+                        f"{frame_number} detect ok accepted={stats.get('accepted_blob_count', 0)}"
+                    )
                 self._record_blob_diagnostics(stats)
+                if trace_frame:
+                    self._log(f"preview loop frame {frame_number} show begin")
                 self._show_debug_preview(
                     frame=frame,
                     blobs=blobs,
@@ -1030,6 +1078,9 @@ class ControlServer:
                         "preview=debug-idle",
                     ],
                 )
+                if trace_frame:
+                    self._log(f"preview loop frame {frame_number} show ok")
+                preview_frame_index = frame_number
 
                 preview_fps = max(1.0, min(fps, IDLE_PREVIEW_FPS))
                 next_tick += 1.0 / preview_fps

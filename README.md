@@ -212,6 +212,7 @@ ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@<PI_IP>
 - `mask_start` の host 側 timeout を 30 秒へ延長し、Pi 側でも preview 停止失敗時の早期エラーと mask 初期化 timeout 復旧を追加して `MASK_INIT` 張り付きが残らないようにした
 - Pi 側 `mask_start` は debug preview 用 backend をそのまま handoff して再利用するようにし、preview stop 後の `picamera2` 再 open race を避けた
 - Pi 側 `mask_start` の terminal debug log を増やし、preview handoff / backend source / frame capture / postprocess のどこで止まるかを切り分けやすくした
+- debug preview 再開直後の最初の数フレームについて、`capture -> detect -> show` と `namedWindow -> imshow -> waitKey` の段階ログを追加し、mask 完了後に描画が再開しないケースの停止点を追えるようにした
 - `MASK_INIT` 中は preview 更新と blob 検出を行わず、閾値超え画素の蓄積だけにして、完了後に mask overlay を出す形へ簡略化した
 - `mask_start` 完了直後の同期 preview 描画も外し、preview 再開は idle loop 側に一本化した
 - Pi 側 debug preview は `mask_start` 前後でも同一 `DebugPreview` / 同一 HighGUI window を維持し、`destroyWindow` による close/reopen を shutdown 時以外やめた
