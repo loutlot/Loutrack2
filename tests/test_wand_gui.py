@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -12,6 +13,16 @@ from host.wand_session import CameraTarget
 
 
 class _FakeReceiver:
+    def __init__(self):
+        self._frame_callback = None
+
+    def set_frame_callback(self, callback):
+        self._frame_callback = callback
+
+    def emit_frame(self, frame):
+        if self._frame_callback:
+            self._frame_callback(frame)
+
     @property
     def stats(self):
         return {"frames_received": 0, "cameras_discovered": 2}
@@ -143,6 +154,41 @@ def test_generate_extrinsics_rejects_missing_log_path(tmp_path: Path) -> None:
         assert "log_path does not exist" in str(exc)
     else:
         raise AssertionError("generate_extrinsics should reject missing log path")
+
+
+def test_start_stop_writes_wand_capture_log(tmp_path: Path) -> None:
+    receiver = _FakeReceiver()
+    state = WandGuiState(
+        session=_FakeSession(),
+        receiver=receiver,
+        settings_path=tmp_path / "wand_gui_settings.json",
+    )
+    state.capture_log_dir = tmp_path / "logs"
+
+    start_result = state.run_command({"command": "start", "camera_ids": ["pi-cam-01"]})
+    log_path = Path(start_result["capture_log"]["path"])
+    assert log_path.exists()
+
+    class _Frame:
+        def to_dict(self):
+            return {
+                "camera_id": "pi-cam-01",
+                "timestamp": 1000,
+                "frame_index": 1,
+                "blobs": [{"x": 1.0, "y": 2.0, "area": 3.0}],
+            }
+
+    receiver.emit_frame(_Frame())
+    stop_result = state.run_command({"command": "stop", "camera_ids": ["pi-cam-01"]})
+    assert stop_result["capture_log"]["log_file"] == str(log_path)
+
+    lines = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+    assert any(item.get("_type") == "frame" for item in lines)
+    assert any(
+        item.get("_type") == "frame"
+        and item.get("data", {}).get("camera_id") == "pi-cam-01"
+        for item in lines
+    )
 
 
 def test_gui_loads_persisted_settings(tmp_path: Path) -> None:

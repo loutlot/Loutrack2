@@ -223,6 +223,7 @@ ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@<PI_IP>
 - wand 収録中は UDP emitter 側から HighGUI を描画しないようにし、OpenCV window 操作を preview thread に一本化した
 - `wand_gui` の `Generate Extrinsics` は `log_path` 空文字を既定値へフォールバックし、存在しない/不正なパスは solver 実行前に 400 系エラーへ正規化するようにした
 - `wand_gui` の HTTP ハンドラは `ValueError` 以外の例外も JSON 500 として返し、request thread が traceback で崩れたままになる挙動を防ぐようにした
+- `wand_gui` の `Start Wand Capture` / `Stop Capture` は受信フレームを `logs/wand_capture.jsonl` に記録するようにし、extrinsics 生成で空ログに当たる問題を解消した
 - `MASK_INIT` 中は HighGUI/Qt を別スレッドから触らないため、debug preview window は開いたまま最後の描画フレームで freeze させ、再描画は mask 完了後の idle loop 再開まで行わないようにした
 - `ping` の `debug_preview_active` は preview thread / emitter だけでなく、保持中の debug window 表示状態も含めて返すようにした
 - `wand_gui` の Blob Detection Adjustment 設定を host ローカル（`logs/wand_gui_settings.json`）へ保存・再読込するようにした

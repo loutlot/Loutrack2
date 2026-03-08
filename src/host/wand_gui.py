@@ -17,15 +17,18 @@ if __package__ in (None, ""):
     if str(MODULE_SRC_ROOT) not in sys.path:
         sys.path.insert(0, str(MODULE_SRC_ROOT))
     from host.receiver import UDPReceiver
+    from host.logger import FrameLogger
     from host.wand_session import SessionConfig, WandSession
 else:
     from .receiver import UDPReceiver
+    from .logger import FrameLogger
     from .wand_session import SessionConfig, WandSession
 
 
 DEFAULT_SETTINGS_PATH = Path("logs") / "wand_gui_settings.json"
 DEFAULT_WAND_LOG_PATH = Path("logs") / "wand_capture.jsonl"
 DEFAULT_EXTRINSICS_OUTPUT_PATH = Path("calibration") / "calibration_extrinsics_v1.json"
+DEFAULT_CAPTURE_LOG_DIR = Path("logs")
 
 
 HTML_PAGE = """<!doctype html>
@@ -840,6 +843,13 @@ class WandGuiState:
         self.config = self._load_initial_config()
         self.camera_status: Dict[str, Dict[str, Any]] = {}
         self.last_result: Dict[str, Any] = {"status": "idle"}
+        self.capture_log_dir: Path = DEFAULT_CAPTURE_LOG_DIR
+        self.capture_log_path: Path = DEFAULT_WAND_LOG_PATH
+        self._capture_logger: FrameLogger | None = None
+        self._capture_log_active: bool = False
+        self._receiver_frame_callback = getattr(receiver, "_frame_callback", None)
+        if hasattr(self.receiver, "set_frame_callback"):
+            self.receiver.set_frame_callback(self._on_frame_received)
         self._extrinsics_solver = _load_extrinsics_solver()
 
     def _default_config(self) -> SessionConfig:
@@ -1059,10 +1069,28 @@ class WandGuiState:
             "ping": lambda: self.session._broadcast(targets, "ping"),
             "mask_start": lambda: self.session._broadcast(targets, "mask_start", **self._mask_params()),
             "mask_stop": lambda: self.session._broadcast(targets, "mask_stop"),
-            "start": lambda: self.session._broadcast(targets, "start", mode="wand_capture"),
-            "stop": lambda: self.session._broadcast(targets, "stop"),
         }
         handler = command_handlers.get(command)
+        if command == "start":
+            log_path = self._start_capture_log()
+            result = self.session._broadcast(targets, "start", mode="wand_capture")
+            payload_out: Dict[str, Any] = {command: result, "capture_log": {"path": str(log_path)}}
+            if not self._all_acked(result):
+                stop_meta = self._stop_capture_log()
+                if stop_meta is not None:
+                    payload_out["capture_log"].update(stop_meta)
+            self._update_camera_status({command: result})
+            self.last_result = payload_out
+            return self.last_result
+        if command == "stop":
+            result = self.session._broadcast(targets, "stop")
+            payload_out = {command: result}
+            stop_meta = self._stop_capture_log()
+            if stop_meta is not None:
+                payload_out["capture_log"] = stop_meta
+            self._update_camera_status({command: result})
+            self.last_result = payload_out
+            return self.last_result
         if handler is None:
             raise ValueError(f"Unsupported command: {command}")
         result = handler()
@@ -1113,6 +1141,51 @@ class WandGuiState:
                     entry = self.camera_status.setdefault(camera_id, {"camera_id": camera_id, "ip": "unknown"})
                     entry["last_ack"] = bool(response.get("ack"))
                     entry["last_error"] = response.get("error") or response.get("error_message")
+
+    def _on_frame_received(self, frame: Any) -> None:
+        previous = self._receiver_frame_callback
+        if callable(previous):
+            previous(frame)
+        logger: FrameLogger | None = None
+        with self.lock:
+            if self._capture_log_active:
+                logger = self._capture_logger
+        if logger is None:
+            return
+        frame_dict = frame.to_dict() if hasattr(frame, "to_dict") else dict(frame)
+        try:
+            logger.log_frame(frame_dict)
+        except Exception:
+            return
+
+    def _start_capture_log(self) -> Path:
+        with self.lock:
+            if self._capture_logger is not None and self._capture_log_active:
+                return Path(self._capture_logger.current_log_file or str(self.capture_log_path))
+            self.capture_log_dir.mkdir(parents=True, exist_ok=True)
+            logger = FrameLogger(log_dir=str(self.capture_log_dir))
+            log_file = logger.start_recording(session_name=self.capture_log_path.stem)
+            self._capture_logger = logger
+            self._capture_log_active = True
+            self.capture_log_path = Path(log_file)
+            return self.capture_log_path
+
+    def _stop_capture_log(self) -> Dict[str, Any] | None:
+        with self.lock:
+            logger = self._capture_logger
+            active = self._capture_log_active
+        if logger is None or not active:
+            return None
+        metadata = logger.stop_recording()
+        with self.lock:
+            self._capture_log_active = False
+            if isinstance(metadata.get("log_file"), str):
+                self.capture_log_path = Path(str(metadata["log_file"]))
+        return metadata
+
+    @staticmethod
+    def _all_acked(responses: Dict[str, Dict[str, Any]]) -> bool:
+        return all(bool(resp.get("ack")) for resp in responses.values())
 
 
 class WandGuiHandler(BaseHTTPRequestHandler):
