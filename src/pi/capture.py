@@ -391,10 +391,17 @@ class DebugPreview:
         self._window_name = window_name
         self._enabled = True
         self._initialized = False
+        self._lock = threading.Lock()
+        self._last_canvas: np.ndarray | None = None
 
     @property
     def enabled(self) -> bool:
         return self._enabled
+
+    @property
+    def window_open(self) -> bool:
+        with self._lock:
+            return self._initialized
 
     def show(
         self,
@@ -410,6 +417,37 @@ class DebugPreview:
             return
         try:
             canvas = self._build_canvas(frame, blobs, mask, stats, camera_id, extra_lines)
+            self._render_canvas(canvas)
+        except Exception:
+            self.close_window()
+
+    def show_placeholder(self, title: str, lines: list[str] | None = None) -> None:
+        if not self._enabled:
+            return
+        try:
+            canvas = self._build_placeholder_canvas(title, lines)
+            self._render_canvas(canvas)
+        except Exception:
+            self.close_window()
+
+    def close(self) -> None:
+        if not self._enabled:
+            return
+        self._enabled = False
+        self.close_window()
+
+    def close_window(self) -> None:
+        with self._lock:
+            if self._initialized:
+                try:
+                    cv2.destroyWindow(self._window_name)
+                    _ = cv2.waitKey(1)
+                except Exception:
+                    pass
+                self._initialized = False
+
+    def _render_canvas(self, canvas: np.ndarray) -> None:
+        with self._lock:
             if not self._initialized:
                 try:
                     cv2.startWindowThread()
@@ -419,23 +457,42 @@ class DebugPreview:
                 self._initialized = True
             cv2.imshow(self._window_name, canvas)
             _ = cv2.waitKey(1)
-        except Exception:
-            self.close()
+            self._last_canvas = canvas.copy()
 
-    def close(self) -> None:
-        if not self._enabled:
-            return
-        self._enabled = False
-        self.close_window()
+    def _build_placeholder_canvas(self, title: str, lines: list[str] | None) -> np.ndarray:
+        with self._lock:
+            last_canvas = None if self._last_canvas is None else self._last_canvas.copy()
+        if last_canvas is not None:
+            canvas = cv2.addWeighted(
+                last_canvas,
+                0.18,
+                np.zeros_like(last_canvas),
+                0.82,
+                0,
+            )
+        else:
+            canvas = np.zeros((720, 1280, 3), dtype=np.uint8)
 
-    def close_window(self) -> None:
-        if self._initialized:
-            try:
-                cv2.destroyWindow(self._window_name)
-                _ = cv2.waitKey(1)
-            except Exception:
-                pass
-            self._initialized = False
+        overlay_lines = [title]
+        if lines:
+            overlay_lines.extend(lines)
+
+        top = 56
+        for index, line in enumerate(overlay_lines):
+            font_scale = 1.0 if index == 0 else 0.7
+            thickness = 2 if index == 0 else 1
+            cv2.putText(
+                canvas,
+                line,
+                (32, top),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                font_scale,
+                (0, 220, 255),
+                thickness,
+                cv2.LINE_AA,
+            )
+            top += 40 if index == 0 else 30
+        return canvas
 
     def _build_canvas(
         self,
@@ -937,7 +994,6 @@ class ControlServer:
                 return
             if self._preview_thread is not None and self._preview_thread.is_alive():
                 return
-            self._debug_preview = DebugPreview()
             stop_event = threading.Event()
             thread = threading.Thread(
                 target=self._preview_loop,
@@ -976,13 +1032,17 @@ class ControlServer:
             self._log("preview backend started")
         except BackendUnavailableError:
             self._log("preview backend unavailable")
-            if self._debug_preview is not None:
-                self._debug_preview.close()
+            self._show_debug_preview_placeholder(
+                "PREVIEW_BACKEND_UNAVAILABLE",
+                [f"state={self._state}", "preview=backend-unavailable"],
+            )
             return
         except Exception:
             self._log("preview backend start failed")
-            if self._debug_preview is not None:
-                self._debug_preview.close()
+            self._show_debug_preview_placeholder(
+                "PREVIEW_BACKEND_FAILED",
+                [f"state={self._state}", "preview=backend-start-failed"],
+            )
             return
 
         with self._state_lock:
@@ -1031,8 +1091,6 @@ class ControlServer:
                 else:
                     next_tick = time.perf_counter()
         finally:
-            if self._debug_preview is not None:
-                self._debug_preview.close_window()
             with self._state_lock:
                 handoff_backend = None
                 if self._preview_handoff_requested and self._preview_backend is backend:
@@ -1466,7 +1524,6 @@ class ControlServer:
         mask_pixels = 0
         mask_ratio = 0.0
         warning: str | None = None
-        last_frame: np.ndarray | None = None
         try:
             backend = self._take_preview_backend_for_mask()
             if backend is None:
@@ -1486,6 +1543,14 @@ class ControlServer:
                 self._log("mask init backend started source=fresh")
             else:
                 self._log("mask init backend source=preview_handoff")
+            self._show_debug_preview_placeholder(
+                "MASK_INIT",
+                [
+                    f"state={STATE_MASK_INIT}",
+                    f"frames={frames} threshold={threshold}",
+                    "preview=paused-window-retained",
+                ],
+            )
             with self._state_lock:
                 fps_for_timeout = float(self._desired_fps or self._config.target_fps or 1.0)
             estimated_capture_s = float(frames) / max(1.0, fps_for_timeout)
@@ -1498,7 +1563,7 @@ class ControlServer:
                 f"frames={frames} timeout={mask_timeout_s:.1f}s hit_ratio={float(hit_ratio):.2f} "
                 f"min_area={min_area} dilate={dilate}"
             )
-            mask, mask_pixels, last_frame = self._build_static_mask(
+            mask, mask_pixels = self._build_static_mask(
                 backend,
                 frames,
                 threshold,
@@ -1781,9 +1846,8 @@ class ControlServer:
         min_area: int,
         dilate: int,
         deadline_monotonic: float | None = None,
-    ) -> tuple[np.ndarray, int, np.ndarray | None]:
+    ) -> tuple[np.ndarray, int]:
         hit_counts: np.ndarray | None = None
-        last_frame: np.ndarray | None = None
         self._log(f"mask init frame loop begin frames={frames}")
         for frame_index in range(frames):
             if deadline_monotonic is not None and time.perf_counter() > deadline_monotonic:
@@ -1794,7 +1858,6 @@ class ControlServer:
                 "mask init frame "
                 f"{frame_index + 1}/{frames} capture ok shape={getattr(frame, 'shape', None)}"
             )
-            last_frame = frame
             gray = (
                 cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 if frame.ndim == 3
@@ -1831,7 +1894,7 @@ class ControlServer:
 
         mask = mask_uint8.astype(bool)
         self._log(f"mask init postprocess complete pixels={int(np.count_nonzero(mask))}")
-        return mask, int(np.count_nonzero(mask)), last_frame
+        return mask, int(np.count_nonzero(mask))
 
     def _apply_backend_settings(self, backend: FrameBackend) -> None:
         if self._desired_exposure_us is not None:
@@ -1867,6 +1930,12 @@ class ControlServer:
             camera_id=self._config.camera_id,
             extra_lines=extra_lines,
         )
+
+    def _show_debug_preview_placeholder(self, title: str, lines: list[str] | None = None) -> None:
+        preview = self._debug_preview
+        if preview is None or not preview.enabled:
+            return
+        preview.show_placeholder(title, lines)
 
     def _set_target_fps(self, fps: int) -> None:
         fps_value = int(fps)
@@ -1980,7 +2049,9 @@ class ControlServer:
             preview_thread = self._preview_thread
             blob_diagnostics = dict(self._last_blob_diagnostics)
         diagnostics["debug_preview_active"] = bool(
-            emitter is not None or (preview_thread is not None and preview_thread.is_alive())
+            emitter is not None
+            or (preview_thread is not None and preview_thread.is_alive())
+            or (self._debug_preview is not None and self._debug_preview.window_open)
         )
         diagnostics["blob_diagnostics"] = (
             emitter.get_last_detection_stats() if emitter is not None else blob_diagnostics

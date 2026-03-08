@@ -124,6 +124,38 @@ def test_mask_start_reuses_preview_backend_when_available(monkeypatch: pytest.Mo
     assert response["ack"] is True
 
 
+def test_mask_start_shows_placeholder_without_recreating_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=True))
+    preview = server._debug_preview
+    assert preview is not None
+    preview_backend = DummyBackend(DummyBackendConfig(width=32, height=24, num_dots=0))
+    placeholder_calls: list[tuple[str, list[str] | None]] = []
+
+    monkeypatch.setattr(server, "_take_preview_backend_for_mask", lambda: preview_backend)
+    monkeypatch.setattr(server, "_start_preview_loop", lambda: None)
+    monkeypatch.setattr(
+        preview,
+        "show_placeholder",
+        lambda title, lines=None: placeholder_calls.append((title, lines)),
+    )
+
+    response = server._handle_mask_start("req-1", "pi-cam-01", {"frames": 2, "threshold": 200})
+
+    assert response["ack"] is True
+    assert placeholder_calls == [
+        (
+            "MASK_INIT",
+            [
+                "state=MASK_INIT",
+                "frames=2 threshold=200",
+                "preview=paused-window-retained",
+            ],
+        )
+    ]
+
+
 def test_resolve_debug_preview_enabled_requires_display(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DISPLAY", raising=False)
     assert resolve_debug_preview_enabled(True) is False
@@ -137,6 +169,31 @@ def test_resolve_debug_preview_enabled_accepts_display(monkeypatch: pytest.Monke
 def test_get_default_backend_prefers_dummy_off_pi(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("src.pi.capture.running_on_raspberry_pi", lambda: False)
     assert get_default_backend() == "dummy"
+
+
+def test_start_preview_loop_reuses_existing_debug_preview(monkeypatch: pytest.MonkeyPatch) -> None:
+    server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=True))
+    original_preview = server._debug_preview
+    server._running = True
+    monkeypatch.setattr(server, "_preview_loop", lambda stop_event: None)
+
+    server._start_preview_loop()
+    if server._preview_thread is not None:
+        server._preview_thread.join(timeout=1.0)
+
+    assert server._debug_preview is original_preview
+
+
+def test_ping_reports_open_debug_preview_window_as_active() -> None:
+    server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=True))
+    preview = server._debug_preview
+    assert preview is not None
+    preview._initialized = True
+
+    response = server._handle_ping("req-1", "pi-cam-01")
+
+    assert response["ack"] is True
+    assert response["result"]["debug_preview_active"] is True
 
 
 def test_debug_preview_close_window_preserves_enabled() -> None:

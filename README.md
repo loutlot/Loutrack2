@@ -214,9 +214,9 @@ ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@<PI_IP>
 - Pi 側 `mask_start` の terminal debug log を増やし、preview handoff / backend source / frame capture / postprocess のどこで止まるかを切り分けやすくした
 - `MASK_INIT` 中は preview 更新と blob 検出を行わず、閾値超え画素の蓄積だけにして、完了後に mask overlay を出す形へ簡略化した
 - `mask_start` 完了直後の同期 preview 描画も外し、preview 再開は idle loop 側に一本化した
-- `mask_start` 開始時は debug preview window を明示的に閉じ、完了後は idle preview loop で window を開き直すようにした
-- preview 再開時は `DebugPreview` を作り直して window を再生成するようにし、mask 後に window が開き直らないケースを避けた
-- debug preview の window 再生成時に `cv2.startWindowThread()` を使い、close 後は `waitKey(1)` を挟んで HighGUI の再オープンを安定化した
+- Pi 側 debug preview は `mask_start` 前後でも同一 `DebugPreview` / 同一 HighGUI window を維持し、`destroyWindow` による close/reopen を shutdown 時以外やめた
+- `MASK_INIT` 中は live preview を止める代わりに、最後の preview frame を暗転させた static placeholder (`MASK_INIT`, frame 数, threshold) を同じ window に表示するようにした
+- `ping` の `debug_preview_active` は preview thread / emitter だけでなく、保持中の debug window 表示状態も含めて返すようにした
 - `wand_gui` の Blob Detection Adjustment 設定を host ローカル（`logs/wand_gui_settings.json`）へ保存・再読込するようにした
 - Pi idle preview は起動時に 1 回だけ立ち上げ、`ping` ごとの `picamera2` 再取得ループをやめるようにした
 - `src/host/wand_gui.py` を `Blob Detection Adjustment -> Mask Adjustment -> Wand Capture -> Extrinsics Generation` の 4 セグメント UI に再編し、段階的に進めやすい workflow 表示へ更新した
