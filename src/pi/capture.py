@@ -6,10 +6,11 @@ import importlib
 import json
 import math
 import socket
+import subprocess
 import threading
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol, cast, Callable
 
 import cv2
@@ -110,6 +111,28 @@ def parse_udp_dest(value: str) -> tuple[str, int]:
         raise ValueError("udp_dest: port out of range")
 
     return host, port
+
+
+def get_default_camera_id() -> str:
+    try:
+        completed = subprocess.run(
+            ["hostnamectl", "--static"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+        )
+        if completed.returncode == 0:
+            value = completed.stdout.strip()
+            if value:
+                return value
+    except Exception:
+        pass
+
+    fallback = socket.gethostname().strip()
+    if fallback:
+        return fallback
+    return "pi-cam-01"
 
 
 class UDPFrameEmitter:
@@ -621,7 +644,7 @@ def detect_blobs(
 
 @dataclass
 class ControlServerConfig:
-    camera_id: str = "pi-cam-01"
+    camera_id: str = field(default_factory=get_default_camera_id)
     tcp_host: str = "0.0.0.0"
     tcp_port: int = 8554
     udp_dest: str = "255.255.255.255:5000"
@@ -1566,7 +1589,7 @@ class ControlServer:
 
 def parse_args() -> ControlServerConfig:
     parser = argparse.ArgumentParser(description="Loutrack Pi capture service (MVP control only)")
-    _ = parser.add_argument("--camera-id", default="pi-cam-01", help="Camera ID handled by this Pi")
+    _ = parser.add_argument("--camera-id", default=None, help="Camera ID handled by this Pi (default: device name)")
     _ = parser.add_argument("--tcp-host", default="0.0.0.0", help="TCP bind host")
     _ = parser.add_argument("--tcp-port", type=int, default=8554, help="TCP bind port")
     _ = parser.add_argument(
@@ -1582,14 +1605,19 @@ def parse_args() -> ControlServerConfig:
     )
 
     namespace = parser.parse_args()
-    camera_id = getattr(namespace, "camera_id", "pi-cam-01")
+    camera_id = getattr(namespace, "camera_id", None)
     tcp_host = getattr(namespace, "tcp_host", "0.0.0.0")
     tcp_port = getattr(namespace, "tcp_port", 8554)
     backend = getattr(namespace, "backend", "dummy")
     udp_dest = getattr(namespace, "udp_dest", "255.255.255.255:5000")
 
+    if camera_id is None:
+        camera_id = get_default_camera_id()
     if not isinstance(camera_id, str):
         raise SystemExit("--camera-id must be a string")
+    camera_id = camera_id.strip()
+    if not camera_id:
+        raise SystemExit("--camera-id must not be empty")
     if not isinstance(tcp_host, str):
         raise SystemExit("--tcp-host must be a string")
     if not isinstance(tcp_port, int):

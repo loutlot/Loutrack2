@@ -199,6 +199,7 @@ ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@192.168.1.101
 - blob 検出条件として `set_threshold` / `set_blob_diameter(min/max px)` を追加し、GUI から同期調整できるようにした
 - `docs/next_steps_wand_runbook.md` を venv 前提（`python3 -m venv .venv --system-site-packages`）へ更新し、Host 手順の `python` 実行を統一した
 - `docs/next_steps_wand_runbook.md` に Pi 側 venv 準備・`hostnamectl --static` による `camera_id` 設定・capture サービス起動手順を追記した（port は既定 8554 前提）
+- `src/pi/capture.py` の `camera_id` 既定値を device name 由来に変更し、`--camera-id` 未指定時は `hostnamectl --static`（失敗時は `socket.gethostname()`）を使用するようにした
 
 ## ドキュメントの読み順
 
