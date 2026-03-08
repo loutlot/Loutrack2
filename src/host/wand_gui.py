@@ -423,7 +423,7 @@ HTML_PAGE = """<!doctype html>
           <div class="controls-grid">
             <label for="exposure">Exposure <span class="hint"><span id="exposureValue"></span> us</span><input id="exposure" type="range" min="100" max="30000" step="100" value="1200"></label>
             <label for="gain">Gain <span class="hint"><span id="gainValue"></span></span><input id="gain" type="range" min="1" max="16" step="0.1" value="4"></label>
-            <label for="fps">FPS <span class="hint"><span id="fpsValue"></span></span><input id="fps" type="range" min="15" max="120" step="1" value="80"></label>
+            <label for="fps">FPS <span class="hint"><span id="fpsValue"></span></span><input id="fps" type="range" min="15" max="120" step="1" value="56"></label>
             <label for="focus">Focus <span class="hint"><span id="focusValue"></span></span><input id="focus" type="range" min="0.0" max="10.0" step="0.001" value="5.215"></label>
             <label for="threshold">Threshold <span class="hint"><span id="thresholdValue"></span></span><input id="threshold" type="range" min="0" max="255" step="1" value="200"></label>
             <label for="circularity">Circularity Min <span class="hint"><span id="circularityValue"></span></span><input id="circularity" type="range" min="0.0" max="1.0" step="0.01" value="0.0"></label>
@@ -805,7 +805,7 @@ class WandGuiState:
         self.session = session
         self.receiver = receiver
         self.lock = threading.Lock()
-        self.config = SessionConfig(exposure_us=1200, gain=4.0, fps=80, duration_s=60.0)
+        self.config = SessionConfig(exposure_us=1200, gain=4.0, fps=56, duration_s=60.0)
         self.selected_camera_ids: List[str] = []
         self.camera_status: Dict[str, Dict[str, Any]] = {}
         self.last_result: Dict[str, Any] = {"status": "idle"}

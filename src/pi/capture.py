@@ -42,6 +42,7 @@ DEFAULT_CIRCULARITY_MIN = 0.0
 IDLE_PREVIEW_FPS = 15.0
 DEFAULT_CAPTURE_WIDTH = 2304
 DEFAULT_CAPTURE_HEIGHT = 1296
+DEFAULT_TARGET_FPS = 56
 
 MAX_LINE_BYTES = 65536
 LINE_TIMEOUT_SECONDS = 2.0
@@ -784,7 +785,7 @@ class ControlServerConfig:
     udp_host: str = "255.255.255.255"
     udp_port: int = 5000
     backend: str = "dummy"
-    target_fps: int = 60
+    target_fps: int = DEFAULT_TARGET_FPS
     threshold: int = 200
     mask_init_frames: int = MASK_INIT_FRAMES
     mask_threshold: int = MASK_THRESHOLD

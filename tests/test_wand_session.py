@@ -89,7 +89,7 @@ def test_run_session_control_order(monkeypatch, tmp_path: Path) -> None:
     config = SessionConfig(
         exposure_us=1200,
         gain=4.0,
-        fps=80,
+        fps=56,
         focus=5.215,
         threshold=200,
         blob_min_diameter_px=2.0,

@@ -290,7 +290,7 @@ result = session.run_session(
     SessionConfig(
         exposure_us=1200,
         gain=4.0,
-        fps=80,
+        fps=56,
         duration_s=60.0,
     )
 )

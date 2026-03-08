@@ -203,6 +203,7 @@ ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@<PI_IP>
 - `src/pi/capture.py` の debug preview を idle / mask 初期化 / wand 収録の各状態で継続表示するようにし、Pi デスクトップから blob 調整・mask 結果・wand 操作を遠隔確認しやすくした
 - `src/pi/capture.py` が `DISPLAY` 未設定の SSH / headless 実行時には debug preview を起動前に無効化するようにし、Qt/xcb でプロセスが落ちる問題を避けるようにした
 - `src/pi/capture.py` の既定解像度を `2304x1296` に更新し、`docs/next_steps_charuco.md` の live 較正前提と揃えた
+- Pi capture / wand GUI / wand session の既定 FPS を `56` に揃えた
 - `src/host/wand_gui.py` を `Blob Detection Adjustment -> Mask Adjustment -> Wand Capture -> Extrinsics Generation` の 4 セグメント UI に再編し、段階的に進めやすい workflow 表示へ更新した
 - `src/host/wand_gui.py` の console パネルが長い JSON/パスで他要素に被らないよう、右カラム縮小・overflow・折り返しを調整した
 - `docs/next_steps_wand_runbook.md` を venv 前提（`python3 -m venv .venv --system-site-packages`）へ更新し、Host 手順の `python` 実行を統一した

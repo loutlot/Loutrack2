@@ -248,7 +248,7 @@ from src.host.wand_session import SessionConfig, WandSession
 
 session = WandSession()
 result = session.run_session(
-    SessionConfig(exposure_us=1200, gain=4.0, fps=80, duration_s=60.0)
+    SessionConfig(exposure_us=1200, gain=4.0, fps=56, duration_s=60.0)
 )
 print(result["session_id"])
 ```
