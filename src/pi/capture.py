@@ -837,12 +837,24 @@ class ControlServer:
             "last_blob_count": 0,
         }
 
+    def _log(self, message: str) -> None:
+        print(f"[capture:{self._config.camera_id}] {message}", flush=True)
+
     def serve_forever(self) -> None:
         self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._server_socket.bind((self._config.tcp_host, self._config.tcp_port))
         self._server_socket.listen()
         self._running = True
+        self._log(
+            "listening "
+            f"tcp={self._config.tcp_host}:{self._config.tcp_port} "
+            f"udp={self._config.udp_host}:{self._config.udp_port} "
+            f"backend={self._config.backend} "
+            f"resolution={DEFAULT_CAPTURE_WIDTH}x{DEFAULT_CAPTURE_HEIGHT} "
+            f"fps={self._config.target_fps} "
+            f"debug_preview={'on' if self._config.debug_preview else 'off'}"
+        )
 
         try:
             while self._running:
@@ -863,6 +875,7 @@ class ControlServer:
 
     def shutdown(self) -> None:
         self._running = False
+        self._log("shutdown")
         self._stop_preview_loop()
         emitter = self._udp_emitter
         self._udp_emitter = None
@@ -918,9 +931,12 @@ class ControlServer:
             backend = self._make_backend()
             self._apply_backend_settings(backend)
             backend.start()
+            self._log("preview backend started")
         except BackendUnavailableError:
+            self._log("preview backend unavailable")
             return
         except Exception:
+            self._log("preview backend start failed")
             return
 
         with self._state_lock:
@@ -973,6 +989,7 @@ class ControlServer:
                 backend.stop()
             except Exception:
                 pass
+            self._log("preview backend stopped")
             with self._state_lock:
                 if self._preview_backend is backend:
                     self._preview_backend = None
@@ -1551,6 +1568,7 @@ class ControlServer:
             backend = self._ensure_backend()
             self._apply_backend_settings(backend)
             backend.start()
+            self._log(f"capture backend started mode={mode}")
 
             emitter = UDPFrameEmitter(
                 camera_id=self._config.camera_id,
@@ -1566,6 +1584,7 @@ class ControlServer:
             )
             emitter.set_mask(mask_to_apply)
             emitter.start()
+            self._log(f"udp emitter started mode={mode}")
         except BackendUnavailableError as exc:
             if emitter is not None:
                 emitter.stop()
@@ -1632,10 +1651,12 @@ class ControlServer:
             self._udp_emitter = None
             if emitter is not None:
                 emitter.stop()
+                self._log("udp emitter stopped")
             backend = self._backend
             self._backend = None
             if backend is not None:
                 backend.stop()
+                self._log("capture backend stopped")
         except Exception as exc:
             return self._error_response(
                 request_id=request_id,

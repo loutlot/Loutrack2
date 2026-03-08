@@ -5,6 +5,7 @@
 - TCP control (NDJSON): `0.0.0.0:8554`
 - UDP frames (one JSON per datagram): default `255.255.255.255:5000`
 - Default capture resolution: `2304x1296`
+- Startup logs print listen address, backend, preview state, and capture start/stop status
 
 ## Run locally (dummy backend)
 
