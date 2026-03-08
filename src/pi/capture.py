@@ -1026,6 +1026,8 @@ class ControlServer:
                 else:
                     next_tick = time.perf_counter()
         finally:
+            if self._debug_preview is not None:
+                self._debug_preview.close_window()
             with self._state_lock:
                 handoff_backend = None
                 if self._preview_handoff_requested and self._preview_backend is backend:
@@ -1454,8 +1456,6 @@ class ControlServer:
             self._state = STATE_MASK_INIT
 
         self._log(f"mask init started frames={frames} threshold={threshold}")
-        if self._debug_preview is not None:
-            self._debug_preview.close_window()
         backend: FrameBackend | None = None
         mask: np.ndarray | None = None
         mask_pixels = 0
