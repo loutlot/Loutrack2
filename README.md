@@ -204,8 +204,10 @@ ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@<PI_IP>
 - `src/pi/capture.py` が `DISPLAY` 未設定の SSH / headless 実行時には debug preview を起動前に無効化するようにし、Qt/xcb でプロセスが落ちる問題を避けるようにした
 - `src/pi/capture.py` の既定解像度を `2304x1296` に更新し、`docs/next_steps_charuco.md` の live 較正前提と揃えた
 - Pi capture / wand GUI / wand session の既定 FPS を `56` に揃えた
+- wand GUI / wand session の既定 `exposure_us` / `gain` を暗すぎない初期値（`12000` / `8.0`）に更新した
 - `src/host/wand_gui.py` を `Blob Detection Adjustment -> Mask Adjustment -> Wand Capture -> Extrinsics Generation` の 4 セグメント UI に再編し、段階的に進めやすい workflow 表示へ更新した
 - `src/host/wand_gui.py` の console パネルが長い JSON/パスで他要素に被らないよう、右カラム縮小・overflow・折り返しを調整した
+- `src/host/wand_gui.py` で blob diameter の `min > max` を送らないようフロント側で自動正規化するようにした
 - `docs/next_steps_wand_runbook.md` を venv 前提（`python3 -m venv .venv --system-site-packages`）へ更新し、Host 手順の `python` 実行を統一した
 - `docs/next_steps_wand_runbook.md` に Pi 側 venv 準備・`hostnamectl --static` による `camera_id` 設定・capture サービス起動手順を追記した（port は既定 8554 前提）
 - `src/pi/capture.py` の `camera_id` 既定値を device name 由来に変更し、`--camera-id` 未指定時は `hostnamectl --static`（失敗時は `socket.gethostname()`）を使用するようにした

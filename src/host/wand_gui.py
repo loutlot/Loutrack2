@@ -421,8 +421,8 @@ HTML_PAGE = """<!doctype html>
           </div>
           <div class="step-summary" id="blobSummary"></div>
           <div class="controls-grid">
-            <label for="exposure">Exposure <span class="hint"><span id="exposureValue"></span> us</span><input id="exposure" type="range" min="100" max="30000" step="100" value="1200"></label>
-            <label for="gain">Gain <span class="hint"><span id="gainValue"></span></span><input id="gain" type="range" min="1" max="16" step="0.1" value="4"></label>
+            <label for="exposure">Exposure <span class="hint"><span id="exposureValue"></span> us</span><input id="exposure" type="range" min="100" max="30000" step="100" value="12000"></label>
+            <label for="gain">Gain <span class="hint"><span id="gainValue"></span></span><input id="gain" type="range" min="1" max="16" step="0.1" value="8"></label>
             <label for="fps">FPS <span class="hint"><span id="fpsValue"></span></span><input id="fps" type="range" min="15" max="120" step="1" value="56"></label>
             <label for="focus">Focus <span class="hint"><span id="focusValue"></span></span><input id="focus" type="range" min="0.0" max="10.0" step="0.001" value="5.215"></label>
             <label for="threshold">Threshold <span class="hint"><span id="thresholdValue"></span></span><input id="threshold" type="range" min="0" max="255" step="1" value="200"></label>
@@ -570,7 +570,27 @@ HTML_PAGE = """<!doctype html>
       return [...document.querySelectorAll("input[data-camera]:checked")].map((item) => item.dataset.camera);
     }
 
+    function normalizedBlobRange() {
+      let minValue = Number(elements.blobMin.value);
+      let maxValue = Number(elements.blobMax.value);
+
+      minValue = Number.isFinite(minValue) && minValue > 0 ? minValue : 0;
+      maxValue = Number.isFinite(maxValue) && maxValue > 0 ? maxValue : 0;
+
+      if (minValue > 0 && maxValue > 0 && minValue > maxValue) {
+        maxValue = minValue;
+        elements.blobMax.value = String(maxValue);
+        values.blobMax.textContent = elements.blobMax.value;
+      }
+
+      return {
+        min: minValue > 0 ? minValue : null,
+        max: maxValue > 0 ? maxValue : null,
+      };
+    }
+
     function configPayload() {
+      const blobRange = normalizedBlobRange();
       return {
         camera_ids: selectedCameraIds(),
         exposure_us: Number(elements.exposure.value),
@@ -579,8 +599,8 @@ HTML_PAGE = """<!doctype html>
         focus: Number(elements.focus.value),
         threshold: Number(elements.threshold.value),
         circularity_min: Number(elements.circularity.value),
-        blob_min_diameter_px: Number(elements.blobMin.value) > 0 ? Number(elements.blobMin.value) : null,
-        blob_max_diameter_px: Number(elements.blobMax.value) > 0 ? Number(elements.blobMax.value) : null,
+        blob_min_diameter_px: blobRange.min,
+        blob_max_diameter_px: blobRange.max,
         mask_threshold: Number(elements.maskThreshold.value),
         mask_seconds: Number(elements.maskSeconds.value),
       };
@@ -805,7 +825,7 @@ class WandGuiState:
         self.session = session
         self.receiver = receiver
         self.lock = threading.Lock()
-        self.config = SessionConfig(exposure_us=1200, gain=4.0, fps=56, duration_s=60.0)
+        self.config = SessionConfig(exposure_us=12000, gain=8.0, fps=56, duration_s=60.0)
         self.selected_camera_ids: List[str] = []
         self.camera_status: Dict[str, Dict[str, Any]] = {}
         self.last_result: Dict[str, Any] = {"status": "idle"}

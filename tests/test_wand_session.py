@@ -87,8 +87,8 @@ def test_run_session_control_order(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("host.wand_session.time.sleep", lambda _duration: None)
 
     config = SessionConfig(
-        exposure_us=1200,
-        gain=4.0,
+        exposure_us=12000,
+        gain=8.0,
         fps=56,
         focus=5.215,
         threshold=200,
