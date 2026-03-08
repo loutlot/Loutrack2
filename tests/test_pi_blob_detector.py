@@ -16,6 +16,7 @@ from src.pi.capture import (
     DebugPreview,
     DummyBackend,
     DummyBackendConfig,
+    STATE_MASK_INIT,
     detect_blobs,
     get_default_backend,
     resolve_debug_preview_enabled,
@@ -189,6 +190,57 @@ def test_start_preview_loop_resumes_existing_preview_thread() -> None:
     server._start_preview_loop()
 
     assert server._preview_resume_event.is_set()
+
+
+def test_start_preview_loop_does_not_resume_during_mask_init() -> None:
+    server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=True))
+    server._running = True
+    server._state = STATE_MASK_INIT
+
+    class _AliveThread:
+        def is_alive(self) -> bool:
+            return True
+
+    server._preview_thread = _AliveThread()  # type: ignore[assignment]
+    server._preview_backend = None
+    server._preview_resume_event = threading.Event()
+
+    server._start_preview_loop()
+
+    assert server._preview_resume_event.is_set() is False
+
+
+def test_preview_handoff_keeps_backend_running() -> None:
+    server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=False))
+    server._running = True
+    stop_event = threading.Event()
+    handoff_ready_event = threading.Event()
+    resume_event = threading.Event()
+
+    class TrackingBackend(DummyBackend):
+        def __init__(self) -> None:
+            super().__init__(DummyBackendConfig(width=32, height=24, num_dots=0))
+            self.stop_calls = 0
+
+        def stop(self) -> None:
+            self.stop_calls += 1
+
+    backend = TrackingBackend()
+    server._preview_handoff_requested = True
+    server._preview_handoff_ready_event = handoff_ready_event
+    server._preview_resume_event = resume_event
+    server._make_backend = lambda: backend  # type: ignore[method-assign]
+
+    thread = threading.Thread(target=server._preview_loop, args=(stop_event,), daemon=True)
+    server._preview_thread = thread
+    server._preview_stop_event = stop_event
+    thread.start()
+
+    assert handoff_ready_event.wait(timeout=1.0) is True
+    assert backend.stop_calls == 0
+
+    stop_event.set()
+    thread.join(timeout=1.0)
 
 
 def test_ping_reports_open_debug_preview_window_as_active() -> None:

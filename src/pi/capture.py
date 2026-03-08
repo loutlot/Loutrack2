@@ -978,7 +978,7 @@ class ControlServer:
 
         thread_to_start: threading.Thread | None = None
         with self._state_lock:
-            if not self._running or self._state == STATE_RUNNING:
+            if not self._running or self._state in (STATE_RUNNING, STATE_MASK_INIT):
                 return
             if self._preview_thread is not None and self._preview_thread.is_alive():
                 if self._preview_backend is None and self._preview_resume_event is not None:
@@ -1070,10 +1070,6 @@ class ControlServer:
                         handoff_requested = False
 
                 if handoff_requested:
-                    try:
-                        backend.stop()
-                    except Exception:
-                        pass
                     with self._state_lock:
                         self._preview_backend = None
                         self._preview_handoff_backend = backend
