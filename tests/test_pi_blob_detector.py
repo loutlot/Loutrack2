@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT))
 from src.pi.capture import (
     ControlServer,
     ControlServerConfig,
+    DebugPreview,
     DummyBackend,
     DummyBackendConfig,
     detect_blobs,
@@ -136,3 +137,10 @@ def test_resolve_debug_preview_enabled_accepts_display(monkeypatch: pytest.Monke
 def test_get_default_backend_prefers_dummy_off_pi(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("src.pi.capture.running_on_raspberry_pi", lambda: False)
     assert get_default_backend() == "dummy"
+
+
+def test_debug_preview_close_window_preserves_enabled() -> None:
+    preview = DebugPreview()
+    preview._initialized = True
+    preview.close_window()
+    assert preview.enabled is True

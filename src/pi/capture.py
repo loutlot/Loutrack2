@@ -422,6 +422,9 @@ class DebugPreview:
         if not self._enabled:
             return
         self._enabled = False
+        self.close_window()
+
+    def close_window(self) -> None:
         if self._initialized:
             try:
                 cv2.destroyWindow(self._window_name)
@@ -1451,6 +1454,8 @@ class ControlServer:
             self._state = STATE_MASK_INIT
 
         self._log(f"mask init started frames={frames} threshold={threshold}")
+        if self._debug_preview is not None:
+            self._debug_preview.close_window()
         backend: FrameBackend | None = None
         mask: np.ndarray | None = None
         mask_pixels = 0
