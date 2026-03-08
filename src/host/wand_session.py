@@ -53,7 +53,7 @@ class WandSession:
         receiver: Optional[Any] = None,
         control: Any = control_module,
         timeout_s: float = 2.0,
-        mask_timeout_s: float = 10.0,
+        mask_timeout_s: float = 30.0,
     ) -> None:
         self.inventory_path = inventory_path or (
             Path(__file__).resolve().parents[1] / "deploy" / "hosts.ini"

@@ -117,7 +117,7 @@ def test_run_session_control_order(monkeypatch, tmp_path: Path) -> None:
     assert metadata_path.exists()
     assert metadata_path.parent == tmp_path
     mask_timeouts = [timeout for name, _camera_id, timeout in fake_control.calls if name == "mask_start"]
-    assert mask_timeouts == [10.0, 10.0]
+    assert mask_timeouts == [30.0, 30.0]
 
 
 if __name__ == "__main__":
