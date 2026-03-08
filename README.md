@@ -62,7 +62,14 @@ loutrack2/
 │       ├── pipeline.py        # 統合パイプライン
 │       ├── sync_eval.py       # 同期評価 (許容窓/欠損/ドリフト)
 │       └── visualize.py       # 可視化ユーティリティ
-├── docs/                      # 設計ドキュメント
+├── docs/
+│   ├── 00_pre_implementation/ # 実装前（要件/理論/初期計画）
+│   ├── 10_in_progress/        # 実行中（runbook/実装計画）
+│   ├── 20_completed/          # 完了済み（成果資料）
+│   └── README.md              # ドキュメント索引
+├── context/
+│   ├── request.md             # 要件の一次ソース
+│   └── archive/               # 過去メモ
 ├── tests/                     # テストコード
 └── requirements.txt           # Python依存パッケージ
 ```
@@ -153,19 +160,19 @@ ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@<PI_IP>
 
 - [x] Charuco 印刷ボードの実測値を確定（5マス=150mm → 1マス=30.0mm）
 - [x] Charuco 較正メモを追記（`LensPosition=5.2` が現時点ベスト）
-- [x] `docs/next_steps_charuco.md` を実機ゼロベース手順へ更新（sim前提を除去）
-- [x] `docs/next_steps_charuco.md` Step 1 に `SPACE`/`C` の詳細手順を追記
-- [x] `docs/next_steps_charuco.md` に `picamera2 is required` エラー対処（venv再作成手順）を追記
-- [x] `docs/next_steps_charuco.md` に「構図を被らせない撮影ルール」を追記
-- [x] wand 外部較正の実装計画を追加（`docs/wand_extrinsics_plan.md`）
-- [x] `docs/wand_extrinsics_plan.md` にコードロジック詳細（状態遷移、mask生成、solver手順）を追記
-- [x] `docs/wand_extrinsics_plan.md` を更新（受動発見優先、映像なし同期スライダーGUI方針を明記）
-- [x] Host wand control GUI/operation orchestration documented (`docs/wand_extrinsics_plan.md`)
+- [x] `docs/10_in_progress/next_steps_charuco.md` を実機ゼロベース手順へ更新（sim前提を除去）
+- [x] `docs/10_in_progress/next_steps_charuco.md` Step 1 に `SPACE`/`C` の詳細手順を追記
+- [x] `docs/10_in_progress/next_steps_charuco.md` に `picamera2 is required` エラー対処（venv再作成手順）を追記
+- [x] `docs/10_in_progress/next_steps_charuco.md` に「構図を被らせない撮影ルール」を追記
+- [x] wand 外部較正の実装計画を追加（`docs/10_in_progress/wand_extrinsics_plan.md`）
+- [x] `docs/10_in_progress/wand_extrinsics_plan.md` にコードロジック詳細（状態遷移、mask生成、solver手順）を追記
+- [x] `docs/10_in_progress/wand_extrinsics_plan.md` を更新（受動発見優先、映像なし同期スライダーGUI方針を明記）
+- [x] Host wand control GUI/operation orchestration documented (`docs/10_in_progress/wand_extrinsics_plan.md`)
 - [x] `WAND_POINTS_MM` を確定（center-to-center: 168mm / 243mm, blob 14mm, 直交）
-- [x] wand 次アクション手順書を追加（`docs/next_steps_wand_runbook.md`）
-- [x] `docs/wand_extrinsics_plan.md` に進捗状況セクションを追記（2026-03-08）
-- [x] 5剛体向け marker 形状の探索結果を整理（`docs/rigid_body_design_exploration.md`）
-- [x] 剛体デザインを「中心(0,0,7)の半径65mm半球、z>7」制約で再探索し更新（`docs/rigid_body_design_exploration.md`）
+- [x] wand 次アクション手順書を追加（`docs/10_in_progress/next_steps_wand_runbook.md`）
+- [x] `docs/10_in_progress/wand_extrinsics_plan.md` に進捗状況セクションを追記（2026-03-08）
+- [x] 5剛体向け marker 形状の探索結果を整理（`docs/20_completed/rigid_body_design_exploration.md`）
+- [x] 剛体デザインを「中心(0,0,7)の半径65mm半球、z>7」制約で再探索し更新（`docs/20_completed/rigid_body_design_exploration.md`）
 - [x] `waist` は既存デザインを維持する方針で `src/host/rigid.py` と関連docを更新
 - [x] 剛体 mount の STL 自動生成方針は撤回し、関連スクリプト/生成物/README記述を整理
 - [ ] `pi-cam-01` の内部較正を実測値ベースで再実施する（まずこの1台で手順検証）
@@ -191,18 +198,18 @@ ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@<PI_IP>
 - `src/host/wand_gui.py` を追加し、受動発見 + inventory マージ前提の wand Web UI を実装した
 - `tests/test_wand_extrinsics.py` を追加し、synthetic wand 観測から solver と geo loader の接続を検証した
 - `tests/test_wand_gui.py` を追加し、GUI 状態管理の同期操作を smoke test で検証した
-- `docs/wand_extrinsics_plan.md` を現実装ベースの進捗・残課題へ更新した
-- `docs/next_steps_wand_runbook.md` を現行実装フロー準拠の作業手順書として新規作成した
-- `docs/next_steps_wand_runbook.md` の前提条件をコマンドベースの事前チェック手順として詳細化した
+- `docs/10_in_progress/wand_extrinsics_plan.md` を現実装ベースの進捗・残課題へ更新した
+- `docs/10_in_progress/next_steps_wand_runbook.md` を現行実装フロー準拠の作業手順書として新規作成した
+- `docs/10_in_progress/next_steps_wand_runbook.md` の前提条件をコマンドベースの事前チェック手順として詳細化した
 - Host から `set_focus` を追加し、`wand_gui` で focus スライダー（既定 `5.215`）を同期操作できるようにした
 - `wand_gui` に「Generate Extrinsics」ボタンを追加し、GUI から `calibrate_extrinsics` を実行できるようにした
 - blob 検出条件として `set_threshold` / `set_blob_diameter(min/max px)` を追加し、GUI から同期調整できるようにした
 - `wand_gui` のスライダーを 200ms デバウンスの自動適用に変更し、未適用値が定期ポーリングで巻き戻る挙動を解消した
 - `src/pi/capture.py` に `--debug-preview` を追加し、debug 時のみ Pi 上で OpenCV プレビューを描画できるようにした
-- `docs/next_steps_wand_runbook.md` に Pi 側 `--debug-preview` 起動手順と確認できる内容を追記した
+- `docs/10_in_progress/next_steps_wand_runbook.md` に Pi 側 `--debug-preview` 起動手順と確認できる内容を追記した
 - `src/pi/capture.py` の debug preview を idle / mask 初期化 / wand 収録の各状態で継続表示するようにし、Pi デスクトップから blob 調整・mask 結果・wand 操作を遠隔確認しやすくした
 - `src/pi/capture.py` が `DISPLAY` 未設定の SSH / headless 実行時には debug preview を起動前に無効化するようにし、Qt/xcb でプロセスが落ちる問題を避けるようにした
-- `src/pi/capture.py` の既定解像度を `2304x1296` に更新し、`docs/next_steps_charuco.md` の live 較正前提と揃えた
+- `src/pi/capture.py` の既定解像度を `2304x1296` に更新し、`docs/10_in_progress/next_steps_charuco.md` の live 較正前提と揃えた
 - Pi capture / wand GUI / wand session の既定 FPS を `56` に揃えた
 - wand GUI / wand session の既定 `exposure_us` / `gain` を暗すぎない初期値（`12000` / `8.0`）に更新した
 - `src/pi/capture.py` が起動時と capture start/stop 時に backend 状態を標準出力へ出すようにした
@@ -222,8 +229,11 @@ ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@<PI_IP>
 - `start(mode=wand_capture)` でも preview backend handoff を使うようにし、wand 収録前後の preview 再起動 race を減らした
 - wand 収録中は UDP emitter 側から HighGUI を描画しないようにし、OpenCV window 操作を preview thread に一本化した
 - `wand_gui` の `Generate Extrinsics` は `log_path` 空文字を既定値へフォールバックし、存在しない/不正なパスは solver 実行前に 400 系エラーへ正規化するようにした
+- `calibrate_extrinsics` の既定 `pair_window_us` を `12000` へ更新し、56fps 運用時に timestamp ずれで有効ペアが落ちすぎる問題を緩和した
 - `wand_gui` の HTTP ハンドラは `ValueError` 以外の例外も JSON 500 として返し、request thread が traceback で崩れたままになる挙動を防ぐようにした
 - `wand_gui` の `Start Wand Capture` / `Stop Capture` は受信フレームを `logs/wand_capture.jsonl` に記録するようにし、extrinsics 生成で空ログに当たる問題を解消した
+- `wand_gui` は `Start Wand Capture` 時に既存 `logs/wand_capture.jsonl` を消去して新規セッションを開始し、`Stop Capture` 後に JSONL が存在すれば Step 03 (Wand Capture) を `Complete` 表示するようにした
+- `docs/10_in_progress/next_steps_wand_runbook.md` に「wand を動かすコツ」を追記し、pair 数と再投影誤差を改善しやすい実収録パターン（視野全体、奥行き、速度、姿勢変化）を明文化した
 - `MASK_INIT` 中は HighGUI/Qt を別スレッドから触らないため、debug preview window は開いたまま最後の描画フレームで freeze させ、再描画は mask 完了後の idle loop 再開まで行わないようにした
 - `ping` の `debug_preview_active` は preview thread / emitter だけでなく、保持中の debug window 表示状態も含めて返すようにした
 - `wand_gui` の Blob Detection Adjustment 設定を host ローカル（`logs/wand_gui_settings.json`）へ保存・再読込するようにした
@@ -231,24 +241,30 @@ ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@<PI_IP>
 - `src/host/wand_gui.py` を `Blob Detection Adjustment -> Mask Adjustment -> Wand Capture -> Extrinsics Generation` の 4 セグメント UI に再編し、段階的に進めやすい workflow 表示へ更新した
 - `src/host/wand_gui.py` の console パネルが長い JSON/パスで他要素に被らないよう、右カラム縮小・overflow・折り返しを調整した
 - `src/host/wand_gui.py` で blob diameter の `min > max` を送らないようフロント側で自動正規化するようにした
-- `docs/next_steps_wand_runbook.md` を venv 前提（`python3 -m venv .venv --system-site-packages`）へ更新し、Host 手順の `python` 実行を統一した
-- `docs/next_steps_wand_runbook.md` に Pi 側 venv 準備・`hostnamectl --static` による `camera_id` 設定・capture サービス起動手順を追記した（port は既定 8554 前提）
+- `docs/10_in_progress/next_steps_wand_runbook.md` を venv 前提（`python3 -m venv .venv --system-site-packages`）へ更新し、Host 手順の `python` 実行を統一した
+- `docs/10_in_progress/next_steps_wand_runbook.md` に Pi 側 venv 準備・`hostnamectl --static` による `camera_id` 設定・capture サービス起動手順を追記した（port は既定 8554 前提）
 - `src/pi/capture.py` の `camera_id` 既定値を device name 由来に変更し、`--camera-id` 未指定時は `hostnamectl --static`（失敗時は `socket.gethostname()`）を使用するようにした
-- `docs/next_steps_wand_runbook.md` を更新し、Pi 側起動手順を `python src/pi/capture.py`（`camera_id` は device name 既定）に合わせた
+- `docs/10_in_progress/next_steps_wand_runbook.md` を更新し、Pi 側起動手順を `python src/pi/capture.py`（`camera_id` は device name 既定）に合わせた
+- `docs/10_in_progress/tracking_gui_plan.md` を追加し、extrinsics 完了後の tracking GUI 拡張計画（3D 剛体表示、camera frustum 表示、health panel、段階導入順）を整理した
+- tracking GUI 計画を更新し、同一 `wand_gui` 内で `Page 1: Wand / Extrinsics Generation` と `Page 2: Tracking Confirmation` の 2 ページ構成を採用する方針にした
+- `docs/10_in_progress/tracking_gui_plan.md` を詳細化し、ファイル単位の実装対象、frustum/pose の計算ロジック、tracking API 契約、UI仕様、テスト計画まで展開した
+- docs/context の文書配置を整理し、`docs/00_pre_implementation` / `docs/10_in_progress` / `docs/20_completed` と `context/archive` に再編した
+- `docs/README.md` を新構成準拠へ更新し、各フォルダの役割（実装前/実行中/完了）と `context/archive` の扱いを明記した
 
 ## ドキュメントの読み順
 
 1. `README.md`（現況 / TODO / 実行入口）
-2. `docs/implementation_plan.md`（フェーズ計画と短期実装順）
-3. `docs/requirements_def.md`（要件定義）
-4. `docs/pi_control_transport.md`（Pi 制御通信仕様）
+2. `docs/00_pre_implementation/implementation_plan.md`（フェーズ計画と短期実装順）
+3. `docs/00_pre_implementation/requirements_def.md`（要件定義）
+4. `docs/00_pre_implementation/pi_control_transport.md`（Pi 制御通信仕様）
 5. `schema/README.md`（JSON Schema の参照）
-6. `docs/next_steps_charuco.md`（内部較正の実行手順。Step 0 にまっさらな Pi 初期セットアップを記載）
-7. `docs/wand_extrinsics_plan.md`（wand 外部較正の実装計画）
-8. `docs/next_steps_wand_runbook.md`（wand実装の実行手順）
-9. `docs/rigid_body_design_exploration.md`（5剛体 marker 設計の探索結果）
+6. `docs/10_in_progress/next_steps_charuco.md`（内部較正の実行手順。Step 0 にまっさらな Pi 初期セットアップを記載）
+7. `docs/10_in_progress/wand_extrinsics_plan.md`（wand 外部較正の実装計画）
+8. `docs/10_in_progress/next_steps_wand_runbook.md`（wand実装の実行手順）
+9. `docs/20_completed/rigid_body_design_exploration.md`（5剛体 marker 設計の探索結果）
+10. `docs/10_in_progress/tracking_gui_plan.md`（tracking GUI / 3D viewer の拡張計画）
 
-補足: `docs/pre_doc/` は検討メモ・背景資料であり、現行仕様の正本ではありません。
+補足: `docs/00_pre_implementation/pre_doc/` は検討メモ・背景資料であり、現行仕様の正本ではありません。
 
 ### 完了したStep
 

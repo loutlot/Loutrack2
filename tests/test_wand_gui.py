@@ -164,10 +164,14 @@ def test_start_stop_writes_wand_capture_log(tmp_path: Path) -> None:
         settings_path=tmp_path / "wand_gui_settings.json",
     )
     state.capture_log_dir = tmp_path / "logs"
+    state.capture_log_path = state.capture_log_dir / "wand_capture.jsonl"
+    state.capture_log_dir.mkdir(parents=True, exist_ok=True)
+    state.capture_log_path.write_text("stale", encoding="utf-8")
 
     start_result = state.run_command({"command": "start", "camera_ids": ["pi-cam-01"]})
     log_path = Path(start_result["capture_log"]["path"])
     assert log_path.exists()
+    assert "stale" not in log_path.read_text(encoding="utf-8")
 
     class _Frame:
         def to_dict(self):
@@ -181,6 +185,8 @@ def test_start_stop_writes_wand_capture_log(tmp_path: Path) -> None:
     receiver.emit_frame(_Frame())
     stop_result = state.run_command({"command": "stop", "camera_ids": ["pi-cam-01"]})
     assert stop_result["capture_log"]["log_file"] == str(log_path)
+    workflow = state.get_state()["workflow"]
+    assert workflow["wand_capture_complete"] is True
 
     lines = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
     assert any(item.get("_type") == "frame" for item in lines)

@@ -228,4 +228,4 @@ tail -f src/deploy/deploy.log
 - systemd の例: capture.py を引数付きで実行するか、EnvironmentFile を用いて環境変数を読み込む形で起動します。
 - src/deploy/hosts.ini の camera_id: 文字列で pi-cam-01 等を使用します。
 - 未実装/検討中: mask/LED の制御欄は現時点では未実装、または今後の計画として記載します。
-- 参照: docs/pi_control_transport.md に制御プロトコルの詳細を記載しています。
+- 参照: docs/00_pre_implementation/pi_control_transport.md に制御プロトコルの詳細を記載しています。

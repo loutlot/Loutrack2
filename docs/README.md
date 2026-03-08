@@ -1,29 +1,27 @@
 # loutrack2 ドキュメント
 
-このディレクトリは loutrack2 の現行仕様・計画ドキュメントをまとめた場所です。
-要件の起点は `context/request.md` ですが、実装の進捗に合わせて本ディレクトリの文書を正として更新します。
+ドキュメントを「実装前 / 実行中 / 完了」に分けて管理します。
+要件の起点は `context/request.md` です。
 
-- 開発プラン: `context/request.md`
-- 先駆者プロジェクト(参考): `references/jyjblrd/Low-Cost-Mocap`
+## フォルダ構成
 
-## 現在の主要ドキュメント（正本）
+- `docs/00_pre_implementation/`
+  - 実装前の要件・理論・初期計画
+  - `pre_doc/` は背景メモ・検討履歴
+- `docs/10_in_progress/`
+  - 現在進行中の実装手順・計画
+- `docs/20_completed/`
+  - 完了済み検討・実装の成果資料
 
-1. `docs/requirements_def.md`
-2. `docs/theory.md`
-3. `docs/implementation_plan.md`
-4. `docs/wand_extrinsics_plan.md`
-5. `docs/next_steps_wand_runbook.md`
+## 現在の主要ドキュメント
 
-※ 上記5本を現行の正本として扱います。
+1. `docs/00_pre_implementation/requirements_def.md`
+2. `docs/00_pre_implementation/implementation_plan.md`
+3. `docs/10_in_progress/wand_extrinsics_plan.md`
+4. `docs/10_in_progress/next_steps_wand_runbook.md`
+5. `docs/10_in_progress/tracking_gui_plan.md`
 
-## pre_doc (検討メモ/下書き)
+## context ディレクトリの扱い
 
-下記は詳細検討時のメモ群です。背景確認や意思決定の経緯参照に使用します。
-現行仕様として参照する場合は、必ず上記「正本」と突き合わせてください。
-
-1. `docs/pre_doc/01-where-to-start.md`
-2. `docs/pre_doc/02-decisions.md`
-3. `docs/pre_doc/03-problem-solving-guide.md`
-4. `docs/pre_doc/04-reference-jyjblrd-notes.md`
-5. `docs/pre_doc/05-steamvr-output.md`
-6. `docs/pre_doc/06-pi-sync.md`
+- `context/request.md`: 元要求（一次ソース）
+- `context/archive/`: 過去メモ（通常は直接編集しない）

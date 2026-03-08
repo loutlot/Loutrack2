@@ -98,19 +98,11 @@ python src/pi/capture.py --help
 python src/pi/capture.py
 ```
 
-既定の capture 解像度は `2304x1296`（`docs/next_steps_charuco.md` の live 較正前提と同じ）である。
+既定の capture 解像度は `2304x1296`（`docs/10_in_progress/next_steps_charuco.md` の live 較正前提と同じ）である。
 
 9. 検出状況を Pi 上で確認したい場合は debug preview 付きで起動:
 
 ```bash
-python src/pi/capture.py --debug-preview
-```
-
-SSH で Pi に入って起動する場合は、先に desktop display を渡す:
-
-```bash
-export DISPLAY=:0
-export XAUTHORITY=/home/<PI_USER>/.Xauthority
 python src/pi/capture.py --debug-preview
 ```
 
@@ -208,18 +200,14 @@ PY
 
 ### 2.7 wand 物理条件の確認
 
-- wand 定義: `WAND_POINTS_MM = [(0,0,0), (168,0,0), (0,243,0)]`
+- wand 定義: `WAND_POINTS_MM = [(0,0,0), (168,0,0), (0,243,0)]` (B5サイズ)
 - 3 marker の center-to-center 実寸が定義値と一致
 - マーカー径 14mm
-
-注意:
-
-- 実寸がズレると `baseline_m` とスケール推定が崩れる
-- 反射材の汚れ・剥離がある場合は交換してから収録する
 
 ## 3. 事前確認
 
 1. inventory を確認する:
+ここにpiのIPを設定
 
 ```bash
 cat src/deploy/hosts.ini
@@ -256,7 +244,7 @@ python src/host/wand_gui.py --host <HOST_IP> --port 8765 --udp-port 5000
    - `exposure_us`
    - `gain`
    - `fps`
-   - `focus`（既定値 `5.215`）
+   - `focus`（既定値 `5.215`・Raspberry Pi Camera Module 3 Wide Noir　準拠）
    - `threshold`
    - `circularity_min`
    - `blob min/max diameter px`
@@ -307,7 +295,7 @@ python src/camera-calibration/calibrate_extrinsics.py \
   --intrinsics calibration \
   --log logs/<wand_capture_log>.jsonl \
   --output calibration/calibration_extrinsics_v1.json \
-  --pair-window-us 5000 \
+  --pair-window-us 12000 \
   --min-pairs 8
 ```
 
@@ -344,6 +332,16 @@ print("camera ids:", geo.get_camera_ids())
    - `cameras[].quality.median_reproj_error_px`
    - `cameras[].quality.baseline_m`
 
+## 7.1 wand を動かすコツ（収録品質を上げる）
+
+- 画面中央だけで振らず、各カメラの四隅と上下端まで使って大きく動かす。
+- 手前/奥への移動を必ず入れ、2D 平面内の往復だけにしない。
+- 2 台で同時に見えている時間を長く保つ（片側だけで見切れる時間を減らす）。
+- 速すぎる振りは避ける（モーションブラーで 3 点検出が崩れやすい）。
+- wand の姿勢を変える（寝かせる/立てる/ひねる）ことで幾何拘束を増やす。
+- 10〜20 秒は連続収録し、停止と再開を繰り返さない。
+- 収録中は GUI の blob 状態を見て、各カメラで 3 点検出率が高い状態を維持する。
+
 ## 8. トラブルシュート
 
 - `mask_start` 失敗:
@@ -351,7 +349,7 @@ print("camera ids:", geo.get_camera_ids())
   - `mask_start` を再実行する。
 - `Not enough paired observations`:
   - 収録時間を延長し、wand の姿勢バリエーションを増やす。
-  - `--pair-window-us` を少し広げる（例: 7000）。
+  - `--pair-window-us` を少し広げる（例: 15000）。
 - `findEssentialMat failed`:
   - 対象カメラが同じ視野を十分に共有しているか確認する。
   - 2D blob の誤検出が多い場合は threshold / mask 条件を見直す。

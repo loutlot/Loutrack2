@@ -644,6 +644,9 @@ HTML_PAGE = """<!doctype html>
         if (step === "extrinsics" && workflow.extrinsics_ready) {
           status = "done";
         }
+        if (step === "wand" && workflow.wand_capture_complete) {
+          status = "done";
+        }
         return [step, status];
       }));
     }
@@ -675,6 +678,8 @@ HTML_PAGE = """<!doctype html>
       elements.maskSummary.textContent = `${workflow.mask_ready_count ?? 0}/${selectedCount || totalCount} 台で mask が準備できています。preview に mask overlay が出ていることと、mask ratio warning が出ていないことを確認します。`;
       elements.wandSummary.textContent = (workflow.running_count ?? 0) > 0
         ? `${workflow.running_count} 台が wand capture 中です。Pi デスクトップ preview で wand の追従と誤検出の有無を見ます。`
+        : workflow.wand_capture_complete
+        ? `Wand capture は完了しています（${workflow.wand_capture_log_path || "logs/wand_capture.jsonl"}）。次に Extrinsics を生成します。`
         : `mask 完了後に Start Wand Capture を実行します。収録中は Pi preview で wand 軌跡と blob 数の崩れを監視します。`;
       elements.extrinsicsSummary.textContent = workflow.extrinsics_ready
         ? `Extrinsics は生成済みです。出力先と reference camera を console で確認します。`
@@ -847,6 +852,7 @@ class WandGuiState:
         self.capture_log_path: Path = DEFAULT_WAND_LOG_PATH
         self._capture_logger: FrameLogger | None = None
         self._capture_log_active: bool = False
+        self._capture_completed: bool = False
         self._receiver_frame_callback = getattr(receiver, "_frame_callback", None)
         if hasattr(self.receiver, "set_frame_callback"):
             self.receiver.set_frame_callback(self._on_frame_received)
@@ -1004,6 +1010,8 @@ class WandGuiState:
         preview_active_count = sum(
             1 for camera in active_cameras if bool(diagnostics(camera).get("debug_preview_active"))
         )
+        capture_log_exists = self.capture_log_path.exists() and self.capture_log_path.is_file()
+        wand_capture_complete = self._capture_completed and capture_log_exists
         extrinsics_ready = bool(
             isinstance(self.last_result.get("generate_extrinsics"), dict)
             and self.last_result["generate_extrinsics"].get("ok")
@@ -1012,7 +1020,11 @@ class WandGuiState:
         active_segment = "blob"
         if extrinsics_ready:
             active_segment = "extrinsics"
-        elif running_count > 0 or (selected_count > 0 and mask_ready_count >= selected_count):
+        elif running_count > 0:
+            active_segment = "wand"
+        elif wand_capture_complete:
+            active_segment = "extrinsics"
+        elif selected_count > 0 and mask_ready_count >= selected_count:
             active_segment = "wand"
         elif blob_ready_count > 0:
             active_segment = "mask"
@@ -1026,6 +1038,8 @@ class WandGuiState:
             "running_count": running_count,
             "preview_enabled_count": preview_enabled_count,
             "preview_active_count": preview_active_count,
+            "wand_capture_complete": wand_capture_complete,
+            "wand_capture_log_path": str(self.capture_log_path),
             "extrinsics_ready": extrinsics_ready,
             "active_segment": active_segment,
         }
@@ -1163,10 +1177,13 @@ class WandGuiState:
             if self._capture_logger is not None and self._capture_log_active:
                 return Path(self._capture_logger.current_log_file or str(self.capture_log_path))
             self.capture_log_dir.mkdir(parents=True, exist_ok=True)
+            if self.capture_log_path.exists():
+                self.capture_log_path.unlink(missing_ok=True)
             logger = FrameLogger(log_dir=str(self.capture_log_dir))
             log_file = logger.start_recording(session_name=self.capture_log_path.stem)
             self._capture_logger = logger
             self._capture_log_active = True
+            self._capture_completed = False
             self.capture_log_path = Path(log_file)
             return self.capture_log_path
 
@@ -1181,6 +1198,7 @@ class WandGuiState:
             self._capture_log_active = False
             if isinstance(metadata.get("log_file"), str):
                 self.capture_log_path = Path(str(metadata["log_file"]))
+            self._capture_completed = self.capture_log_path.exists() and self.capture_log_path.is_file()
         return metadata
 
     @staticmethod

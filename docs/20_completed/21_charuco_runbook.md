@@ -206,7 +206,7 @@ Host 主導の基本シーケンス:
 
 - 実装予定: `src/camera-calibration/calibrate_extrinsics.py`
 - 出力予定: `calibration/calibration_extrinsics_v1.json`
-- 詳細計画: `docs/wand_extrinsics_plan.md`
+- 詳細計画: `docs/10_in_progress/wand_extrinsics_plan.md`
 
 ---
 

@@ -20,7 +20,7 @@ from host.geo import CalibrationLoader, Triangulator
 from host.wand_session import WAND_MARKER_DIAMETER_MM, WAND_NAME, WAND_POINTS_MM
 
 
-DEFAULT_PAIR_WINDOW_US = 5000
+DEFAULT_PAIR_WINDOW_US = 12000
 DEFAULT_MIN_PAIRS = 8
 DEFAULT_OUTPUT = "calibration/calibration_extrinsics_v1.json"
 
