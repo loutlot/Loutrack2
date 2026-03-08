@@ -108,6 +108,21 @@ def test_mask_start_timeout_resets_state() -> None:
     assert ping["result"]["state"] == "IDLE"
 
 
+def test_mask_start_reuses_preview_backend_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=False))
+    preview_backend = DummyBackend(DummyBackendConfig(width=32, height=24, num_dots=0))
+
+    monkeypatch.setattr(server, "_take_preview_backend_for_mask", lambda: preview_backend)
+
+    def _unexpected_make_backend() -> DummyBackend:
+        raise AssertionError("mask_start should reuse preview backend")
+
+    monkeypatch.setattr(server, "_make_backend", _unexpected_make_backend)
+    response = server._handle_mask_start("req-1", "pi-cam-01", {"frames": 2, "threshold": 200})
+
+    assert response["ack"] is True
+
+
 def test_resolve_debug_preview_enabled_requires_display(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DISPLAY", raising=False)
     assert resolve_debug_preview_enabled(True) is False

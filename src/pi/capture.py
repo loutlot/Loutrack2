@@ -832,6 +832,8 @@ class ControlServer:
         self._preview_backend: FrameBackend | None = None
         self._preview_thread: threading.Thread | None = None
         self._preview_stop_event: threading.Event | None = None
+        self._preview_handoff_requested: bool = False
+        self._preview_handoff_backend: FrameBackend | None = None
 
         self._desired_exposure_us: int | None = None
         self._desired_gain: float | None = None
@@ -944,11 +946,12 @@ class ControlServer:
             stop_event = self._preview_stop_event
             thread = self._preview_thread
             backend = self._preview_backend
+            handoff_requested = self._preview_handoff_requested
             self._preview_stop_event = None
 
         if stop_event is not None:
             stop_event.set()
-        if backend is not None:
+        if backend is not None and not handoff_requested:
             try:
                 backend.stop()
             except Exception:
@@ -1020,11 +1023,22 @@ class ControlServer:
                 else:
                     next_tick = time.perf_counter()
         finally:
-            try:
-                backend.stop()
-            except Exception:
-                pass
-            self._log("preview backend stopped")
+            with self._state_lock:
+                handoff_backend = None
+                if self._preview_handoff_requested and self._preview_backend is backend:
+                    handoff_backend = backend
+                    self._preview_handoff_backend = backend
+                    self._preview_handoff_requested = False
+                else:
+                    self._preview_handoff_backend = None
+            if handoff_backend is None:
+                try:
+                    backend.stop()
+                except Exception:
+                    pass
+                self._log("preview backend stopped")
+            else:
+                self._log("preview backend handed off for mask init")
             with self._state_lock:
                 if self._preview_backend is backend:
                     self._preview_backend = None
@@ -1437,15 +1451,6 @@ class ControlServer:
             self._state = STATE_MASK_INIT
 
         self._log(f"mask init started frames={frames} threshold={threshold}")
-        if not self._stop_preview_loop():
-            self._cancel_mask_state()
-            self._log("mask init aborted: preview backend did not stop cleanly")
-            return self._error_response(
-                request_id=request_id,
-                request_camera_id=request_camera_id,
-                error_code=ERROR_INTERNAL,
-                error_message="internal_error: mask_start_failed: preview_stop_timeout",
-            )
         backend: FrameBackend | None = None
         mask: np.ndarray | None = None
         mask_pixels = 0
@@ -1453,9 +1458,20 @@ class ControlServer:
         warning: str | None = None
         last_frame: np.ndarray | None = None
         try:
-            backend = self._ensure_backend()
-            self._apply_backend_settings(backend)
-            backend.start()
+            backend = self._take_preview_backend_for_mask()
+            if backend is None:
+                if not self._stop_preview_loop():
+                    self._cancel_mask_state()
+                    self._log("mask init aborted: preview backend did not stop cleanly")
+                    return self._error_response(
+                        request_id=request_id,
+                        request_camera_id=request_camera_id,
+                        error_code=ERROR_INTERNAL,
+                        error_message="internal_error: mask_start_failed: preview_stop_timeout",
+                    )
+                backend = self._ensure_backend()
+                self._apply_backend_settings(backend)
+                backend.start()
             with self._state_lock:
                 fps_for_timeout = float(self._desired_fps or self._config.target_fps or 1.0)
             estimated_capture_s = float(frames) / max(1.0, fps_for_timeout)
@@ -1979,6 +1995,29 @@ class ControlServer:
             return backend
 
         return self._make_backend()
+
+    def _take_preview_backend_for_mask(self) -> FrameBackend | None:
+        with self._state_lock:
+            preview_thread = self._preview_thread
+            preview_backend = self._preview_backend
+            if preview_thread is None or preview_backend is None or not preview_thread.is_alive():
+                return None
+            stop_event = self._preview_stop_event
+            self._preview_handoff_requested = True
+            self._preview_handoff_backend = None
+            self._preview_stop_event = None
+
+        if stop_event is not None:
+            stop_event.set()
+        preview_thread.join(timeout=PREVIEW_STOP_TIMEOUT_SECONDS)
+
+        with self._state_lock:
+            backend = self._preview_handoff_backend
+            self._preview_handoff_backend = None
+            if backend is not None:
+                return backend
+            self._preview_handoff_requested = False
+        return None
 
     def _make_backend(self) -> FrameBackend:
         with self._state_lock:
