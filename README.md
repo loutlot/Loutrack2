@@ -210,6 +210,7 @@ ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@<PI_IP>
 - `AGENTS.md` に、近い内容の重複テストや一時的なテスト残骸を同一変更内で整理・削除するルールを追加した
 - `mask_start` を既存 mask の上書き更新として扱えるようにし、Pi preview の mask 領域も薄い赤オーバーレイ + 輪郭で見やすくした
 - `wand_gui` の Blob Detection Adjustment 設定を host ローカル（`logs/wand_gui_settings.json`）へ保存・再読込するようにした
+- Pi idle preview は起動時に 1 回だけ立ち上げ、`ping` ごとの `picamera2` 再取得ループをやめるようにした
 - `src/host/wand_gui.py` を `Blob Detection Adjustment -> Mask Adjustment -> Wand Capture -> Extrinsics Generation` の 4 セグメント UI に再編し、段階的に進めやすい workflow 表示へ更新した
 - `src/host/wand_gui.py` の console パネルが長い JSON/パスで他要素に被らないよう、右カラム縮小・overflow・折り返しを調整した
 - `src/host/wand_gui.py` で blob diameter の `min > max` を送らないようフロント側で自動正規化するようにした

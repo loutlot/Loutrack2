@@ -875,6 +875,7 @@ class ControlServer:
             f"fps={self._config.target_fps} "
             f"debug_preview={'on' if self._config.debug_preview else 'off'}"
         )
+        self._start_preview_loop()
 
         try:
             while self._running:
@@ -954,9 +955,13 @@ class ControlServer:
             self._log("preview backend started")
         except BackendUnavailableError:
             self._log("preview backend unavailable")
+            if self._debug_preview is not None:
+                self._debug_preview.close()
             return
         except Exception:
             self._log("preview backend start failed")
+            if self._debug_preview is not None:
+                self._debug_preview.close()
             return
 
         with self._state_lock:
@@ -1892,7 +1897,6 @@ class ControlServer:
                 pass
 
     def _handle_ping(self, request_id: str, request_camera_id: str) -> dict[str, object]:
-        self._start_preview_loop()
         with self._state_lock:
             diagnostics = {
                 "state": self._state,
