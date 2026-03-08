@@ -20,26 +20,96 @@ wand 外部較正を実行するための作業手順書（実装済みフロー
 cd /Users/loutlot/Documents/cursor/MOCAP/Loutrack2
 ```
 
-2. Python が使用可能であることを確認:
+2. 仮想環境を作成（初回のみ）:
 
 ```bash
-python3 --version
+python3 -m venv .venv --system-site-packages
 ```
 
-3. 依存パッケージを導入:
+3. 仮想環境を有効化:
 
 ```bash
-python3 -m pip install -r requirements.txt
+source .venv/bin/activate
 ```
 
-4. 主要スクリプトが起動可能なことを確認:
+4. pip を更新:
 
 ```bash
-python3 src/host/wand_gui.py --help
-python3 src/camera-calibration/calibrate_extrinsics.py --help
+python -m pip install --upgrade pip
 ```
 
-### 2.2 Pi 側 capture サービスの確認
+5. 依存パッケージを導入:
+
+```bash
+pip install -r requirements.txt
+```
+
+6. 主要スクリプトが起動可能なことを確認:
+
+```bash
+python src/host/wand_gui.py --help
+python src/camera-calibration/calibrate_extrinsics.py --help
+```
+
+### 2.2 Pi 側 venv 準備と capture サービス起動
+
+各 Pi で以下を実施する（初回セットアップ + 起動確認）。
+
+1. 作業ディレクトリへ移動:
+
+```bash
+cd /home/<PI_USER>/Loutrack2
+```
+
+2. 仮想環境を作成（初回のみ）:
+
+```bash
+python3 -m venv .venv --system-site-packages
+```
+
+3. 仮想環境を有効化:
+
+```bash
+source .venv/bin/activate
+```
+
+4. pip を更新:
+
+```bash
+python -m pip install --upgrade pip
+```
+
+5. 依存パッケージを導入:
+
+```bash
+pip install -r requirements.txt
+```
+
+6. device name（hostname）を取得して `camera_id` に設定:
+
+```bash
+CAMERA_ID="$(hostnamectl --static)"
+echo "$CAMERA_ID"
+```
+
+7. capture スクリプトの起動確認:
+
+```bash
+python src/pi/capture.py --help
+```
+
+8. capture サービスを起動（デフォルト `--tcp-port 8554` を使用）:
+
+```bash
+python src/pi/capture.py --camera-id "$CAMERA_ID"
+```
+
+補足:
+
+- `camera_id` は inventory（`src/deploy/hosts.ini`）と一致させる
+- ポート変更時のみ `--tcp-port`（Pi 側）と `--port`（Host 側）を同じ値に合わせる
+
+### 2.3 Pi 側 capture サービスの確認
 
 各 Pi で以下を満たすこと:
 
@@ -50,14 +120,14 @@ python3 src/camera-calibration/calibrate_extrinsics.py --help
 Host から疎通確認（各 Pi 分実施）:
 
 ```bash
-python3 -m src.host.control --ip <PI_IP> --port 8554 --camera-id <CAMERA_ID> ping
+python -m src.host.control --ip <PI_IP> --camera-id <CAMERA_ID> ping
 ```
 
 期待値:
 
 - 返却 JSON に `"ack": true` が含まれる
 
-### 2.3 inventory と camera_id の整合
+### 2.4 inventory と camera_id の整合
 
 1. inventory を確認:
 
@@ -78,7 +148,7 @@ pi-cam-01 192.168.1.101 pi-cam-01
 pi-cam-02 192.168.1.102 pi-cam-02
 ```
 
-### 2.4 ネットワーク前提（受動発見 + 制御）
+### 2.5 ネットワーク前提（受動発見 + 制御）
 
 - Host と全 Pi が同一 L2/L3 セグメントで通信可能
 - Pi -> Host の UDP 送信（既定: 5000/udp）が通る
@@ -89,7 +159,7 @@ pi-cam-02 192.168.1.102 pi-cam-02
 1. GUI 起動後 `Refresh` でカメラが列挙される（受動発見 + inventory merge）
 2. `Ping` 実行で `last_ack=true` が返る
 
-### 2.5 内部較正ファイルの確認
+### 2.6 内部較正ファイルの確認
 
 外部較正の前に、対象カメラ分の intrinsics が揃っていることを確認:
 
@@ -105,7 +175,7 @@ ls -1 calibration/calibration_intrinsics_v1_*.json
 簡易チェック（1ファイル例）:
 
 ```bash
-python3 - <<'PY'
+python - <<'PY'
 import json
 path = "calibration/calibration_intrinsics_v1_pi-cam-01.json"
 data = json.load(open(path, "r", encoding="utf-8"))
@@ -115,7 +185,7 @@ print("missing:", missing)
 PY
 ```
 
-### 2.6 wand 物理条件の確認
+### 2.7 wand 物理条件の確認
 
 - wand 定義: `WAND_POINTS_MM = [(0,0,0), (168,0,0), (0,243,0)]`
 - 3 marker の center-to-center 実寸が定義値と一致
@@ -139,8 +209,8 @@ cat src/deploy/hosts.ini
 3. 最低 2 台が疎通することを確認する（例）:
 
 ```bash
-python3 -m src.host.control --ip 192.168.1.101 --port 8554 --camera-id pi-cam-01 ping
-python3 -m src.host.control --ip 192.168.1.102 --port 8554 --camera-id pi-cam-02 ping
+python -m src.host.control --ip 192.168.1.101 --camera-id pi-cam-01 ping
+python -m src.host.control --ip 192.168.1.102 --camera-id pi-cam-02 ping
 ```
 
 ## 4. 収録手順（GUI 運用）
@@ -148,7 +218,7 @@ python3 -m src.host.control --ip 192.168.1.102 --port 8554 --camera-id pi-cam-02
 1. GUI を起動:
 
 ```bash
-python3 src/host/wand_gui.py --host 127.0.0.1 --port 8765 --udp-port 5000
+python src/host/wand_gui.py --host 127.0.0.1 --port 8765 --udp-port 5000
 ```
 
 2. ブラウザで `http://127.0.0.1:8765/` を開く。
@@ -202,7 +272,7 @@ print(result["metadata_path"])
 収録ログ（JSONL）を指定して extrinsics を作成する。
 
 ```bash
-python3 src/camera-calibration/calibrate_extrinsics.py \
+python src/camera-calibration/calibrate_extrinsics.py \
   --intrinsics calibration \
   --log logs/<wand_capture_log>.jsonl \
   --output calibration/calibration_extrinsics_v1.json \
@@ -213,7 +283,7 @@ python3 src/camera-calibration/calibrate_extrinsics.py \
 必要に応じて参照カメラを固定:
 
 ```bash
-python3 src/camera-calibration/calibrate_extrinsics.py \
+python src/camera-calibration/calibrate_extrinsics.py \
   --intrinsics calibration \
   --log logs/<wand_capture_log>.jsonl \
   --reference-camera pi-cam-01
