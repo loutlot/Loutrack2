@@ -924,8 +924,7 @@ class ControlServer:
             self._server_socket = None
 
     def _start_preview_loop(self) -> None:
-        preview = self._debug_preview
-        if preview is None or not preview.enabled:
+        if not self._config.debug_preview:
             return
 
         with self._state_lock:
@@ -933,6 +932,7 @@ class ControlServer:
                 return
             if self._preview_thread is not None and self._preview_thread.is_alive():
                 return
+            self._debug_preview = DebugPreview()
             stop_event = threading.Event()
             thread = threading.Thread(
                 target=self._preview_loop,

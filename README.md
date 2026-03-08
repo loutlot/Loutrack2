@@ -215,6 +215,7 @@ ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@<PI_IP>
 - `MASK_INIT` 中は preview 更新と blob 検出を行わず、閾値超え画素の蓄積だけにして、完了後に mask overlay を出す形へ簡略化した
 - `mask_start` 完了直後の同期 preview 描画も外し、preview 再開は idle loop 側に一本化した
 - `mask_start` 開始時は debug preview window を明示的に閉じ、完了後は idle preview loop で window を開き直すようにした
+- preview 再開時は `DebugPreview` を作り直して window を再生成するようにし、mask 後に window が開き直らないケースを避けた
 - `wand_gui` の Blob Detection Adjustment 設定を host ローカル（`logs/wand_gui_settings.json`）へ保存・再読込するようにした
 - Pi idle preview は起動時に 1 回だけ立ち上げ、`ping` ごとの `picamera2` 再取得ループをやめるようにした
 - `src/host/wand_gui.py` を `Blob Detection Adjustment -> Mask Adjustment -> Wand Capture -> Extrinsics Generation` の 4 セグメント UI に再編し、段階的に進めやすい workflow 表示へ更新した
