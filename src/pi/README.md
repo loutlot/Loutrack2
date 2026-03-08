@@ -4,6 +4,7 @@
 
 - TCP control (NDJSON): `0.0.0.0:8554`
 - UDP frames (one JSON per datagram): default `255.255.255.255:5000`
+- Default backend: `picamera2` on Raspberry Pi, `dummy` elsewhere
 - Default capture resolution: `2304x1296`
 - Startup logs print listen address, backend, preview state, and capture start/stop status
 
@@ -18,13 +19,12 @@ Use this on macOS/Linux for development; it generates synthetic dot frames.
   --udp-dest localhost:5000
 ```
 
-## Run on Raspberry Pi (picamera2 backend)
+## Run on Raspberry Pi (picamera2 backend by default)
 
-On Raspberry Pi OS, use the real camera backend.
+On Raspberry Pi OS, `picamera2` is the default, so `--backend picamera2` is optional.
 
 ```bash
 .venv/bin/python src/pi/capture.py \
-  --backend picamera2 \
   --camera-id pi-cam-01 \
   --udp-dest 255.255.255.255:5000
 ```
@@ -33,7 +33,6 @@ To show a local OpenCV debug preview on the Pi during idle, mask setup, and wand
 
 ```bash
 .venv/bin/python src/pi/capture.py \
-  --backend picamera2 \
   --camera-id pi-cam-01 \
   --udp-dest 255.255.255.255:5000 \
   --debug-preview

@@ -206,6 +206,7 @@ ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@<PI_IP>
 - Pi capture / wand GUI / wand session の既定 FPS を `56` に揃えた
 - wand GUI / wand session の既定 `exposure_us` / `gain` を暗すぎない初期値（`12000` / `8.0`）に更新した
 - `src/pi/capture.py` が起動時と capture start/stop 時に backend 状態を標準出力へ出すようにした
+- `src/pi/capture.py` の既定 backend を Raspberry Pi 上では `picamera2` にし、docs と実装のズレを解消した（非 Pi 環境では `dummy` を維持）
 - `src/host/wand_gui.py` を `Blob Detection Adjustment -> Mask Adjustment -> Wand Capture -> Extrinsics Generation` の 4 セグメント UI に再編し、段階的に進めやすい workflow 表示へ更新した
 - `src/host/wand_gui.py` の console パネルが長い JSON/パスで他要素に被らないよう、右カラム縮小・overflow・折り返しを調整した
 - `src/host/wand_gui.py` で blob diameter の `min > max` を送らないようフロント側で自動正規化するようにした

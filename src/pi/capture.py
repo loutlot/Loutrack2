@@ -160,6 +160,19 @@ def resolve_debug_preview_enabled(requested: bool) -> bool:
     return False
 
 
+def running_on_raspberry_pi() -> bool:
+    model_path = "/proc/device-tree/model"
+    try:
+        model = open(model_path, "r", encoding="utf-8").read().strip()
+    except Exception:
+        return False
+    return "Raspberry Pi" in model
+
+
+def get_default_backend() -> str:
+    return "picamera2" if running_on_raspberry_pi() else "dummy"
+
+
 class UDPFrameEmitter:
     def __init__(
         self,
@@ -784,7 +797,7 @@ class ControlServerConfig:
     udp_dest: str = "255.255.255.255:5000"
     udp_host: str = "255.255.255.255"
     udp_port: int = 5000
-    backend: str = "dummy"
+    backend: str = field(default_factory=get_default_backend)
     target_fps: int = DEFAULT_TARGET_FPS
     threshold: int = 200
     mask_init_frames: int = MASK_INIT_FRAMES
@@ -1961,6 +1974,7 @@ class ControlServer:
 
 
 def parse_args() -> ControlServerConfig:
+    default_backend = get_default_backend()
     parser = argparse.ArgumentParser(description="Loutrack Pi capture service (MVP control only)")
     _ = parser.add_argument("--camera-id", default=None, help="Camera ID handled by this Pi (default: device name)")
     _ = parser.add_argument("--tcp-host", default="0.0.0.0", help="TCP bind host")
@@ -1968,8 +1982,11 @@ def parse_args() -> ControlServerConfig:
     _ = parser.add_argument(
         "--backend",
         choices=("dummy", "picamera2"),
-        default="dummy",
-        help="Capture backend to use (default: dummy)",
+        default=default_backend,
+        help=(
+            "Capture backend to use "
+            f"(default: {default_backend}; picamera2 on Raspberry Pi, dummy elsewhere)"
+        ),
     )
     _ = parser.add_argument(
         "--udp-dest",
@@ -1986,7 +2003,7 @@ def parse_args() -> ControlServerConfig:
     camera_id = getattr(namespace, "camera_id", None)
     tcp_host = getattr(namespace, "tcp_host", "0.0.0.0")
     tcp_port = getattr(namespace, "tcp_port", 8554)
-    backend = getattr(namespace, "backend", "dummy")
+    backend = getattr(namespace, "backend", default_backend)
     udp_dest = getattr(namespace, "udp_dest", "255.255.255.255:5000")
     debug_preview = getattr(namespace, "debug_preview", False)
 

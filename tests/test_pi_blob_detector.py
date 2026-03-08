@@ -15,6 +15,7 @@ from src.pi.capture import (
     DummyBackend,
     DummyBackendConfig,
     detect_blobs,
+    get_default_backend,
     resolve_debug_preview_enabled,
 )
 
@@ -92,3 +93,8 @@ def test_resolve_debug_preview_enabled_requires_display(monkeypatch: pytest.Monk
 def test_resolve_debug_preview_enabled_accepts_display(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DISPLAY", ":0")
     assert resolve_debug_preview_enabled(True) is True
+
+
+def test_get_default_backend_prefers_dummy_off_pi(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("src.pi.capture.running_on_raspberry_pi", lambda: False)
+    assert get_default_backend() == "dummy"
