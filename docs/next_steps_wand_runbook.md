@@ -17,7 +17,7 @@ wand 外部較正を実行するための作業手順書（実装済みフロー
 1. 作業ディレクトリへ移動:
 
 ```bash
-cd /Users/loutlot/Documents/cursor/MOCAP/Loutrack2
+cd /path/to/Loutrack2
 ```
 
 2. 仮想環境を作成（初回のみ）:
@@ -85,12 +85,6 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-6. device name（hostname）を取得して `camera_id` に設定:
-
-```bash
-CAMERA_ID="$(hostnamectl --static)"
-echo "$CAMERA_ID"
-```
 
 7. capture スクリプトの起動確認:
 
@@ -98,16 +92,31 @@ echo "$CAMERA_ID"
 python src/pi/capture.py --help
 ```
 
-8. capture サービスを起動（デフォルト `--tcp-port 8554` を使用）:
+8. capture サービスを起動（デフォルト `--tcp-port 8554`、`--camera-id` 未指定時は device name を使用）:
 
 ```bash
-python src/pi/capture.py --camera-id "$CAMERA_ID"
+python src/pi/capture.py
 ```
+
+9. 検出状況を Pi 上で確認したい場合は debug preview 付きで起動:
+
+```bash
+python src/pi/capture.py --debug-preview
+```
+
+debug preview で確認できる内容:
+
+- 採用された blob の円表示
+- mask 領域のオーバーレイ
+- `threshold`, `diameter`, `circularity` 設定
+- `accepted/raw/rejected` の簡易診断
 
 補足:
 
 - `camera_id` は inventory（`src/deploy/hosts.ini`）と一致させる
+- 既定値を上書きしたい場合のみ `--camera-id "$CAMERA_ID"` を指定する
 - ポート変更時のみ `--tcp-port`（Pi 側）と `--port`（Host 側）を同じ値に合わせる
+- `--debug-preview` は debug 用。GUI が使えない headless 環境では window 作成に失敗し、自動で無効化される
 
 ### 2.3 Pi 側 capture サービスの確認
 
@@ -144,8 +153,8 @@ cat src/deploy/hosts.ini
 例（形式）:
 
 ```ini
-pi-cam-01 192.168.1.101 pi-cam-01
-pi-cam-02 192.168.1.102 pi-cam-02
+pi-cam-01 <PI_IP_01> pi-cam-01
+pi-cam-02 <PI_IP_02> pi-cam-02
 ```
 
 ### 2.5 ネットワーク前提（受動発見 + 制御）
@@ -209,8 +218,8 @@ cat src/deploy/hosts.ini
 3. 最低 2 台が疎通することを確認する（例）:
 
 ```bash
-python -m src.host.control --ip 192.168.1.101 --camera-id pi-cam-01 ping
-python -m src.host.control --ip 192.168.1.102 --camera-id pi-cam-02 ping
+python -m src.host.control --ip <PI_IP_01> --camera-id pi-cam-01 ping
+python -m src.host.control --ip <PI_IP_02> --camera-id pi-cam-02 ping
 ```
 
 ## 4. 収録手順（GUI 運用）
@@ -218,10 +227,10 @@ python -m src.host.control --ip 192.168.1.102 --camera-id pi-cam-02 ping
 1. GUI を起動:
 
 ```bash
-python src/host/wand_gui.py --host 127.0.0.1 --port 8765 --udp-port 5000
+python src/host/wand_gui.py --host <HOST_IP> --port 8765 --udp-port 5000
 ```
 
-2. ブラウザで `http://127.0.0.1:8765/` を開く。
+2. ブラウザで `http://<HOST_IP>:8765/` を開く。
 
 3. `Refresh` → 対象カメラを選択 → `Ping` 実行。
 

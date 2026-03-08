@@ -25,8 +25,8 @@ src/deploy/
 ssh-keygen -t ed25519 -f ~/.ssh/loutrack_deploy_key -N ""
 
 # 各Piに公開鍵を登録
-ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@192.168.1.101
-ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@192.168.1.102
+ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@<PI_IP_01>
+ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@<PI_IP_02>
 ```
 
 ### 2. Pi側の準備
@@ -71,9 +71,9 @@ sudo echo "pi ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart loutrack.service" >
 
 ```ini
 # hostname    ip_address         camera_id
-pi-cam-01     192.168.1.101    pi-cam-01
-pi-cam-02     192.168.1.102    pi-cam-02
-pi-cam-03     192.168.1.103    pi-cam-03
+pi-cam-01     <PI_IP_01>       pi-cam-01
+pi-cam-02     <PI_IP_02>       pi-cam-02
+pi-cam-03     <PI_IP_03>       pi-cam-03
 ```
 
 - `#` で始まる行はコメントとして無視
@@ -144,10 +144,10 @@ pi-cam-03     192.168.1.103    pi-cam-03
 
 ```bash
 # 接続テスト
-ssh -i ~/.ssh/loutrack_deploy_key pi@192.168.1.101
+ssh -i ~/.ssh/loutrack_deploy_key pi@<PI_IP_01>
 
 # known_hostsに追加
-ssh-keyscan 192.168.1.101 >> ~/.ssh/known_hosts
+ssh-keyscan <PI_IP_01> >> ~/.ssh/known_hosts
 ```
 
 ### 権限エラー

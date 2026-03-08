@@ -125,7 +125,7 @@ pipeline.stop()
 ```bash
 # SSH鍵の設定
 ssh-keygen -t ed25519 -f ~/.ssh/loutrack_deploy_key
-ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@192.168.1.101
+ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@<PI_IP>
 
 # デプロイ実行
 ./src/deploy/deploy.sh
@@ -197,9 +197,13 @@ ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@192.168.1.101
 - Host から `set_focus` を追加し、`wand_gui` で focus スライダー（既定 `5.215`）を同期操作できるようにした
 - `wand_gui` に「Generate Extrinsics」ボタンを追加し、GUI から `calibrate_extrinsics` を実行できるようにした
 - blob 検出条件として `set_threshold` / `set_blob_diameter(min/max px)` を追加し、GUI から同期調整できるようにした
+- `wand_gui` のスライダーを 200ms デバウンスの自動適用に変更し、未適用値が定期ポーリングで巻き戻る挙動を解消した
+- `src/pi/capture.py` に `--debug-preview` を追加し、debug 時のみ Pi 上で OpenCV プレビューを描画できるようにした
+- `docs/next_steps_wand_runbook.md` に Pi 側 `--debug-preview` 起動手順と確認できる内容を追記した
 - `docs/next_steps_wand_runbook.md` を venv 前提（`python3 -m venv .venv --system-site-packages`）へ更新し、Host 手順の `python` 実行を統一した
 - `docs/next_steps_wand_runbook.md` に Pi 側 venv 準備・`hostnamectl --static` による `camera_id` 設定・capture サービス起動手順を追記した（port は既定 8554 前提）
 - `src/pi/capture.py` の `camera_id` 既定値を device name 由来に変更し、`--camera-id` 未指定時は `hostnamectl --static`（失敗時は `socket.gethostname()`）を使用するようにした
+- `docs/next_steps_wand_runbook.md` を更新し、Pi 側起動手順を `python src/pi/capture.py`（`camera_id` は device name 既定）に合わせた
 
 ## ドキュメントの読み順
 
@@ -243,3 +247,4 @@ MIT License
 ## 参考プロジェクト
 
 - [Low-Cost-Mocap](https://github.com/jyjblrd/Low-Cost-Mocap) - jyjblrd氏の参考実装
+

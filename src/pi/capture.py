@@ -11,7 +11,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Protocol, cast, Callable
+from typing import Protocol, cast
 
 import cv2
 import numpy as np
@@ -151,6 +151,7 @@ class UDPFrameEmitter:
         time_us_fn: Callable[[], int] | None = None,
         max_frames: int | None = None,
         mask: np.ndarray | None = None,
+        debug_preview: "DebugPreview" | None = None,
     ):
         self._camera_id: str = camera_id
         self._udp_host: str = udp_host
@@ -190,6 +191,7 @@ class UDPFrameEmitter:
         self._mask: np.ndarray | None = (
             mask.astype(bool, copy=False) if mask is not None else None
         )
+        self._debug_preview: DebugPreview | None = debug_preview
 
     def start(self) -> None:
         with self._lock:
@@ -290,6 +292,14 @@ class UDPFrameEmitter:
                 )
                 with self._lock:
                     self._last_detection_stats = detection_stats
+                if self._debug_preview is not None:
+                    self._debug_preview.show(
+                        frame=frame,
+                        blobs=blobs,
+                        mask=mask,
+                        stats=detection_stats,
+                        camera_id=self._camera_id,
+                    )
             except Exception:
                 return
             msg = {
@@ -334,6 +344,101 @@ class DummyBackendConfig:
 
 class BackendUnavailableError(RuntimeError):
     pass
+
+
+class DebugPreview:
+    def __init__(self, window_name: str = "loutrack2-debug-preview") -> None:
+        self._window_name = window_name
+        self._enabled = True
+        self._initialized = False
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+    def show(
+        self,
+        *,
+        frame: np.ndarray,
+        blobs: list[dict[str, float]],
+        mask: np.ndarray | None,
+        stats: dict[str, object],
+        camera_id: str,
+    ) -> None:
+        if not self._enabled:
+            return
+        try:
+            canvas = self._build_canvas(frame, blobs, mask, stats, camera_id)
+            if not self._initialized:
+                cv2.namedWindow(self._window_name, cv2.WINDOW_NORMAL)
+                self._initialized = True
+            cv2.imshow(self._window_name, canvas)
+            _ = cv2.waitKey(1)
+        except Exception:
+            self.close()
+
+    def close(self) -> None:
+        if not self._enabled:
+            return
+        self._enabled = False
+        if self._initialized:
+            try:
+                cv2.destroyWindow(self._window_name)
+            except Exception:
+                pass
+            self._initialized = False
+
+    def _build_canvas(
+        self,
+        frame: np.ndarray,
+        blobs: list[dict[str, float]],
+        mask: np.ndarray | None,
+        stats: dict[str, object],
+        camera_id: str,
+    ) -> np.ndarray:
+        if frame.ndim == 2:
+            canvas = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+        else:
+            canvas = frame.copy()
+
+        if mask is not None and mask.shape[:2] == canvas.shape[:2]:
+            mask_overlay = np.zeros_like(canvas)
+            mask_overlay[:, :, 2] = 255
+            canvas = np.where(mask[..., None], cv2.addWeighted(canvas, 0.5, mask_overlay, 0.5, 0), canvas)
+
+        for blob in blobs:
+            center = (int(round(float(blob["x"]))), int(round(float(blob["y"]))))
+            radius = max(4, int(round(math.sqrt(max(float(blob["area"]), 1.0) / math.pi))))
+            cv2.circle(canvas, center, radius, (0, 255, 0), 2)
+            cv2.circle(canvas, center, 2, (0, 255, 255), -1)
+
+        lines = [
+            f"{camera_id}",
+            f"accepted={stats.get('accepted_blob_count', 0)} raw={stats.get('raw_contour_count', 0)}",
+            (
+                f"rej_diam={stats.get('rejected_by_diameter', 0)} "
+                f"rej_circ={stats.get('rejected_by_circularity', 0)}"
+            ),
+            (
+                f"thr={stats.get('threshold')} "
+                f"diam=[{stats.get('min_diameter_px')},{stats.get('max_diameter_px')}] "
+                f"circ>={stats.get('circularity_min')}"
+            ),
+        ]
+        y = 24
+        for line in lines:
+            cv2.putText(
+                canvas,
+                line,
+                (10, y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (0, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
+            y += 22
+        return canvas
 
 
 class FrameBackend(Protocol):
@@ -659,6 +764,7 @@ class ControlServerConfig:
     mask_min_area_px: int = MASK_MIN_AREA_PX
     mask_dilate_px: int = MASK_DILATE_PX
     mask_max_ratio_warning: float = MASK_MAX_RATIO_WARNING
+    debug_preview: bool = False
 
 
 class ControlServer:
@@ -684,6 +790,9 @@ class ControlServer:
         self._mask_pixels: int = 0
         self._mask_ratio: float = 0.0
         self._mask_warning: str | None = None
+        self._debug_preview: DebugPreview | None = (
+            DebugPreview() if self._config.debug_preview else None
+        )
 
     def serve_forever(self) -> None:
         self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -715,6 +824,8 @@ class ControlServer:
         self._udp_emitter = None
         if emitter is not None:
             emitter.stop()
+        if self._debug_preview is not None:
+            self._debug_preview.close()
         backend = self._backend
         self._backend = None
         if backend is not None:
@@ -1288,6 +1399,7 @@ class ControlServer:
                 min_diameter_px=self._desired_blob_min_diameter_px,
                 max_diameter_px=self._desired_blob_max_diameter_px,
                 circularity_min=self._desired_circularity_min,
+                debug_preview=self._debug_preview,
             )
             emitter.set_mask(mask_to_apply)
             emitter.start()
@@ -1603,6 +1715,11 @@ def parse_args() -> ControlServerConfig:
         default="255.255.255.255:5000",
         help="UDP destination as host:port (one JSON per datagram)",
     )
+    _ = parser.add_argument(
+        "--debug-preview",
+        action="store_true",
+        help="Show OpenCV debug preview on the Pi while streaming",
+    )
 
     namespace = parser.parse_args()
     camera_id = getattr(namespace, "camera_id", None)
@@ -1610,6 +1727,7 @@ def parse_args() -> ControlServerConfig:
     tcp_port = getattr(namespace, "tcp_port", 8554)
     backend = getattr(namespace, "backend", "dummy")
     udp_dest = getattr(namespace, "udp_dest", "255.255.255.255:5000")
+    debug_preview = getattr(namespace, "debug_preview", False)
 
     if camera_id is None:
         camera_id = get_default_camera_id()
@@ -1626,6 +1744,8 @@ def parse_args() -> ControlServerConfig:
         raise SystemExit("--backend must be a string")
     if not isinstance(udp_dest, str):
         raise SystemExit("--udp-dest must be a string")
+    if not isinstance(debug_preview, bool):
+        raise SystemExit("--debug-preview must be a boolean flag")
 
     try:
         udp_host, udp_port = parse_udp_dest(udp_dest)
@@ -1640,6 +1760,7 @@ def parse_args() -> ControlServerConfig:
         udp_host=udp_host,
         udp_port=udp_port,
         backend=backend,
+        debug_preview=debug_preview,
     )
 
 

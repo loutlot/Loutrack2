@@ -268,10 +268,10 @@ print(result["session_id"])
 `UDPReceiver` を起動して受動発見し、`WandSession` の inventory merge をそのまま利用する。
 
 ```bash
-python3 src/host/wand_gui.py --host 127.0.0.1 --port 8765
+python3 src/host/wand_gui.py --host <HOST_IP> --port 8765
 ```
 
-ブラウザで `http://127.0.0.1:8765/` を開く。
+ブラウザで `http://<HOST_IP>:8765/` を開く。
 
 ---
 

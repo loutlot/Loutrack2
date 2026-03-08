@@ -27,7 +27,7 @@ sudo apt install -y git python3-pip python3-venv
 
 ```bash
 cd ~
-git clone https://github.com/loutlot/Loutrack2.git
+git clone https://github.com/<YOUR_ACCOUNT>/Loutrack2.git
 cd Loutrack2
 ```
 

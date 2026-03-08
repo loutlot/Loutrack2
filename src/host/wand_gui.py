@@ -168,6 +168,7 @@ HTML_PAGE = """<!doctype html>
   </main>
   <script>
     const sliders = ["exposure", "gain", "fps", "focus", "threshold", "circularity", "blobMin", "blobMax", "maskThreshold", "maskSeconds"];
+    const sliderNames = new Set(sliders);
     const values = {
       exposure: document.getElementById("exposureValue"),
       gain: document.getElementById("gainValue"),
@@ -197,24 +198,50 @@ HTML_PAGE = """<!doctype html>
       logPath: document.getElementById("logPath"),
       outputPath: document.getElementById("outputPath"),
     };
+    const sliderUpdateTimers = {};
+    const SLIDER_DEBOUNCE_MS = 200;
 
     function selectedCameraIds() {
       return [...document.querySelectorAll("input[data-camera]:checked")].map((item) => item.dataset.camera);
     }
 
+    function configPayload() {
+      return {
+        camera_ids: selectedCameraIds(),
+        exposure_us: Number(elements.exposure.value),
+        gain: Number(elements.gain.value),
+        fps: Number(elements.fps.value),
+        focus: Number(elements.focus.value),
+        threshold: Number(elements.threshold.value),
+        circularity_min: Number(elements.circularity.value),
+        blob_min_diameter_px: Number(elements.blobMin.value) > 0 ? Number(elements.blobMin.value) : null,
+        blob_max_diameter_px: Number(elements.blobMax.value) > 0 ? Number(elements.blobMax.value) : null,
+        mask_threshold: Number(elements.maskThreshold.value),
+        mask_seconds: Number(elements.maskSeconds.value),
+      };
+    }
+
     async function loadState() {
       const response = await fetch("/api/state");
       const state = await response.json();
-      elements.exposure.value = state.config.exposure_us;
-      elements.gain.value = state.config.gain;
-      elements.fps.value = state.config.fps;
-      elements.focus.value = state.config.focus;
-      elements.threshold.value = state.config.threshold;
-      elements.circularity.value = state.config.circularity_min;
-      elements.blobMin.value = state.config.blob_min_diameter_px ?? 0;
-      elements.blobMax.value = state.config.blob_max_diameter_px ?? 0;
-      elements.maskThreshold.value = state.config.mask_threshold;
-      elements.maskSeconds.value = state.config.mask_seconds;
+      const configMap = {
+        exposure: state.config.exposure_us,
+        gain: state.config.gain,
+        fps: state.config.fps,
+        focus: state.config.focus,
+        threshold: state.config.threshold,
+        circularity: state.config.circularity_min,
+        blobMin: state.config.blob_min_diameter_px ?? 0,
+        blobMax: state.config.blob_max_diameter_px ?? 0,
+        maskThreshold: state.config.mask_threshold,
+        maskSeconds: state.config.mask_seconds,
+      };
+      sliders.forEach((name) => {
+        if (document.activeElement === elements[name] || sliderUpdateTimers[name]) {
+          return;
+        }
+        elements[name].value = configMap[name];
+      });
       sliders.forEach((name) => { values[name].textContent = elements[name].value; });
       elements.rows.innerHTML = state.cameras.map((camera) => `
         <tr>
@@ -242,19 +269,7 @@ HTML_PAGE = """<!doctype html>
     }
 
     document.getElementById("applyConfig").addEventListener("click", async () => {
-      await postJson("/api/config", {
-        camera_ids: selectedCameraIds(),
-        exposure_us: Number(elements.exposure.value),
-        gain: Number(elements.gain.value),
-        fps: Number(elements.fps.value),
-        focus: Number(elements.focus.value),
-        threshold: Number(elements.threshold.value),
-        circularity_min: Number(elements.circularity.value),
-        blob_min_diameter_px: Number(elements.blobMin.value) > 0 ? Number(elements.blobMin.value) : null,
-        blob_max_diameter_px: Number(elements.blobMax.value) > 0 ? Number(elements.blobMax.value) : null,
-        mask_threshold: Number(elements.maskThreshold.value),
-        mask_seconds: Number(elements.maskSeconds.value),
-      });
+      await postJson("/api/config", configPayload());
       await loadState();
     });
 
@@ -278,7 +293,23 @@ HTML_PAGE = """<!doctype html>
     });
 
     sliders.forEach((name) => {
-      elements[name].addEventListener("input", () => { values[name].textContent = elements[name].value; });
+      elements[name].addEventListener("input", () => {
+        values[name].textContent = elements[name].value;
+        if (!sliderNames.has(name)) {
+          return;
+        }
+        if (sliderUpdateTimers[name]) {
+          clearTimeout(sliderUpdateTimers[name]);
+        }
+        sliderUpdateTimers[name] = setTimeout(async () => {
+          try {
+            await postJson("/api/config", configPayload());
+            await loadState();
+          } finally {
+            sliderUpdateTimers[name] = null;
+          }
+        }, SLIDER_DEBOUNCE_MS);
+      });
     });
 
     loadState();

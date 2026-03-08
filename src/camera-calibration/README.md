@@ -167,7 +167,7 @@ python src/camera-calibration/calibrate.py \
    例:
 
    ```bash
-   scp pi@<PI_IP>:/home/pi/loutrack2/calibration/calibration_intrinsics_v1_<camera_id>.json ./calibration/
+   scp pi@<PI_IP>:/home/<PI_USER>/Loutrack2/calibration/calibration_intrinsics_v1_<camera_id>.json ./calibration/
    ```
 
 1. **ボードを生成して印刷する**
