@@ -1048,26 +1048,14 @@ class ControlServer:
                     next_tick = time.perf_counter()
 
                 with self._state_lock:
-                    if self._state == STATE_RUNNING:
-                        return
-                    if self._preview_handoff_requested:
-                        state_label = self._state
-                        threshold = self._desired_threshold
-                        min_diameter_px = self._desired_blob_min_diameter_px
-                        max_diameter_px = self._desired_blob_max_diameter_px
-                        circularity_min = self._desired_circularity_min
-                        mask = self._static_mask if self._static_mask is not None else None
-                        fps = float(self._desired_fps or self._config.target_fps or IDLE_PREVIEW_FPS)
-                        handoff_requested = True
-                    else:
-                        state_label = self._state
-                        threshold = self._desired_threshold
-                        min_diameter_px = self._desired_blob_min_diameter_px
-                        max_diameter_px = self._desired_blob_max_diameter_px
-                        circularity_min = self._desired_circularity_min
-                        mask = self._static_mask if self._static_mask is not None else None
-                        fps = float(self._desired_fps or self._config.target_fps or IDLE_PREVIEW_FPS)
-                        handoff_requested = False
+                    state_label = self._state
+                    handoff_requested = self._preview_handoff_requested
+                    threshold = self._desired_threshold
+                    min_diameter_px = self._desired_blob_min_diameter_px
+                    max_diameter_px = self._desired_blob_max_diameter_px
+                    circularity_min = self._desired_circularity_min
+                    mask = self._static_mask if self._static_mask is not None else None
+                    fps = float(self._desired_fps or self._config.target_fps or IDLE_PREVIEW_FPS)
 
                 if handoff_requested:
                     with self._state_lock:
@@ -1085,6 +1073,10 @@ class ControlServer:
                             resume_event.clear()
                             self._log("preview loop resume acknowledged")
                             break
+                    continue
+
+                if state_label == STATE_RUNNING:
+                    stop_event.wait(0.05)
                     continue
 
                 frame_number = preview_frame_index + 1
@@ -1746,15 +1738,29 @@ class ControlServer:
                 )
             self._state = STATE_RUNNING
 
-        self._stop_preview_loop()
         backend: FrameBackend | None = None
         emitter: UDPFrameEmitter | None = None
         mask_to_apply = self._static_mask if mask_required else None
         try:
-            backend = self._ensure_backend()
-            self._apply_backend_settings(backend)
-            backend.start()
-            self._log(f"capture backend started mode={mode}")
+            backend = self._take_preview_backend_for_mask()
+            if backend is None:
+                self._log("capture backend source=fresh")
+                if not self._stop_preview_loop():
+                    with self._state_lock:
+                        self._state = prev_state
+                    self._start_preview_loop()
+                    return self._error_response(
+                        request_id=request_id,
+                        request_camera_id=camera_id,
+                        error_code=ERROR_INTERNAL,
+                        error_message="internal_error: start_failed: preview_stop_timeout",
+                    )
+                backend = self._ensure_backend()
+                self._apply_backend_settings(backend)
+                backend.start()
+                self._log(f"capture backend started mode={mode} source=fresh")
+            else:
+                self._log(f"capture backend started mode={mode} source=preview_handoff")
 
             emitter = UDPFrameEmitter(
                 camera_id=self._config.camera_id,
@@ -1766,7 +1772,7 @@ class ControlServer:
                 min_diameter_px=self._desired_blob_min_diameter_px,
                 max_diameter_px=self._desired_blob_max_diameter_px,
                 circularity_min=self._desired_circularity_min,
-                debug_preview=self._debug_preview,
+                debug_preview=None,
             )
             emitter.set_mask(mask_to_apply)
             emitter.start()
@@ -2097,7 +2103,7 @@ class ControlServer:
             preview_thread = self._preview_thread
             preview_backend = self._preview_backend
             if preview_thread is None or preview_backend is None or not preview_thread.is_alive():
-                self._log("mask init preview handoff unavailable")
+                self._log("preview handoff unavailable")
                 return None
             handoff_ready_event = self._preview_handoff_ready_event
             resume_event = self._preview_resume_event
@@ -2107,7 +2113,7 @@ class ControlServer:
                 handoff_ready_event.clear()
             if resume_event is not None:
                 resume_event.clear()
-        self._log("mask init preview handoff requested")
+        self._log("preview handoff requested")
 
         if handoff_ready_event is not None:
             handoff_ready_event.wait(timeout=PREVIEW_STOP_TIMEOUT_SECONDS)
@@ -2116,10 +2122,10 @@ class ControlServer:
             backend = self._preview_handoff_backend
             self._preview_handoff_backend = None
             if backend is not None:
-                self._log("mask init preview handoff acquired")
+                self._log("preview handoff acquired")
                 return backend
             self._preview_handoff_requested = False
-        self._log("mask init preview handoff failed")
+        self._log("preview handoff failed")
         return None
 
     def _make_backend(self) -> FrameBackend:

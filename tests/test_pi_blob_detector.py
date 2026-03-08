@@ -17,6 +17,7 @@ from src.pi.capture import (
     DummyBackend,
     DummyBackendConfig,
     STATE_MASK_INIT,
+    STATE_READY,
     detect_blobs,
     get_default_backend,
     resolve_debug_preview_enabled,
@@ -124,6 +125,65 @@ def test_mask_start_reuses_preview_backend_when_available(monkeypatch: pytest.Mo
     response = server._handle_mask_start("req-1", "pi-cam-01", {"frames": 2, "threshold": 200})
 
     assert response["ack"] is True
+
+
+def test_start_wand_capture_reuses_preview_backend_and_disables_emitter_preview(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=True))
+    server._state = STATE_READY
+    server._static_mask = np.ones((8, 8), dtype=bool)
+    preview_backend = DummyBackend(DummyBackendConfig(width=32, height=24, num_dots=0))
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(server, "_take_preview_backend_for_mask", lambda: preview_backend)
+    monkeypatch.setattr(
+        server,
+        "_stop_preview_loop",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("start should not stop preview loop")),
+    )
+
+    class FakeEmitter:
+        def __init__(
+            self,
+            *,
+            camera_id: str,
+            udp_host: str,
+            udp_port: int,
+            target_fps: float,
+            backend: DummyBackend,
+            threshold: int,
+            min_diameter_px: float | None,
+            max_diameter_px: float | None,
+            circularity_min: float,
+            time_us_fn=None,
+            max_frames=None,
+            mask=None,
+            debug_preview=None,
+        ) -> None:
+            captured["camera_id"] = camera_id
+            captured["backend"] = backend
+            captured["debug_preview"] = debug_preview
+            captured["started"] = False
+
+        def set_mask(self, mask: np.ndarray | None) -> None:
+            captured["mask"] = mask
+
+        def start(self) -> None:
+            captured["started"] = True
+
+        def stop(self) -> None:
+            return
+
+    monkeypatch.setattr("src.pi.capture.UDPFrameEmitter", FakeEmitter)
+
+    response = server._handle_start("req-1", "pi-cam-01", "wand_capture", {})
+
+    assert response["ack"] is True
+    assert captured["backend"] is preview_backend
+    assert captured["debug_preview"] is None
+    assert captured["mask"] is server._static_mask
+    assert captured["started"] is True
 
 
 def test_mask_start_does_not_touch_debug_preview_during_mask_init(

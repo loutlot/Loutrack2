@@ -219,6 +219,8 @@ ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@<PI_IP>
 - preview backend の handoff 中も preview thread 自体は終了させず待機させ、mask 完了後は同じ HighGUI owner thread 上で backend だけ再起動するようにした
 - handoff 時に backend を stop せず、そのまま `mask_start` 側へ引き渡すように修正し、`picamera2 backend not running` で mask 作成が失敗する race を解消した
 - `MASK_INIT` 中は `_start_preview_loop()` が resume を要求しないようにし、mask 途中で preview backend が勝手に再起動する競合を防止した
+- `start(mode=wand_capture)` でも preview backend handoff を使うようにし、wand 収録前後の preview 再起動 race を減らした
+- wand 収録中は UDP emitter 側から HighGUI を描画しないようにし、OpenCV window 操作を preview thread に一本化した
 - `MASK_INIT` 中は HighGUI/Qt を別スレッドから触らないため、debug preview window は開いたまま最後の描画フレームで freeze させ、再描画は mask 完了後の idle loop 再開まで行わないようにした
 - `ping` の `debug_preview_active` は preview thread / emitter だけでなく、保持中の debug window 表示状態も含めて返すようにした
 - `wand_gui` の Blob Detection Adjustment 設定を host ローカル（`logs/wand_gui_settings.json`）へ保存・再読込するようにした
