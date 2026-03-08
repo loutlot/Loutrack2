@@ -1460,6 +1460,7 @@ class ControlServer:
         try:
             backend = self._take_preview_backend_for_mask()
             if backend is None:
+                self._log("mask init backend source=fresh")
                 if not self._stop_preview_loop():
                     self._cancel_mask_state()
                     self._log("mask init aborted: preview backend did not stop cleanly")
@@ -1472,12 +1473,20 @@ class ControlServer:
                 backend = self._ensure_backend()
                 self._apply_backend_settings(backend)
                 backend.start()
+                self._log("mask init backend started source=fresh")
+            else:
+                self._log("mask init backend source=preview_handoff")
             with self._state_lock:
                 fps_for_timeout = float(self._desired_fps or self._config.target_fps or 1.0)
             estimated_capture_s = float(frames) / max(1.0, fps_for_timeout)
             mask_timeout_s = max(
                 float(self._config.mask_init_timeout_s),
                 estimated_capture_s * 4.0 + 2.0,
+            )
+            self._log(
+                "mask init capture begin "
+                f"frames={frames} timeout={mask_timeout_s:.1f}s hit_ratio={float(hit_ratio):.2f} "
+                f"min_area={min_area} dilate={dilate}"
             )
             mask, mask_pixels, last_frame = self._build_static_mask(
                 backend,
@@ -1489,6 +1498,10 @@ class ControlServer:
                 deadline_monotonic=time.perf_counter() + mask_timeout_s,
             )
             mask_ratio = mask_pixels / float(mask.size)
+            self._log(
+                "mask init capture finished "
+                f"pixels={mask_pixels} ratio={mask_ratio:.3f}"
+            )
             if mask_ratio > float(self._config.mask_max_ratio_warning):
                 warning = f"mask_ratio_high ({mask_ratio:.3f})"
         except TimeoutError as exc:
@@ -1523,7 +1536,9 @@ class ControlServer:
             )
         finally:
             if backend is not None:
+                self._log("mask init backend stopping")
                 backend.stop()
+                self._log("mask init backend stopped")
 
         with self._state_lock:
             self._static_mask = mask
@@ -1779,10 +1794,16 @@ class ControlServer:
     ) -> tuple[np.ndarray, int, np.ndarray | None]:
         hit_counts: np.ndarray | None = None
         last_frame: np.ndarray | None = None
+        self._log(f"mask init frame loop begin frames={frames}")
         for frame_index in range(frames):
             if deadline_monotonic is not None and time.perf_counter() > deadline_monotonic:
                 raise TimeoutError("mask_init_timed_out")
+            self._log(f"mask init frame {frame_index + 1}/{frames} capture begin")
             frame = backend.capture_array()
+            self._log(
+                "mask init frame "
+                f"{frame_index + 1}/{frames} capture ok shape={getattr(frame, 'shape', None)}"
+            )
             last_frame = frame
             gray = (
                 cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -1791,7 +1812,12 @@ class ControlServer:
             )
             if hit_counts is None:
                 hit_counts = np.zeros(gray.shape, dtype=np.uint16)
+                self._log(
+                    "mask init accumulator allocated "
+                    f"shape={gray.shape} dtype={hit_counts.dtype}"
+                )
             hit_counts += (gray > threshold).astype(np.uint16)
+            self._log(f"mask init frame {frame_index + 1}/{frames} accumulated")
 
             if self._debug_preview is not None and self._debug_preview.enabled:
                 blobs, stats = detect_blobs(
@@ -1815,12 +1841,15 @@ class ControlServer:
                 )
 
         assert hit_counts is not None
+        self._log("mask init postprocess begin")
         required = max(1, math.ceil(hit_ratio * frames))
+        self._log(f"mask init postprocess required_hits={required}")
         mask_uint8 = (hit_counts >= required).astype(np.uint8) * 255
 
         if min_area > 0:
             contours_info = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             contours = contours_info[0] if len(contours_info) == 2 else contours_info[1]
+            self._log(f"mask init postprocess contours={len(contours)}")
             for contour in contours:
                 if cv2.contourArea(contour) < min_area:
                     cv2.drawContours(mask_uint8, [contour], -1, 0, thickness=-1)
@@ -1829,8 +1858,10 @@ class ControlServer:
             kernel_size = max(1, dilate) * 2 + 1
             kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
             mask_uint8 = cv2.dilate(mask_uint8, kernel)
+            self._log(f"mask init postprocess dilate kernel={kernel_size}")
 
         mask = mask_uint8.astype(bool)
+        self._log(f"mask init postprocess complete pixels={int(np.count_nonzero(mask))}")
         return mask, int(np.count_nonzero(mask)), last_frame
 
     def _apply_backend_settings(self, backend: FrameBackend) -> None:
@@ -2001,11 +2032,13 @@ class ControlServer:
             preview_thread = self._preview_thread
             preview_backend = self._preview_backend
             if preview_thread is None or preview_backend is None or not preview_thread.is_alive():
+                self._log("mask init preview handoff unavailable")
                 return None
             stop_event = self._preview_stop_event
             self._preview_handoff_requested = True
             self._preview_handoff_backend = None
             self._preview_stop_event = None
+        self._log("mask init preview handoff requested")
 
         if stop_event is not None:
             stop_event.set()
@@ -2015,8 +2048,10 @@ class ControlServer:
             backend = self._preview_handoff_backend
             self._preview_handoff_backend = None
             if backend is not None:
+                self._log("mask init preview handoff acquired")
                 return backend
             self._preview_handoff_requested = False
+        self._log("mask init preview handoff failed")
         return None
 
     def _make_backend(self) -> FrameBackend:

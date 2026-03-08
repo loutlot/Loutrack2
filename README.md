@@ -211,6 +211,7 @@ ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@<PI_IP>
 - `mask_start` を既存 mask の上書き更新として扱えるようにし、Pi preview の mask 領域も薄い赤オーバーレイ + 輪郭で見やすくした
 - `mask_start` の host 側 timeout を 30 秒へ延長し、Pi 側でも preview 停止失敗時の早期エラーと mask 初期化 timeout 復旧を追加して `MASK_INIT` 張り付きが残らないようにした
 - Pi 側 `mask_start` は debug preview 用 backend をそのまま handoff して再利用するようにし、preview stop 後の `picamera2` 再 open race を避けた
+- Pi 側 `mask_start` の terminal debug log を増やし、preview handoff / backend source / frame capture / postprocess のどこで止まるかを切り分けやすくした
 - `wand_gui` の Blob Detection Adjustment 設定を host ローカル（`logs/wand_gui_settings.json`）へ保存・再読込するようにした
 - Pi idle preview は起動時に 1 回だけ立ち上げ、`ping` ごとの `picamera2` 再取得ループをやめるようにした
 - `src/host/wand_gui.py` を `Blob Detection Adjustment -> Mask Adjustment -> Wand Capture -> Extrinsics Generation` の 4 セグメント UI に再編し、段階的に進めやすい workflow 表示へ更新した
