@@ -110,13 +110,15 @@ debug preview で確認できる内容:
 - mask 領域のオーバーレイ
 - `threshold`, `diameter`, `circularity` 設定
 - `accepted/raw/rejected` の簡易診断
+- GUI で blob 調整中 / `mask_start` 実行中 / wand 収録中の状態表示
 
 補足:
 
 - `camera_id` は inventory（`src/deploy/hosts.ini`）と一致させる
 - 既定値を上書きしたい場合のみ `--camera-id "$CAMERA_ID"` を指定する
 - ポート変更時のみ `--tcp-port`（Pi 側）と `--port`（Host 側）を同じ値に合わせる
-- `--debug-preview` は debug 用。GUI が使えない headless 環境では window 作成に失敗し、自動で無効化される
+- `--debug-preview` は debug 用。Pi がデスクトップモードなら OpenCV window が常時更新される
+- GUI が使えない headless 環境では window 作成に失敗し、自動で無効化される
 
 ### 2.3 Pi 側 capture サービスの確認
 
@@ -232,9 +234,15 @@ python src/host/wand_gui.py --host <HOST_IP> --port 8765 --udp-port 5000
 
 2. ブラウザで `http://<HOST_IP>:8765/` を開く。
 
-3. `Refresh` → 対象カメラを選択 → `Ping` 実行。
+3. GUI のセグメント順に進める。基本導線は以下:
+   - `Blob Detection Adjustment`
+   - `Mask Adjustment`
+   - `Wand Capture`
+   - `Extrinsics Generation`
 
-4. スライダーを設定して `Apply To Selected`:
+4. `Refresh` → 対象カメラを選択 → `Ping` 実行。
+
+5. `Blob Detection Adjustment` でスライダーを調整して `Apply Blob Settings`:
    - `exposure_us`
    - `gain`
    - `fps`
@@ -242,16 +250,20 @@ python src/host/wand_gui.py --host <HOST_IP> --port 8765 --udp-port 5000
    - `threshold`
    - `circularity_min`
    - `blob min/max diameter px`
+   - Pi を `--debug-preview` 付きで起動していれば、Pi デスクトップ上の preview を見ながら blob 条件を詰められる
 
-5. `Mask Start` 実行。
+6. `Mask Adjustment` で `Build Mask` 実行。
    - `mask threshold` と `mask seconds` は GUI 側設定を使用する
    - `mask seconds * fps` で内部の `frames` が計算される
+   - 実行中は Pi preview に `MASK_INIT` が表示され、完了後は mask overlay が残る
+   - やり直す場合は `Clear Mask` を使う
 
-6. `Start` 実行後、wand を空間全体で 60 秒程度動かす（20 ポーズ以上）。
+7. `Wand Capture` で `Start Wand Capture` 実行後、wand を空間全体で 60 秒程度動かす（20 ポーズ以上）。
+   - 収録中も Pi preview が継続し、wand 操作系の見え方を遠隔確認できる
 
-7. `Stop` 実行。
+8. `Stop Capture` 実行。
 
-8. 収録後、GUI の `Generate Extrinsics` を実行:
+9. 収録後、`Extrinsics Generation` で `Generate Extrinsics` を実行:
    - `Intrinsics Dir`: 例 `calibration`
    - `Log Path`: 収録ログ JSONL のパス
    - `Output Path`: 例 `calibration/calibration_extrinsics_v1.json`

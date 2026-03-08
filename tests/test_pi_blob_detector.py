@@ -8,7 +8,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.pi.capture import DummyBackend, DummyBackendConfig, detect_blobs
+from src.pi.capture import ControlServer, ControlServerConfig, DummyBackend, DummyBackendConfig, detect_blobs
 
 
 def _expected_centers(cfg: DummyBackendConfig, frame_index: int) -> list[tuple[int, int]]:
@@ -45,8 +45,9 @@ def test_detect_blobs_finds_three_dots_with_expected_centroids() -> None:
     frame_again = backend_b.next_frame()
     assert np.array_equal(frame, frame_again)
 
-    blobs = detect_blobs(frame, threshold=200)
+    blobs, diagnostics = detect_blobs(frame, threshold=200)
     assert len(blobs) == 3
+    assert diagnostics["accepted_blob_count"] == 3
 
     expected = _expected_centers(config, frame_index=0)
     for blob, (expected_x, expected_y) in zip(blobs, expected):
@@ -58,5 +59,18 @@ def test_detect_blobs_finds_three_dots_with_expected_centroids() -> None:
 def test_detect_blobs_threshold_255_returns_zero() -> None:
     backend = DummyBackend(DummyBackendConfig(width=120, height=90, num_dots=3, seed=123, dot_radius=2))
     frame = backend.next_frame()
-    blobs = detect_blobs(frame, threshold=255)
+    blobs, diagnostics = detect_blobs(frame, threshold=255)
     assert blobs == []
+    assert diagnostics["accepted_blob_count"] == 0
+
+
+def test_control_server_ping_includes_blob_diagnostics() -> None:
+    server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=False))
+    response = server._handle_ping("req-1", "pi-cam-01")
+
+    assert response["ack"] is True
+    result = response["result"]
+    assert isinstance(result, dict)
+    assert result["debug_preview_enabled"] is False
+    assert result["debug_preview_active"] is False
+    assert result["blob_diagnostics"]["threshold"] == 200

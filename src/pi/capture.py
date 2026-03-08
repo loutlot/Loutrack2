@@ -37,6 +37,7 @@ MASK_MIN_AREA_PX = 4
 MASK_DILATE_PX = 2
 MASK_MAX_RATIO_WARNING = 0.4
 DEFAULT_CIRCULARITY_MIN = 0.0
+IDLE_PREVIEW_FPS = 15.0
 
 MAX_LINE_BYTES = 65536
 LINE_TIMEOUT_SECONDS = 2.0
@@ -364,11 +365,12 @@ class DebugPreview:
         mask: np.ndarray | None,
         stats: dict[str, object],
         camera_id: str,
+        extra_lines: list[str] | None = None,
     ) -> None:
         if not self._enabled:
             return
         try:
-            canvas = self._build_canvas(frame, blobs, mask, stats, camera_id)
+            canvas = self._build_canvas(frame, blobs, mask, stats, camera_id, extra_lines)
             if not self._initialized:
                 cv2.namedWindow(self._window_name, cv2.WINDOW_NORMAL)
                 self._initialized = True
@@ -395,6 +397,7 @@ class DebugPreview:
         mask: np.ndarray | None,
         stats: dict[str, object],
         camera_id: str,
+        extra_lines: list[str] | None,
     ) -> np.ndarray:
         if frame.ndim == 2:
             canvas = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
@@ -425,6 +428,8 @@ class DebugPreview:
                 f"circ>={stats.get('circularity_min')}"
             ),
         ]
+        if extra_lines:
+            lines.extend(extra_lines)
         y = 24
         for line in lines:
             cv2.putText(
@@ -777,6 +782,9 @@ class ControlServer:
 
         self._backend: FrameBackend | None = None
         self._udp_emitter: UDPFrameEmitter | None = None
+        self._preview_backend: FrameBackend | None = None
+        self._preview_thread: threading.Thread | None = None
+        self._preview_stop_event: threading.Event | None = None
 
         self._desired_exposure_us: int | None = None
         self._desired_gain: float | None = None
@@ -793,6 +801,17 @@ class ControlServer:
         self._debug_preview: DebugPreview | None = (
             DebugPreview() if self._config.debug_preview else None
         )
+        self._last_blob_diagnostics: dict[str, object] = {
+            "threshold": self._desired_threshold,
+            "min_diameter_px": self._desired_blob_min_diameter_px,
+            "max_diameter_px": self._desired_blob_max_diameter_px,
+            "circularity_min": self._desired_circularity_min,
+            "raw_contour_count": 0,
+            "accepted_blob_count": 0,
+            "rejected_by_diameter": 0,
+            "rejected_by_circularity": 0,
+            "last_blob_count": 0,
+        }
 
     def serve_forever(self) -> None:
         self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -820,6 +839,7 @@ class ControlServer:
 
     def shutdown(self) -> None:
         self._running = False
+        self._stop_preview_loop()
         emitter = self._udp_emitter
         self._udp_emitter = None
         if emitter is not None:
@@ -836,6 +856,105 @@ class ControlServer:
             except OSError:
                 pass
             self._server_socket = None
+
+    def _start_preview_loop(self) -> None:
+        preview = self._debug_preview
+        if preview is None or not preview.enabled:
+            return
+
+        with self._state_lock:
+            if not self._running or self._state == STATE_RUNNING:
+                return
+            if self._preview_thread is not None and self._preview_thread.is_alive():
+                return
+            stop_event = threading.Event()
+            thread = threading.Thread(
+                target=self._preview_loop,
+                args=(stop_event,),
+                daemon=True,
+            )
+            self._preview_stop_event = stop_event
+            self._preview_thread = thread
+
+        thread.start()
+
+    def _stop_preview_loop(self) -> None:
+        with self._state_lock:
+            stop_event = self._preview_stop_event
+            thread = self._preview_thread
+            self._preview_stop_event = None
+
+        if stop_event is not None:
+            stop_event.set()
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=1.0)
+
+    def _preview_loop(self, stop_event: threading.Event) -> None:
+        try:
+            backend = self._make_backend()
+            self._apply_backend_settings(backend)
+            backend.start()
+        except BackendUnavailableError:
+            return
+        except Exception:
+            return
+
+        with self._state_lock:
+            self._preview_backend = backend
+
+        try:
+            next_tick = time.perf_counter()
+            while self._running and not stop_event.is_set():
+                with self._state_lock:
+                    if self._state == STATE_RUNNING:
+                        return
+                    state_label = self._state
+                    threshold = self._desired_threshold
+                    min_diameter_px = self._desired_blob_min_diameter_px
+                    max_diameter_px = self._desired_blob_max_diameter_px
+                    circularity_min = self._desired_circularity_min
+                    mask = self._static_mask if self._static_mask is not None else None
+                    fps = float(self._desired_fps or self._config.target_fps or IDLE_PREVIEW_FPS)
+
+                frame = backend.capture_array()
+                blobs, stats = detect_blobs(
+                    frame,
+                    threshold=threshold,
+                    mask=mask,
+                    min_diameter_px=min_diameter_px,
+                    max_diameter_px=max_diameter_px,
+                    circularity_min=circularity_min,
+                )
+                self._record_blob_diagnostics(stats)
+                self._show_debug_preview(
+                    frame=frame,
+                    blobs=blobs,
+                    mask=mask,
+                    stats=stats,
+                    extra_lines=[
+                        f"state={state_label}",
+                        "preview=debug-idle",
+                    ],
+                )
+
+                preview_fps = max(1.0, min(fps, IDLE_PREVIEW_FPS))
+                next_tick += 1.0 / preview_fps
+                wait_s = next_tick - time.perf_counter()
+                if wait_s > 0.0:
+                    stop_event.wait(wait_s)
+                else:
+                    next_tick = time.perf_counter()
+        finally:
+            try:
+                backend.stop()
+            except Exception:
+                pass
+            with self._state_lock:
+                if self._preview_backend is backend:
+                    self._preview_backend = None
+                if self._preview_thread is threading.current_thread():
+                    self._preview_thread = None
+                    self._preview_stop_event = None
 
     def _handle_connection(self, conn: socket.socket) -> None:
         buffer = bytearray()
@@ -1241,15 +1360,18 @@ class ControlServer:
                 )
             self._state = STATE_MASK_INIT
 
+        self._stop_preview_loop()
         backend: FrameBackend | None = None
         mask: np.ndarray | None = None
         mask_pixels = 0
         mask_ratio = 0.0
         warning: str | None = None
+        last_frame: np.ndarray | None = None
         try:
             backend = self._ensure_backend()
+            self._apply_backend_settings(backend)
             backend.start()
-            mask, mask_pixels = self._build_static_mask(
+            mask, mask_pixels, last_frame = self._build_static_mask(
                 backend,
                 frames,
                 threshold,
@@ -1262,6 +1384,7 @@ class ControlServer:
                 warning = f"mask_ratio_high ({mask_ratio:.3f})"
         except BackendUnavailableError as exc:
             self._cancel_mask_state()
+            self._start_preview_loop()
             return self._error_response(
                 request_id=request_id,
                 request_camera_id=request_camera_id,
@@ -1270,6 +1393,7 @@ class ControlServer:
             )
         except Exception as exc:
             self._cancel_mask_state()
+            self._start_preview_loop()
             return self._error_response(
                 request_id=request_id,
                 request_camera_id=request_camera_id,
@@ -1286,6 +1410,28 @@ class ControlServer:
             self._mask_ratio = mask_ratio
             self._mask_warning = warning
             self._state = STATE_READY
+
+        if last_frame is not None:
+            final_blobs, final_stats = detect_blobs(
+                last_frame,
+                threshold=self._desired_threshold,
+                mask=mask,
+                min_diameter_px=self._desired_blob_min_diameter_px,
+                max_diameter_px=self._desired_blob_max_diameter_px,
+                circularity_min=self._desired_circularity_min,
+            )
+            self._record_blob_diagnostics(final_stats)
+            self._show_debug_preview(
+                frame=last_frame,
+                blobs=final_blobs,
+                mask=mask,
+                stats=final_stats,
+                extra_lines=[
+                    f"state={STATE_READY}",
+                    "mask=ready",
+                ],
+            )
+        self._start_preview_loop()
 
         result: dict[str, object] = {
             "mask_pixels": mask_pixels,
@@ -1323,6 +1469,7 @@ class ControlServer:
         emitter = self._udp_emitter
         if emitter is not None:
             emitter.set_mask(None)
+        self._start_preview_loop()
 
         return self._ok_response(
             request_id=request_id,
@@ -1372,21 +1519,13 @@ class ControlServer:
                 )
             self._state = STATE_RUNNING
 
+        self._stop_preview_loop()
         backend: FrameBackend | None = None
         emitter: UDPFrameEmitter | None = None
         mask_to_apply = self._static_mask if mask_required else None
         try:
             backend = self._ensure_backend()
-
-            if self._desired_exposure_us is not None:
-                backend.set_exposure_us(int(self._desired_exposure_us))
-            if self._desired_gain is not None:
-                backend.set_gain(float(self._desired_gain))
-            if self._desired_fps is not None:
-                backend.set_fps(int(self._desired_fps))
-            if self._desired_focus is not None:
-                backend.set_focus(float(self._desired_focus))
-
+            self._apply_backend_settings(backend)
             backend.start()
 
             emitter = UDPFrameEmitter(
@@ -1412,6 +1551,7 @@ class ControlServer:
                 self._state = prev_state
                 self._udp_emitter = None
                 self._backend = None
+            self._start_preview_loop()
             return self._error_response(
                 request_id=request_id,
                 request_camera_id=camera_id,
@@ -1427,6 +1567,7 @@ class ControlServer:
                 self._state = prev_state
                 self._udp_emitter = None
                 self._backend = None
+            self._start_preview_loop()
             return self._error_response(
                 request_id=request_id,
                 request_camera_id=camera_id,
@@ -1481,6 +1622,7 @@ class ControlServer:
 
         with self._state_lock:
             self._state = STATE_READY if self._static_mask is not None else STATE_IDLE
+        self._start_preview_loop()
 
         return self._ok_response(request_id, request_camera_id)
 
@@ -1503,10 +1645,12 @@ class ControlServer:
         hit_ratio: float,
         min_area: int,
         dilate: int,
-    ) -> tuple[np.ndarray, int]:
+    ) -> tuple[np.ndarray, int, np.ndarray | None]:
         hit_counts: np.ndarray | None = None
-        for _ in range(frames):
+        last_frame: np.ndarray | None = None
+        for frame_index in range(frames):
             frame = backend.capture_array()
+            last_frame = frame
             gray = (
                 cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 if frame.ndim == 3
@@ -1515,6 +1659,27 @@ class ControlServer:
             if hit_counts is None:
                 hit_counts = np.zeros(gray.shape, dtype=np.uint16)
             hit_counts += (gray > threshold).astype(np.uint16)
+
+            if self._debug_preview is not None and self._debug_preview.enabled:
+                blobs, stats = detect_blobs(
+                    frame,
+                    threshold=self._desired_threshold,
+                    min_diameter_px=self._desired_blob_min_diameter_px,
+                    max_diameter_px=self._desired_blob_max_diameter_px,
+                    circularity_min=self._desired_circularity_min,
+                )
+                self._record_blob_diagnostics(stats)
+                self._show_debug_preview(
+                    frame=frame,
+                    blobs=blobs,
+                    mask=None,
+                    stats=stats,
+                    extra_lines=[
+                        f"state={STATE_MASK_INIT}",
+                        f"mask_capture={frame_index + 1}/{frames}",
+                        f"mask_thr={threshold}",
+                    ],
+                )
 
         assert hit_counts is not None
         required = max(1, math.ceil(hit_ratio * frames))
@@ -1533,7 +1698,42 @@ class ControlServer:
             mask_uint8 = cv2.dilate(mask_uint8, kernel)
 
         mask = mask_uint8.astype(bool)
-        return mask, int(np.count_nonzero(mask))
+        return mask, int(np.count_nonzero(mask)), last_frame
+
+    def _apply_backend_settings(self, backend: FrameBackend) -> None:
+        if self._desired_exposure_us is not None:
+            backend.set_exposure_us(int(self._desired_exposure_us))
+        if self._desired_gain is not None:
+            backend.set_gain(float(self._desired_gain))
+        if self._desired_fps is not None:
+            backend.set_fps(int(self._desired_fps))
+        if self._desired_focus is not None:
+            backend.set_focus(float(self._desired_focus))
+
+    def _record_blob_diagnostics(self, stats: dict[str, object]) -> None:
+        with self._state_lock:
+            self._last_blob_diagnostics = dict(stats)
+
+    def _show_debug_preview(
+        self,
+        *,
+        frame: np.ndarray,
+        blobs: list[dict[str, float]],
+        mask: np.ndarray | None,
+        stats: dict[str, object],
+        extra_lines: list[str] | None = None,
+    ) -> None:
+        preview = self._debug_preview
+        if preview is None or not preview.enabled:
+            return
+        preview.show(
+            frame=frame,
+            blobs=blobs,
+            mask=mask,
+            stats=stats,
+            camera_id=self._config.camera_id,
+            extra_lines=extra_lines,
+        )
 
     def _set_target_fps(self, fps: int) -> None:
         fps_value = int(fps)
@@ -1544,11 +1744,12 @@ class ControlServer:
             self._desired_fps = fps_value
             emitter = self._udp_emitter
             backend = self._backend
+            preview_backend = self._preview_backend
         if emitter is not None:
             emitter.set_target_fps(float(fps_value))
-        if backend is not None:
+        for active_backend in {item for item in (backend, preview_backend) if item is not None}:
             try:
-                backend.set_fps(fps_value)
+                active_backend.set_fps(fps_value)
             except Exception:
                 pass
 
@@ -1557,9 +1758,10 @@ class ControlServer:
         with self._state_lock:
             self._desired_exposure_us = value
             backend = self._backend
-        if backend is not None:
+            preview_backend = self._preview_backend
+        for active_backend in {item for item in (backend, preview_backend) if item is not None}:
             try:
-                backend.set_exposure_us(value)
+                active_backend.set_exposure_us(value)
             except Exception:
                 pass
 
@@ -1568,9 +1770,10 @@ class ControlServer:
         with self._state_lock:
             self._desired_gain = gain_value
             backend = self._backend
-        if backend is not None:
+            preview_backend = self._preview_backend
+        for active_backend in {item for item in (backend, preview_backend) if item is not None}:
             try:
-                backend.set_gain(gain_value)
+                active_backend.set_gain(gain_value)
             except Exception:
                 pass
 
@@ -1579,9 +1782,10 @@ class ControlServer:
         with self._state_lock:
             self._desired_focus = focus_value
             backend = self._backend
-        if backend is not None:
+            preview_backend = self._preview_backend
+        for active_backend in {item for item in (backend, preview_backend) if item is not None}:
             try:
-                backend.set_focus(focus_value)
+                active_backend.set_focus(focus_value)
             except Exception:
                 pass
 
@@ -1623,6 +1827,7 @@ class ControlServer:
                 pass
 
     def _handle_ping(self, request_id: str, request_camera_id: str) -> dict[str, object]:
+        self._start_preview_loop()
         with self._state_lock:
             diagnostics = {
                 "state": self._state,
@@ -1637,20 +1842,31 @@ class ControlServer:
                 "mask_ratio": self._mask_ratio,
                 "mask_pixels": self._mask_pixels,
                 "mask_warning": self._mask_warning,
+                "debug_preview_enabled": bool(self._debug_preview is not None and self._debug_preview.enabled),
             }
             emitter = self._udp_emitter
-        if emitter is not None:
-            diagnostics["blob_diagnostics"] = emitter.get_last_detection_stats()
+            preview_thread = self._preview_thread
+            blob_diagnostics = dict(self._last_blob_diagnostics)
+        diagnostics["debug_preview_active"] = bool(
+            emitter is not None or (preview_thread is not None and preview_thread.is_alive())
+        )
+        diagnostics["blob_diagnostics"] = (
+            emitter.get_last_detection_stats() if emitter is not None else blob_diagnostics
+        )
         return self._ok_response(request_id, request_camera_id, result=diagnostics)
 
     def _ensure_backend(self) -> FrameBackend:
         with self._state_lock:
             backend = self._backend
-            backend_name = str(self._config.backend)
 
         if backend is not None:
             return backend
 
+        return self._make_backend()
+
+    def _make_backend(self) -> FrameBackend:
+        with self._state_lock:
+            backend_name = str(self._config.backend)
         if backend_name == "dummy":
             return DummyBackend()
         if backend_name == "picamera2":
@@ -1718,7 +1934,7 @@ def parse_args() -> ControlServerConfig:
     _ = parser.add_argument(
         "--debug-preview",
         action="store_true",
-        help="Show OpenCV debug preview on the Pi while streaming",
+        help="Show OpenCV debug preview on the Pi during idle, mask init, and streaming",
     )
 
     namespace = parser.parse_args()

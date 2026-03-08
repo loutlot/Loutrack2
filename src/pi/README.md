@@ -27,7 +27,7 @@ On Raspberry Pi OS, use the real camera backend.
   --udp-dest 255.255.255.255:5000
 ```
 
-To show a local OpenCV debug preview on the Pi while streaming, add `--debug-preview`.
+To show a local OpenCV debug preview on the Pi during idle, mask setup, and wand capture, add `--debug-preview`.
 
 ```bash
 .venv/bin/python src/pi/capture.py \
@@ -37,7 +37,7 @@ To show a local OpenCV debug preview on the Pi while streaming, add `--debug-pre
   --debug-preview
 ```
 
-The preview is debug-only. It overlays accepted blobs, the active mask, and current detection parameters. If OpenCV window creation fails, the service keeps running and the preview disables itself.
+The preview is debug-only. It stays active while the service is idle, while `mask_start` is building the mask, and while frames are streaming. It overlays accepted blobs, the active mask, and current detection parameters. If OpenCV window creation fails, the service keeps running and the preview disables itself.
 
 If `picamera2` is not available, the service stays alive (e.g. `ping` still works) and `start` returns `ack:false` with `error_code=6`.
 

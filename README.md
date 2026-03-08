@@ -188,7 +188,7 @@ ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@<PI_IP>
 - `schema/calibration_extrinsics_v1.json` を追加し、`schema/README.md` に出力形式を追記した
 - `src/host/geo.py` が calibration ディレクトリから extrinsics を自動ロードできるようにした
 - `src/host/wand_session.py` が session metadata JSON を `logs/wand_sessions/` に永続化するようにした
-- `src/host/wand_gui.py` を追加し、受動発見 + inventory マージ前提の映像なし Web UI を実装した
+- `src/host/wand_gui.py` を追加し、受動発見 + inventory マージ前提の wand Web UI を実装した
 - `tests/test_wand_extrinsics.py` を追加し、synthetic wand 観測から solver と geo loader の接続を検証した
 - `tests/test_wand_gui.py` を追加し、GUI 状態管理の同期操作を smoke test で検証した
 - `docs/wand_extrinsics_plan.md` を現実装ベースの進捗・残課題へ更新した
@@ -200,6 +200,8 @@ ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@<PI_IP>
 - `wand_gui` のスライダーを 200ms デバウンスの自動適用に変更し、未適用値が定期ポーリングで巻き戻る挙動を解消した
 - `src/pi/capture.py` に `--debug-preview` を追加し、debug 時のみ Pi 上で OpenCV プレビューを描画できるようにした
 - `docs/next_steps_wand_runbook.md` に Pi 側 `--debug-preview` 起動手順と確認できる内容を追記した
+- `src/pi/capture.py` の debug preview を idle / mask 初期化 / wand 収録の各状態で継続表示するようにし、Pi デスクトップから blob 調整・mask 結果・wand 操作を遠隔確認しやすくした
+- `src/host/wand_gui.py` を `Blob Detection Adjustment -> Mask Adjustment -> Wand Capture -> Extrinsics Generation` の 4 セグメント UI に再編し、段階的に進めやすい workflow 表示へ更新した
 - `docs/next_steps_wand_runbook.md` を venv 前提（`python3 -m venv .venv --system-site-packages`）へ更新し、Host 手順の `python` 実行を統一した
 - `docs/next_steps_wand_runbook.md` に Pi 側 venv 準備・`hostnamectl --static` による `camera_id` 設定・capture サービス起動手順を追記した（port は既定 8554 前提）
 - `src/pi/capture.py` の `camera_id` 既定値を device name 由来に変更し、`--camera-id` 未指定時は `hostnamectl --static`（失敗時は `socket.gethostname()`）を使用するようにした
@@ -247,4 +249,3 @@ MIT License
 ## 参考プロジェクト
 
 - [Low-Cost-Mocap](https://github.com/jyjblrd/Low-Cost-Mocap) - jyjblrd氏の参考実装
-

@@ -5,7 +5,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from host.wand_gui import WandGuiState
+from host.wand_gui import HTML_PAGE, WandGuiState
 from host.wand_session import CameraTarget
 
 
@@ -55,6 +55,11 @@ def test_gui_state_apply_and_command() -> None:
 
     snapshot = state.get_state()
     assert len(snapshot["cameras"]) == 2
+    assert snapshot["workflow"]["active_segment"] == "mask"
+    assert "Blob Detection Adjustment" in HTML_PAGE
+    assert "Mask Adjustment" in HTML_PAGE
+    assert "Wand Capture" in HTML_PAGE
+    assert "Extrinsics Generation" in HTML_PAGE
 
     applied = state.apply_config(
         {
@@ -84,6 +89,9 @@ def test_gui_state_apply_and_command() -> None:
     result = state.run_command({"command": "ping", "camera_ids": ["pi-cam-01"]})
     assert "ping" in result
 
+    mask_cleared = state.run_command({"command": "mask_stop", "camera_ids": ["pi-cam-01"]})
+    assert "mask_stop" in mask_cleared
+
     state._extrinsics_solver = lambda **kwargs: {  # type: ignore[attr-defined]
         "reference_camera_id": "pi-cam-01",
         "cameras": [{"camera_id": "pi-cam-01"}, {"camera_id": "pi-cam-02"}],
@@ -97,6 +105,9 @@ def test_gui_state_apply_and_command() -> None:
     )
     assert generated["generate_extrinsics"]["ok"] is True
     assert generated["generate_extrinsics"]["camera_count"] == 2
+
+    snapshot = state.get_state()
+    assert snapshot["workflow"]["extrinsics_ready"] is True
 
 
 if __name__ == "__main__":

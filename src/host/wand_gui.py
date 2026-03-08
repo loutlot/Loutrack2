@@ -31,144 +31,476 @@ HTML_PAGE = """<!doctype html>
   <title>Loutrack2 Wand Control</title>
   <style>
     :root {
-      --bg: #f2efe8;
-      --panel: #fffaf2;
-      --ink: #1d2a33;
-      --accent: #b24a2c;
-      --accent-2: #2f6c73;
-      --line: #d8cdbf;
+      --bg: #f3efe5;
+      --panel: rgba(255, 251, 245, 0.92);
+      --panel-strong: #fffdf8;
+      --ink: #1f2a30;
+      --muted: #66747c;
+      --line: rgba(79, 71, 59, 0.14);
+      --warm: #c15b31;
+      --teal: #1f6b70;
+      --olive: #647447;
+      --danger: #9e3f33;
+      --shadow: 0 18px 40px rgba(31, 42, 48, 0.09);
     }
+    * { box-sizing: border-box; }
     body {
       margin: 0;
-      font-family: "Avenir Next", "Helvetica Neue", sans-serif;
       color: var(--ink);
-      background: radial-gradient(circle at top left, #fff8e8, var(--bg) 58%);
+      font-family: "Avenir Next", "Helvetica Neue", sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(255, 248, 230, 0.95), transparent 32%),
+        radial-gradient(circle at top right, rgba(203, 234, 236, 0.42), transparent 28%),
+        linear-gradient(180deg, #f8f3e8 0%, #f0ebe0 100%);
     }
     main {
-      max-width: 1100px;
+      max-width: 1240px;
       margin: 0 auto;
-      padding: 24px;
+      padding: 28px 20px 40px;
     }
-    h1 { margin: 0 0 12px; font-size: 32px; }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      gap: 16px;
+    h1 {
+      margin: 0;
+      font-size: clamp(34px, 5vw, 52px);
+      line-height: 1;
+      letter-spacing: -0.03em;
     }
-    .card {
+    h2, h3 {
+      margin: 0;
+      letter-spacing: -0.02em;
+    }
+    p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+    .hero,
+    .card,
+    .step-card {
       background: var(--panel);
       border: 1px solid var(--line);
-      border-radius: 18px;
-      padding: 18px;
-      box-shadow: 0 10px 30px rgba(29, 42, 51, 0.08);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
     }
-    label { display: block; margin: 12px 0 6px; font-weight: 600; }
-    input[type="range"] { width: 100%; }
+    .hero {
+      padding: 24px;
+      display: grid;
+      gap: 18px;
+    }
+    .hero-top {
+      display: grid;
+      gap: 12px;
+      align-items: start;
+    }
+    .hero-actions,
+    .button-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .hero-note {
+      padding: 14px 16px;
+      border-radius: 18px;
+      background: linear-gradient(135deg, rgba(31, 107, 112, 0.12), rgba(193, 91, 49, 0.10));
+      color: var(--ink);
+    }
+    .step-rail {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px;
+    }
+    .step-pill {
+      padding: 14px 16px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.66);
+      min-height: 88px;
+      display: grid;
+      gap: 6px;
+    }
+    .step-pill small,
+    .eyebrow {
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .step-pill[data-status="current"] {
+      border-color: rgba(193, 91, 49, 0.38);
+      background: rgba(255, 242, 235, 0.92);
+    }
+    .step-pill[data-status="done"] {
+      border-color: rgba(100, 116, 71, 0.30);
+      background: rgba(244, 249, 236, 0.92);
+    }
+    .hero-metrics,
+    .camera-summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 10px;
+    }
+    .metric {
+      padding: 14px 16px;
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.7);
+      border: 1px solid var(--line);
+    }
+    .metric strong {
+      display: block;
+      font-size: 26px;
+      line-height: 1.1;
+      margin-top: 6px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.95fr);
+      gap: 18px;
+      margin-top: 18px;
+    }
+    .stack {
+      display: grid;
+      gap: 18px;
+    }
+    .card,
+    .step-card {
+      padding: 22px;
+    }
+    .step-card {
+      position: relative;
+      overflow: hidden;
+    }
+    .step-card::after {
+      content: "";
+      position: absolute;
+      inset: auto -40px -40px auto;
+      width: 140px;
+      height: 140px;
+      border-radius: 999px;
+      opacity: 0.12;
+      background: radial-gradient(circle, var(--step-accent, var(--warm)), transparent 70%);
+      pointer-events: none;
+    }
+    .step-card[data-status="current"] {
+      border-color: rgba(193, 91, 49, 0.32);
+    }
+    .step-card[data-status="done"] {
+      border-color: rgba(100, 116, 71, 0.30);
+    }
+    .step-card[data-step="blob"] { --step-accent: var(--warm); }
+    .step-card[data-step="mask"] { --step-accent: var(--teal); }
+    .step-card[data-step="wand"] { --step-accent: var(--olive); }
+    .step-card[data-step="extrinsics"] { --step-accent: var(--danger); }
+    .step-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: start;
+      margin-bottom: 12px;
+    }
+    .step-title {
+      display: grid;
+      gap: 6px;
+    }
+    .step-status {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 8px 12px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      background: rgba(31, 42, 48, 0.06);
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .step-card[data-status="current"] .step-status {
+      background: rgba(193, 91, 49, 0.14);
+      color: var(--warm);
+    }
+    .step-card[data-status="done"] .step-status {
+      background: rgba(100, 116, 71, 0.16);
+      color: var(--olive);
+    }
+    .step-summary {
+      margin-bottom: 14px;
+      padding: 12px 14px;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.74);
+      border: 1px solid var(--line);
+      color: var(--ink);
+    }
+    .controls-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px 18px;
+    }
+    label {
+      display: grid;
+      gap: 6px;
+      font-weight: 700;
+      font-size: 14px;
+      color: var(--ink);
+    }
+    input[type="range"],
+    input[type="text"] {
+      width: 100%;
+    }
+    input[type="text"] {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px 14px;
+      background: rgba(255, 255, 255, 0.82);
+      color: var(--ink);
+      font: inherit;
+    }
+    .hint {
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 500;
+    }
     button {
       border: 0;
       border-radius: 999px;
-      padding: 10px 14px;
-      margin: 6px 8px 0 0;
-      background: var(--accent);
+      padding: 11px 16px;
+      background: var(--warm);
       color: white;
       cursor: pointer;
+      font: inherit;
+      font-weight: 700;
+      letter-spacing: 0.01em;
     }
-    button.secondary { background: var(--accent-2); }
+    button.secondary { background: var(--teal); }
+    button.ghost {
+      background: rgba(31, 42, 48, 0.08);
+      color: var(--ink);
+    }
+    .selection-list {
+      margin-top: 14px;
+      overflow-x: auto;
+    }
     table {
       width: 100%;
       border-collapse: collapse;
-      margin-top: 10px;
       font-size: 14px;
+      min-width: 760px;
     }
     th, td {
       text-align: left;
-      padding: 10px 8px;
+      padding: 12px 10px;
       border-bottom: 1px solid var(--line);
+      vertical-align: middle;
     }
-    pre {
-      background: #1d2a33;
-      color: #f7f3ea;
-      padding: 12px;
-      border-radius: 12px;
+    th {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 5px 10px;
+      font-size: 12px;
+      font-weight: 700;
+      background: rgba(31, 42, 48, 0.08);
+      color: var(--ink);
+    }
+    .badge.ok {
+      background: rgba(100, 116, 71, 0.16);
+      color: var(--olive);
+    }
+    .badge.warn {
+      background: rgba(193, 91, 49, 0.14);
+      color: var(--warm);
+    }
+    .badge.muted {
+      background: rgba(31, 42, 48, 0.06);
+      color: var(--muted);
+    }
+    .console {
+      background: #202a31;
+      color: #f5efe2;
+      padding: 14px;
+      border-radius: 18px;
       overflow: auto;
-      min-height: 120px;
+      min-height: 240px;
+      white-space: pre-wrap;
+    }
+    @media (max-width: 980px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+    @media (max-width: 720px) {
+      main {
+        padding: 20px 14px 32px;
+      }
+      .controls-grid {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 </head>
 <body>
   <main>
-    <h1>Wand Control Console</h1>
-    <div class="grid">
-      <section class="card">
-        <h2>Sync Sliders</h2>
-        <label for="exposure">Exposure (<span id="exposureValue"></span> us)</label>
-        <input id="exposure" type="range" min="100" max="30000" step="100" value="1200">
-        <label for="gain">Gain (<span id="gainValue"></span>)</label>
-        <input id="gain" type="range" min="1" max="16" step="0.1" value="4">
-        <label for="fps">FPS (<span id="fpsValue"></span>)</label>
-        <input id="fps" type="range" min="15" max="120" step="1" value="80">
-        <label for="focus">Focus (<span id="focusValue"></span>)</label>
-        <input id="focus" type="range" min="0.0" max="10.0" step="0.001" value="5.215">
-        <label for="threshold">Threshold (<span id="thresholdValue"></span>)</label>
-        <input id="threshold" type="range" min="0" max="255" step="1" value="200">
-        <label for="circularity">Circularity Min (<span id="circularityValue"></span>)</label>
-        <input id="circularity" type="range" min="0.0" max="1.0" step="0.01" value="0.0">
-        <label for="blobMin">Blob Min Diameter px (<span id="blobMinValue"></span>)</label>
-        <input id="blobMin" type="range" min="0" max="100" step="0.5" value="0">
-        <label for="blobMax">Blob Max Diameter px (<span id="blobMaxValue"></span>)</label>
-        <input id="blobMax" type="range" min="0" max="100" step="0.5" value="0">
-        <button id="applyConfig">Apply To Selected</button>
-      </section>
-      <section class="card">
-        <h2>Commands</h2>
-        <label for="maskThreshold">Mask Threshold (<span id="maskThresholdValue"></span>)</label>
-        <input id="maskThreshold" type="range" min="0" max="255" step="1" value="200">
-        <label for="maskSeconds">Mask Seconds (<span id="maskSecondsValue"></span>)</label>
-        <input id="maskSeconds" type="range" min="0.1" max="5.0" step="0.1" value="0.5">
+    <section class="hero">
+      <div class="hero-top">
+        <div>
+          <div class="eyebrow">Loutrack2 Wand Workflow</div>
+          <h1>Blob -> Mask -> Wand -> Extrinsics</h1>
+        </div>
+        <p>操作を 4 セグメントに固定し、選択中カメラの状態を段階ごとに確認しながら外部較正まで進める。</p>
+      </div>
+      <div class="hero-note">
+        Pi を <code>--debug-preview</code> 付きで起動していれば、blob 調整、mask 結果、wand 収録中の OpenCV preview が Pi デスクトップに継続表示されます。
+      </div>
+      <div class="hero-actions">
         <button class="secondary" data-command="refresh">Refresh</button>
-        <button class="secondary" data-command="ping">Ping</button>
-        <button class="secondary" data-command="mask_start">Mask Start</button>
-        <button class="secondary" data-command="start">Start</button>
-        <button class="secondary" data-command="stop">Stop</button>
-      </section>
-      <section class="card">
-        <h2>Extrinsics</h2>
-        <label for="intrinsicsPath">Intrinsics Dir</label>
-        <input id="intrinsicsPath" type="text" value="calibration" style="width:100%;">
-        <label for="logPath">Log Path</label>
-        <input id="logPath" type="text" value="logs/wand_capture.jsonl" style="width:100%;">
-        <label for="outputPath">Output Path</label>
-        <input id="outputPath" type="text" value="calibration/calibration_extrinsics_v1.json" style="width:100%;">
-        <button id="generateExtrinsics">Generate Extrinsics</button>
-      </section>
-      <section class="card">
-        <h2>Status</h2>
-        <pre id="status"></pre>
-      </section>
-    </div>
-    <section class="card" style="margin-top: 16px;">
-      <h2>Cameras</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Select</th>
-            <th>Camera</th>
-            <th>IP</th>
-            <th>State</th>
-            <th>Blobs</th>
-            <th>Reject</th>
-            <th>Healthy</th>
-            <th>Last Ack</th>
-            <th>Last Error</th>
-          </tr>
-        </thead>
-        <tbody id="cameraRows"></tbody>
-      </table>
+        <button class="ghost" data-command="ping">Ping</button>
+      </div>
+      <div class="step-rail" id="workflowRail"></div>
+      <div class="hero-metrics">
+        <div class="metric"><span class="eyebrow">Selection</span><strong id="selectionMetric">0 / 0</strong><p id="selectionSummary"></p></div>
+        <div class="metric"><span class="eyebrow">Blob Ready</span><strong id="blobMetric">0</strong><p id="blobMetricSummary"></p></div>
+        <div class="metric"><span class="eyebrow">Mask Ready</span><strong id="maskMetric">0</strong><p id="maskMetricSummary"></p></div>
+        <div class="metric"><span class="eyebrow">Preview</span><strong id="previewMetric">0</strong><p id="previewMetricSummary"></p></div>
+      </div>
     </section>
+
+    <div class="grid">
+      <div class="stack">
+        <section class="card">
+          <div class="step-head">
+            <div class="step-title">
+              <div class="eyebrow">Selection</div>
+              <h2>Camera Fleet</h2>
+            </div>
+          </div>
+          <div class="camera-summary" id="cameraSummary"></div>
+          <div class="selection-list">
+            <table>
+              <thead>
+                <tr>
+                  <th>Select</th>
+                  <th>Camera</th>
+                  <th>IP</th>
+                  <th>State</th>
+                  <th>Blobs</th>
+                  <th>Reject</th>
+                  <th>Mask</th>
+                  <th>Preview</th>
+                  <th>Healthy</th>
+                  <th>Last Error</th>
+                </tr>
+              </thead>
+              <tbody id="cameraRows"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="step-card" id="stepBlob" data-step="blob">
+          <div class="step-head">
+            <div class="step-title">
+              <div class="eyebrow">Step 01</div>
+              <h2>Blob Detection Adjustment</h2>
+            </div>
+            <span class="step-status" id="stepBlobStatus">Pending</span>
+          </div>
+          <div class="step-summary" id="blobSummary"></div>
+          <div class="controls-grid">
+            <label for="exposure">Exposure <span class="hint"><span id="exposureValue"></span> us</span><input id="exposure" type="range" min="100" max="30000" step="100" value="1200"></label>
+            <label for="gain">Gain <span class="hint"><span id="gainValue"></span></span><input id="gain" type="range" min="1" max="16" step="0.1" value="4"></label>
+            <label for="fps">FPS <span class="hint"><span id="fpsValue"></span></span><input id="fps" type="range" min="15" max="120" step="1" value="80"></label>
+            <label for="focus">Focus <span class="hint"><span id="focusValue"></span></span><input id="focus" type="range" min="0.0" max="10.0" step="0.001" value="5.215"></label>
+            <label for="threshold">Threshold <span class="hint"><span id="thresholdValue"></span></span><input id="threshold" type="range" min="0" max="255" step="1" value="200"></label>
+            <label for="circularity">Circularity Min <span class="hint"><span id="circularityValue"></span></span><input id="circularity" type="range" min="0.0" max="1.0" step="0.01" value="0.0"></label>
+            <label for="blobMin">Blob Min Diameter <span class="hint"><span id="blobMinValue"></span> px</span><input id="blobMin" type="range" min="0" max="100" step="0.5" value="0"></label>
+            <label for="blobMax">Blob Max Diameter <span class="hint"><span id="blobMaxValue"></span> px</span><input id="blobMax" type="range" min="0" max="100" step="0.5" value="0"></label>
+          </div>
+          <div class="button-row">
+            <button id="applyConfig">Apply Blob Settings</button>
+          </div>
+        </section>
+
+        <section class="step-card" id="stepMask" data-step="mask">
+          <div class="step-head">
+            <div class="step-title">
+              <div class="eyebrow">Step 02</div>
+              <h2>Mask Adjustment</h2>
+            </div>
+            <span class="step-status" id="stepMaskStatus">Pending</span>
+          </div>
+          <div class="step-summary" id="maskSummary"></div>
+          <div class="controls-grid">
+            <label for="maskThreshold">Mask Threshold <span class="hint"><span id="maskThresholdValue"></span></span><input id="maskThreshold" type="range" min="0" max="255" step="1" value="200"></label>
+            <label for="maskSeconds">Mask Seconds <span class="hint"><span id="maskSecondsValue"></span> s</span><input id="maskSeconds" type="range" min="0.1" max="5.0" step="0.1" value="0.5"></label>
+          </div>
+          <div class="button-row">
+            <button class="secondary" data-command="mask_start">Build Mask</button>
+            <button class="ghost" data-command="mask_stop">Clear Mask</button>
+          </div>
+        </section>
+
+        <section class="step-card" id="stepWand" data-step="wand">
+          <div class="step-head">
+            <div class="step-title">
+              <div class="eyebrow">Step 03</div>
+              <h2>Wand Capture</h2>
+            </div>
+            <span class="step-status" id="stepWandStatus">Pending</span>
+          </div>
+          <div class="step-summary" id="wandSummary"></div>
+          <div class="button-row">
+            <button class="secondary" data-command="start">Start Wand Capture</button>
+            <button class="ghost" data-command="stop">Stop Capture</button>
+          </div>
+        </section>
+
+        <section class="step-card" id="stepExtrinsics" data-step="extrinsics">
+          <div class="step-head">
+            <div class="step-title">
+              <div class="eyebrow">Step 04</div>
+              <h2>Extrinsics Generation</h2>
+            </div>
+            <span class="step-status" id="stepExtrinsicsStatus">Pending</span>
+          </div>
+          <div class="step-summary" id="extrinsicsSummary"></div>
+          <div class="controls-grid">
+            <label for="intrinsicsPath">Intrinsics Dir<input id="intrinsicsPath" type="text" value="calibration"></label>
+            <label for="logPath">Log Path<input id="logPath" type="text" value="logs/wand_capture.jsonl"></label>
+            <label for="outputPath">Output Path<input id="outputPath" type="text" value="calibration/calibration_extrinsics_v1.json"></label>
+          </div>
+          <div class="button-row">
+            <button id="generateExtrinsics">Generate Extrinsics</button>
+          </div>
+        </section>
+      </div>
+
+      <div class="stack">
+        <section class="card">
+          <div class="step-head">
+            <div class="step-title">
+              <div class="eyebrow">Console</div>
+              <h2>Last Result</h2>
+            </div>
+          </div>
+          <pre class="console" id="status"></pre>
+        </section>
+      </div>
+    </div>
   </main>
   <script>
     const sliders = ["exposure", "gain", "fps", "focus", "threshold", "circularity", "blobMin", "blobMax", "maskThreshold", "maskSeconds"];
     const sliderNames = new Set(sliders);
+    const stepOrder = ["blob", "mask", "wand", "extrinsics"];
+    const stepLabels = {
+      blob: "Blob",
+      mask: "Mask",
+      wand: "Wand",
+      extrinsics: "Extrinsics",
+    };
     const values = {
       exposure: document.getElementById("exposureValue"),
       gain: document.getElementById("gainValue"),
@@ -193,10 +525,32 @@ HTML_PAGE = """<!doctype html>
       maskThreshold: document.getElementById("maskThreshold"),
       maskSeconds: document.getElementById("maskSeconds"),
       rows: document.getElementById("cameraRows"),
+      cameraSummary: document.getElementById("cameraSummary"),
+      workflowRail: document.getElementById("workflowRail"),
       status: document.getElementById("status"),
       intrinsicsPath: document.getElementById("intrinsicsPath"),
       logPath: document.getElementById("logPath"),
       outputPath: document.getElementById("outputPath"),
+      selectionMetric: document.getElementById("selectionMetric"),
+      selectionSummary: document.getElementById("selectionSummary"),
+      blobMetric: document.getElementById("blobMetric"),
+      blobMetricSummary: document.getElementById("blobMetricSummary"),
+      maskMetric: document.getElementById("maskMetric"),
+      maskMetricSummary: document.getElementById("maskMetricSummary"),
+      previewMetric: document.getElementById("previewMetric"),
+      previewMetricSummary: document.getElementById("previewMetricSummary"),
+      blobSummary: document.getElementById("blobSummary"),
+      maskSummary: document.getElementById("maskSummary"),
+      wandSummary: document.getElementById("wandSummary"),
+      extrinsicsSummary: document.getElementById("extrinsicsSummary"),
+      stepBlob: document.getElementById("stepBlob"),
+      stepMask: document.getElementById("stepMask"),
+      stepWand: document.getElementById("stepWand"),
+      stepExtrinsics: document.getElementById("stepExtrinsics"),
+      stepBlobStatus: document.getElementById("stepBlobStatus"),
+      stepMaskStatus: document.getElementById("stepMaskStatus"),
+      stepWandStatus: document.getElementById("stepWandStatus"),
+      stepExtrinsicsStatus: document.getElementById("stepExtrinsicsStatus"),
     };
     const sliderUpdateTimers = {};
     const SLIDER_DEBOUNCE_MS = 200;
@@ -221,6 +575,129 @@ HTML_PAGE = """<!doctype html>
       };
     }
 
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    function badge(label, variant) {
+      return `<span class="badge ${variant || "muted"}">${escapeHtml(label)}</span>`;
+    }
+
+    function statusName(status) {
+      if (status === "done") return "Complete";
+      if (status === "current") return "Current";
+      return "Pending";
+    }
+
+    function segmentStatuses(workflow) {
+      const activeIndex = Math.max(0, stepOrder.indexOf(workflow.active_segment || "blob"));
+      return Object.fromEntries(stepOrder.map((step, index) => {
+        let status = "pending";
+        if (index < activeIndex) {
+          status = "done";
+        } else if (index === activeIndex) {
+          status = "current";
+        }
+        if (step === "extrinsics" && workflow.extrinsics_ready) {
+          status = "done";
+        }
+        return [step, status];
+      }));
+    }
+
+    function renderWorkflow(state) {
+      const workflow = state.workflow || {};
+      const selectedCount = workflow.selected_count ?? 0;
+      const totalCount = workflow.total_count ?? state.cameras.length;
+      const statuses = segmentStatuses(workflow);
+
+      elements.workflowRail.innerHTML = stepOrder.map((step, index) => `
+        <div class="step-pill" data-status="${statuses[step]}">
+          <small>Step ${String(index + 1).padStart(2, "0")}</small>
+          <strong>${stepLabels[step]}</strong>
+          <span>${statusName(statuses[step])}</span>
+        </div>
+      `).join("");
+
+      elements.selectionMetric.textContent = `${selectedCount} / ${totalCount}`;
+      elements.selectionSummary.textContent = `${workflow.healthy_count ?? 0} healthy, ${workflow.running_count ?? 0} running`;
+      elements.blobMetric.textContent = `${workflow.blob_ready_count ?? 0}`;
+      elements.blobMetricSummary.textContent = `${selectedCount || totalCount}台のうち検出中`;
+      elements.maskMetric.textContent = `${workflow.mask_ready_count ?? 0}`;
+      elements.maskMetricSummary.textContent = `${selectedCount || totalCount}台のうち mask 準備済み`;
+      elements.previewMetric.textContent = `${workflow.preview_enabled_count ?? 0}`;
+      elements.previewMetricSummary.textContent = `${workflow.preview_active_count ?? 0}台で preview active`;
+
+      elements.blobSummary.textContent = `${workflow.blob_ready_count ?? 0}/${selectedCount || totalCount} 台で blob が見えています。Pi preview 上で反射マーカーが安定して 3 点前後に見えるまで threshold / diameter / circularity を詰めます。`;
+      elements.maskSummary.textContent = `${workflow.mask_ready_count ?? 0}/${selectedCount || totalCount} 台で mask が準備できています。preview に mask overlay が出ていることと、mask ratio warning が出ていないことを確認します。`;
+      elements.wandSummary.textContent = (workflow.running_count ?? 0) > 0
+        ? `${workflow.running_count} 台が wand capture 中です。Pi デスクトップ preview で wand の追従と誤検出の有無を見ます。`
+        : `mask 完了後に Start Wand Capture を実行します。収録中は Pi preview で wand 軌跡と blob 数の崩れを監視します。`;
+      elements.extrinsicsSummary.textContent = workflow.extrinsics_ready
+        ? `Extrinsics は生成済みです。出力先と reference camera を console で確認します。`
+        : `wand 収録ログのパスを確認してから Extrinsics を生成します。`;
+
+      const stepMap = {
+        blob: elements.stepBlob,
+        mask: elements.stepMask,
+        wand: elements.stepWand,
+        extrinsics: elements.stepExtrinsics,
+      };
+      const stepStatusMap = {
+        blob: elements.stepBlobStatus,
+        mask: elements.stepMaskStatus,
+        wand: elements.stepWandStatus,
+        extrinsics: elements.stepExtrinsicsStatus,
+      };
+      stepOrder.forEach((step) => {
+        stepMap[step].dataset.status = statuses[step];
+        stepStatusMap[step].textContent = statusName(statuses[step]);
+      });
+    }
+
+    function renderCameraSummary(cameras) {
+      const selected = cameras.filter((camera) => camera.selected);
+      const healthy = selected.filter((camera) => camera.healthy).length;
+      const running = selected.filter((camera) => camera.diagnostics?.state === "RUNNING").length;
+      const preview = selected.filter((camera) => camera.diagnostics?.debug_preview_enabled).length;
+      elements.cameraSummary.innerHTML = [
+        `<div class="metric"><span class="eyebrow">Selected</span><strong>${selected.length}</strong><p>現在の操作対象</p></div>`,
+        `<div class="metric"><span class="eyebrow">Healthy</span><strong>${healthy}</strong><p>ping ack=true</p></div>`,
+        `<div class="metric"><span class="eyebrow">Running</span><strong>${running}</strong><p>wand capture 実行中</p></div>`,
+        `<div class="metric"><span class="eyebrow">Preview Enabled</span><strong>${preview}</strong><p>Pi desktop OpenCV</p></div>`,
+      ].join("");
+    }
+
+    function renderCameraRows(cameras) {
+      elements.rows.innerHTML = cameras.map((camera) => {
+        const diagnostics = camera.diagnostics || {};
+        const blob = diagnostics.blob_diagnostics || {};
+        const rejectCount = Number(blob.rejected_by_diameter || 0) + Number(blob.rejected_by_circularity || 0);
+        const maskRatio = diagnostics.mask_ratio != null ? `${(Number(diagnostics.mask_ratio) * 100).toFixed(1)}%` : "-";
+        const previewState = diagnostics.debug_preview_enabled
+          ? diagnostics.debug_preview_active ? badge("Active", "ok") : badge("Enabled", "warn")
+          : badge("Off", "muted");
+        return `
+          <tr>
+            <td><input type="checkbox" data-camera="${escapeHtml(camera.camera_id)}" ${camera.selected ? "checked" : ""}></td>
+            <td>${escapeHtml(camera.camera_id)}</td>
+            <td>${escapeHtml(camera.ip)}</td>
+            <td>${escapeHtml(diagnostics.state || "")}</td>
+            <td>${escapeHtml(blob.last_blob_count ?? "")}</td>
+            <td>${escapeHtml(rejectCount)}</td>
+            <td>${escapeHtml(maskRatio)}</td>
+            <td>${previewState}</td>
+            <td>${camera.healthy ? badge("OK", "ok") : badge("No Ack", "warn")}</td>
+            <td>${escapeHtml(camera.last_error || "")}</td>
+          </tr>
+        `;
+      }).join("");
+    }
+
     async function loadState() {
       const response = await fetch("/api/state");
       const state = await response.json();
@@ -242,20 +719,12 @@ HTML_PAGE = """<!doctype html>
         }
         elements[name].value = configMap[name];
       });
-      sliders.forEach((name) => { values[name].textContent = elements[name].value; });
-      elements.rows.innerHTML = state.cameras.map((camera) => `
-        <tr>
-          <td><input type="checkbox" data-camera="${camera.camera_id}" ${camera.selected ? "checked" : ""}></td>
-          <td>${camera.camera_id}</td>
-          <td>${camera.ip}</td>
-          <td>${camera.diagnostics?.state ?? ""}</td>
-          <td>${camera.diagnostics?.blob_diagnostics?.last_blob_count ?? ""}</td>
-          <td>${(camera.diagnostics?.blob_diagnostics?.rejected_by_diameter ?? 0) + (camera.diagnostics?.blob_diagnostics?.rejected_by_circularity ?? 0)}</td>
-          <td>${camera.healthy ? "yes" : "no"}</td>
-          <td>${camera.last_ack ?? ""}</td>
-          <td>${camera.last_error ?? ""}</td>
-        </tr>
-      `).join("");
+      sliders.forEach((name) => {
+        values[name].textContent = elements[name].value;
+      });
+      renderCameraRows(state.cameras || []);
+      renderCameraSummary(state.cameras || []);
+      renderWorkflow(state);
       elements.status.textContent = JSON.stringify(state.last_result, null, 2);
     }
 
@@ -417,11 +886,73 @@ class WandGuiState:
             status_rows = sorted(self.camera_status.values(), key=lambda item: item["camera_id"])
         return status_rows
 
+    def _workflow_summary(self, cameras: List[Dict[str, Any]]) -> Dict[str, Any]:
+        selected = [camera for camera in cameras if bool(camera.get("selected"))]
+        active_cameras = selected if selected else cameras
+
+        def diagnostics(camera: Dict[str, Any]) -> Dict[str, Any]:
+            value = camera.get("diagnostics")
+            return value if isinstance(value, dict) else {}
+
+        def blob_diagnostics(camera: Dict[str, Any]) -> Dict[str, Any]:
+            value = diagnostics(camera).get("blob_diagnostics")
+            return value if isinstance(value, dict) else {}
+
+        total_count = len(cameras)
+        selected_count = len(active_cameras)
+        healthy_count = sum(1 for camera in active_cameras if bool(camera.get("healthy")))
+        blob_ready_count = sum(
+            1
+            for camera in active_cameras
+            if int(blob_diagnostics(camera).get("last_blob_count", 0) or 0) > 0
+        )
+        mask_ready_count = sum(
+            1
+            for camera in active_cameras
+            if diagnostics(camera).get("state") in ("READY", "RUNNING")
+            and float(diagnostics(camera).get("mask_pixels", 0) or 0) > 0.0
+        )
+        running_count = sum(
+            1 for camera in active_cameras if diagnostics(camera).get("state") == "RUNNING"
+        )
+        preview_enabled_count = sum(
+            1 for camera in active_cameras if bool(diagnostics(camera).get("debug_preview_enabled"))
+        )
+        preview_active_count = sum(
+            1 for camera in active_cameras if bool(diagnostics(camera).get("debug_preview_active"))
+        )
+        extrinsics_ready = bool(
+            isinstance(self.last_result.get("generate_extrinsics"), dict)
+            and self.last_result["generate_extrinsics"].get("ok")
+        )
+
+        active_segment = "blob"
+        if extrinsics_ready:
+            active_segment = "extrinsics"
+        elif running_count > 0 or (selected_count > 0 and mask_ready_count >= selected_count):
+            active_segment = "wand"
+        elif blob_ready_count > 0:
+            active_segment = "mask"
+
+        return {
+            "total_count": total_count,
+            "selected_count": selected_count,
+            "healthy_count": healthy_count,
+            "blob_ready_count": blob_ready_count,
+            "mask_ready_count": mask_ready_count,
+            "running_count": running_count,
+            "preview_enabled_count": preview_enabled_count,
+            "preview_active_count": preview_active_count,
+            "extrinsics_ready": extrinsics_ready,
+            "active_segment": active_segment,
+        }
+
     def get_state(self) -> Dict[str, Any]:
         cameras = self.refresh_targets()
         return {
             "config": self._config_payload(),
             "cameras": cameras,
+            "workflow": self._workflow_summary(cameras),
             "last_result": self.last_result,
             "receiver": self.receiver.stats,
         }
@@ -453,6 +984,7 @@ class WandGuiState:
         command_handlers = {
             "ping": lambda: self.session._broadcast(targets, "ping"),
             "mask_start": lambda: self.session._broadcast(targets, "mask_start", **self._mask_params()),
+            "mask_stop": lambda: self.session._broadcast(targets, "mask_stop"),
             "start": lambda: self.session._broadcast(targets, "start", mode="wand_capture"),
             "stop": lambda: self.session._broadcast(targets, "stop"),
         }
