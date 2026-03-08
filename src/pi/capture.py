@@ -1552,26 +1552,6 @@ class ControlServer:
             + (f" warning={warning}" if warning else "")
         )
 
-        if last_frame is not None:
-            final_blobs, final_stats = detect_blobs(
-                last_frame,
-                threshold=self._desired_threshold,
-                mask=mask,
-                min_diameter_px=self._desired_blob_min_diameter_px,
-                max_diameter_px=self._desired_blob_max_diameter_px,
-                circularity_min=self._desired_circularity_min,
-            )
-            self._record_blob_diagnostics(final_stats)
-            self._show_debug_preview(
-                frame=last_frame,
-                blobs=final_blobs,
-                mask=mask,
-                stats=final_stats,
-                extra_lines=[
-                    f"state={STATE_READY}",
-                    "mask=ready",
-                ],
-            )
         self._start_preview_loop()
 
         result: dict[str, object] = {
