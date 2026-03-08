@@ -411,6 +411,10 @@ class DebugPreview:
         try:
             canvas = self._build_canvas(frame, blobs, mask, stats, camera_id, extra_lines)
             if not self._initialized:
+                try:
+                    cv2.startWindowThread()
+                except Exception:
+                    pass
                 cv2.namedWindow(self._window_name, cv2.WINDOW_NORMAL)
                 self._initialized = True
             cv2.imshow(self._window_name, canvas)
@@ -428,6 +432,7 @@ class DebugPreview:
         if self._initialized:
             try:
                 cv2.destroyWindow(self._window_name)
+                _ = cv2.waitKey(1)
             except Exception:
                 pass
             self._initialized = False
