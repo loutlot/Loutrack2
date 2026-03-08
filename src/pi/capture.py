@@ -1819,27 +1819,6 @@ class ControlServer:
             hit_counts += (gray > threshold).astype(np.uint16)
             self._log(f"mask init frame {frame_index + 1}/{frames} accumulated")
 
-            if self._debug_preview is not None and self._debug_preview.enabled:
-                blobs, stats = detect_blobs(
-                    frame,
-                    threshold=self._desired_threshold,
-                    min_diameter_px=self._desired_blob_min_diameter_px,
-                    max_diameter_px=self._desired_blob_max_diameter_px,
-                    circularity_min=self._desired_circularity_min,
-                )
-                self._record_blob_diagnostics(stats)
-                self._show_debug_preview(
-                    frame=frame,
-                    blobs=blobs,
-                    mask=None,
-                    stats=stats,
-                    extra_lines=[
-                        f"state={STATE_MASK_INIT}",
-                        f"mask_capture={frame_index + 1}/{frames}",
-                        f"mask_thr={threshold}",
-                    ],
-                )
-
         assert hit_counts is not None
         self._log("mask init postprocess begin")
         required = max(1, math.ceil(hit_ratio * frames))
