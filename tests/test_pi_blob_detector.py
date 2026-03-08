@@ -85,6 +85,14 @@ def test_control_server_ping_includes_blob_diagnostics() -> None:
     assert result["blob_diagnostics"]["threshold"] == 200
 
 
+def test_mask_start_can_refresh_existing_mask() -> None:
+    server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=False))
+    first = server._handle_mask_start("req-1", "pi-cam-01", {"frames": 2, "threshold": 200})
+    second = server._handle_mask_start("req-2", "pi-cam-01", {"frames": 2, "threshold": 200})
+    assert first["ack"] is True
+    assert second["ack"] is True
+
+
 def test_resolve_debug_preview_enabled_requires_display(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DISPLAY", raising=False)
     assert resolve_debug_preview_enabled(True) is False

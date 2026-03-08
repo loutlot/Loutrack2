@@ -23,6 +23,9 @@ else:
     from .wand_session import SessionConfig, WandSession
 
 
+DEFAULT_SETTINGS_PATH = Path("logs") / "wand_gui_settings.json"
+
+
 HTML_PAGE = """<!doctype html>
 <html lang="ja">
 <head>
@@ -821,18 +824,50 @@ HTML_PAGE = """<!doctype html>
 
 
 class WandGuiState:
-    def __init__(self, session: WandSession, receiver: UDPReceiver) -> None:
+    def __init__(
+        self,
+        session: WandSession,
+        receiver: UDPReceiver,
+        settings_path: Path | None = None,
+    ) -> None:
         self.session = session
         self.receiver = receiver
         self.lock = threading.Lock()
-        self.config = SessionConfig(exposure_us=12000, gain=8.0, fps=56, duration_s=60.0)
+        self.settings_path = settings_path or DEFAULT_SETTINGS_PATH
         self.selected_camera_ids: List[str] = []
+        self.config = self._load_initial_config()
         self.camera_status: Dict[str, Dict[str, Any]] = {}
         self.last_result: Dict[str, Any] = {"status": "idle"}
         self._extrinsics_solver = _load_extrinsics_solver()
 
-    def _mask_params(self) -> Dict[str, Any]:
-        mask = dict(self.config.mask_params or {})
+    def _default_config(self) -> SessionConfig:
+        return SessionConfig(exposure_us=12000, gain=8.0, fps=56, duration_s=60.0)
+
+    def _load_initial_config(self) -> SessionConfig:
+        config = self._default_config()
+        path = self.settings_path
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return config
+        except Exception:
+            return config
+        if not isinstance(payload, dict):
+            return config
+        return self._build_session_config(payload, base_config=config)
+
+    def _persist_config(self) -> None:
+        payload = self._config_payload()
+        path = self.settings_path
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            return
+
+    def _mask_params(self, config: SessionConfig | None = None) -> Dict[str, Any]:
+        source = config or self.config
+        mask = dict(source.mask_params or {})
         return {
             "threshold": int(mask.get("threshold", 200)),
             "seconds": float(mask.get("seconds", 0.5)),
@@ -856,24 +891,29 @@ class WandGuiState:
             "mask_seconds": mask["seconds"],
         }
 
-    def _build_session_config(self, payload: Dict[str, Any]) -> SessionConfig:
-        mask = self._mask_params()
+    def _build_session_config(
+        self,
+        payload: Dict[str, Any],
+        base_config: SessionConfig | None = None,
+    ) -> SessionConfig:
+        source = base_config or self.config
+        mask = self._mask_params(source)
         mask["threshold"] = int(payload.get("mask_threshold", mask["threshold"]))
         mask["seconds"] = float(payload.get("mask_seconds", mask["seconds"]))
         return SessionConfig(
-            exposure_us=int(payload.get("exposure_us", self.config.exposure_us)),
-            gain=float(payload.get("gain", self.config.gain)),
-            fps=int(payload.get("fps", self.config.fps)),
-            focus=float(payload.get("focus", self.config.focus)),
-            threshold=int(payload.get("threshold", self.config.threshold)),
-            blob_min_diameter_px=payload.get("blob_min_diameter_px", self.config.blob_min_diameter_px),
-            blob_max_diameter_px=payload.get("blob_max_diameter_px", self.config.blob_max_diameter_px),
-            circularity_min=float(payload.get("circularity_min", self.config.circularity_min)),
-            duration_s=self.config.duration_s,
+            exposure_us=int(payload.get("exposure_us", source.exposure_us)),
+            gain=float(payload.get("gain", source.gain)),
+            fps=int(payload.get("fps", source.fps)),
+            focus=float(payload.get("focus", source.focus)),
+            threshold=int(payload.get("threshold", source.threshold)),
+            blob_min_diameter_px=payload.get("blob_min_diameter_px", source.blob_min_diameter_px),
+            blob_max_diameter_px=payload.get("blob_max_diameter_px", source.blob_max_diameter_px),
+            circularity_min=float(payload.get("circularity_min", source.circularity_min)),
+            duration_s=source.duration_s,
             camera_ids=self.selected_camera_ids or None,
             mask_params=mask,
-            mask_retry=self.config.mask_retry,
-            output_dir=self.config.output_dir,
+            mask_retry=source.mask_retry,
+            output_dir=source.output_dir,
         )
 
     def _apply_capture_settings(self, targets: List[Any]) -> Dict[str, Dict[str, Dict[str, Any]]]:
@@ -993,6 +1033,7 @@ class WandGuiState:
         if camera_ids:
             self.selected_camera_ids = camera_ids
         self.config = self._build_session_config(payload)
+        self._persist_config()
 
         targets = self.session.discover_targets(self.selected_camera_ids or None)
         result = self._apply_capture_settings(targets)

@@ -442,9 +442,16 @@ class DebugPreview:
             canvas = frame.copy()
 
         if mask is not None and mask.shape[:2] == canvas.shape[:2]:
-            mask_overlay = np.zeros_like(canvas)
-            mask_overlay[:, :, 2] = 255
-            canvas = np.where(mask[..., None], cv2.addWeighted(canvas, 0.5, mask_overlay, 0.5, 0), canvas)
+            mask_bool = mask.astype(bool, copy=False)
+            if mask_bool.any():
+                mask_overlay = np.zeros_like(canvas)
+                mask_overlay[:, :, 2] = 255
+                blended = cv2.addWeighted(canvas, 0.72, mask_overlay, 0.28, 0)
+                canvas[mask_bool] = blended[mask_bool]
+                mask_uint8 = mask_bool.astype(np.uint8) * 255
+                contours_info = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                contours = contours_info[0] if len(contours_info) == 2 else contours_info[1]
+                cv2.drawContours(canvas, contours, -1, (0, 64, 255), 2)
 
         for blob in blobs:
             center = (int(round(float(blob["x"]))), int(round(float(blob["y"]))))
@@ -1405,7 +1412,7 @@ class ControlServer:
             frames = max(1, int(round(float(seconds) * fps_for_mask)))
 
         with self._state_lock:
-            if self._state != STATE_IDLE:
+            if self._state not in (STATE_IDLE, STATE_READY):
                 return self._error_response(
                     request_id=request_id,
                     request_camera_id=request_camera_id,

@@ -266,7 +266,7 @@ python src/host/wand_gui.py --host <HOST_IP> --port 8765 --udp-port 5000
    - `mask threshold` と `mask seconds` は GUI 側設定を使用する
    - `mask seconds * fps` で内部の `frames` が計算される
    - 実行中は Pi preview に `MASK_INIT` が表示され、完了後は mask overlay が残る
-   - やり直す場合は `Clear Mask` を使う
+   - `Build Mask` は既存 mask を上書き更新できる。明示的に消したい場合だけ `Clear Mask` を使う
 
 7. `Wand Capture` で `Start Wand Capture` 実行後、wand を空間全体で 60 秒程度動かす（20 ポーズ以上）。
    - 収録中も Pi preview が継続し、wand 操作系の見え方を遠隔確認できる

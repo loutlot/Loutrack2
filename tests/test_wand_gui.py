@@ -5,6 +5,8 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+from pathlib import Path
+
 from host.wand_gui import HTML_PAGE, WandGuiState
 from host.wand_session import CameraTarget
 
@@ -50,8 +52,12 @@ class _FakeSession:
         }
 
 
-def test_gui_state_apply_and_command() -> None:
-    state = WandGuiState(session=_FakeSession(), receiver=_FakeReceiver())
+def test_gui_state_apply_and_command(tmp_path: Path) -> None:
+    state = WandGuiState(
+        session=_FakeSession(),
+        receiver=_FakeReceiver(),
+        settings_path=tmp_path / "wand_gui_settings.json",
+    )
 
     snapshot = state.get_state()
     assert len(snapshot["cameras"]) == 2
@@ -85,6 +91,9 @@ def test_gui_state_apply_and_command() -> None:
         "set_blob_diameter",
         "set_circularity_min",
     }
+    persisted = (tmp_path / "wand_gui_settings.json").read_text(encoding="utf-8")
+    assert '"exposure_us": 1400' in persisted
+    assert '"threshold": 210' in persisted
 
     result = state.run_command({"command": "ping", "camera_ids": ["pi-cam-01"]})
     assert "ping" in result
@@ -113,6 +122,19 @@ def test_gui_state_apply_and_command() -> None:
 def test_gui_html_normalizes_blob_range() -> None:
     assert "function normalizedBlobRange()" in HTML_PAGE
     assert "maxValue = minValue;" in HTML_PAGE
+
+
+def test_gui_loads_persisted_settings(tmp_path: Path) -> None:
+    path = tmp_path / "wand_gui_settings.json"
+    path.write_text(
+        '{"exposure_us": 15000, "gain": 9.0, "fps": 56, "threshold": 215, "mask_threshold": 207, "mask_seconds": 0.8}',
+        encoding="utf-8",
+    )
+    state = WandGuiState(session=_FakeSession(), receiver=_FakeReceiver(), settings_path=path)
+    snapshot = state.get_state()
+    assert snapshot["config"]["exposure_us"] == 15000
+    assert snapshot["config"]["gain"] == 9.0
+    assert snapshot["config"]["threshold"] == 215
 
 
 if __name__ == "__main__":
