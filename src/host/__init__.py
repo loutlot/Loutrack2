@@ -26,7 +26,8 @@ from .geo import (
 from .rigid import (
     MarkerPattern, RigidBodyPose, RigidBodyTracker,
     RigidBodyEstimator, KabschEstimator, PointClusterer,
-    WAIST_PATTERN, HEAD_PATTERN
+    WAIST_PATTERN, HEAD_PATTERN, CHEST_PATTERN,
+    LEFT_FOOT_PATTERN, RIGHT_FOOT_PATTERN
 )
 from .pipeline import TrackingPipeline, TrackingSession
 from .visualize import TrackingVisualizer, SimpleGraph
@@ -86,6 +87,9 @@ __all__ = [
     "PointClusterer",
     "WAIST_PATTERN",
     "HEAD_PATTERN",
+    "CHEST_PATTERN",
+    "LEFT_FOOT_PATTERN",
+    "RIGHT_FOOT_PATTERN",
     # Pipeline
     "TrackingPipeline",
     "TrackingSession",

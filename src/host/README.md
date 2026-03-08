@@ -165,8 +165,11 @@ print(poses["waist"].quaternion)
 **定義済みパターン**:
 | パターン | マーカー数 | 説明 |
 |----------|------------|------|
-| `WAIST_PATTERN` | 4 | ウエスト（非対称キー付き） |
-| `HEAD_PATTERN` | 4 | ヘッド（簡易版） |
+| `WAIST_PATTERN` | 4 | ウエスト（既存デザイン） |
+| `HEAD_PATTERN` | 4 | ヘッド |
+| `CHEST_PATTERN` | 4 | 胸 |
+| `LEFT_FOOT_PATTERN` | 4 | 左足先 |
+| `RIGHT_FOOT_PATTERN` | 4 | 右足先 |
 
 ---
 

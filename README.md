@@ -163,6 +163,10 @@ ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@192.168.1.101
 - [x] Host wand control GUI/operation orchestration documented (`docs/wand_extrinsics_plan.md`)
 - [x] `WAND_POINTS_MM` を確定（center-to-center: 168mm / 243mm, blob 14mm, 直交）
 - [x] wand 次アクション手順書を追加（`docs/next_steps_wand_runbook.md`）
+- [x] 5剛体向け marker 形状の探索結果を整理（`docs/rigid_body_design_exploration.md`）
+- [x] 剛体デザインを「中心(0,0,7)の半径65mm半球、z>7」制約で再探索し更新（`docs/rigid_body_design_exploration.md`）
+- [x] `waist` は既存デザインを維持する方針で `src/host/rigid.py` と関連docを更新
+- [x] 剛体 mount の STL 自動生成方針は撤回し、関連スクリプト/生成物/README記述を整理
 - [ ] `pi-cam-01` の内部較正を実測値ベースで再実施する（まずこの1台で手順検証）
 - [ ] `pi-cam-02` の内部較正を実施し、成果物 JSON を保存する
 - [ ] 内部較正の品質判定基準を「暫定」から「運用基準」に確定する
@@ -187,6 +191,7 @@ ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@192.168.1.101
 6. `docs/next_steps_charuco.md`（内部較正の実行手順。Step 0 にまっさらな Pi 初期セットアップを記載）
 7. `docs/wand_extrinsics_plan.md`（wand 外部較正の実装計画）
 8. `docs/next_steps_wand_runbook.md`（wand実装の実行手順）
+9. `docs/rigid_body_design_exploration.md`（5剛体 marker 設計の探索結果）
 
 補足: `docs/pre_doc/` は検討メモ・背景資料であり、現行仕様の正本ではありません。
 

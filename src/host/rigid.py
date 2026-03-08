@@ -46,15 +46,48 @@ WAIST_PATTERN = MarkerPattern(
     marker_diameter=0.014  # 14mm in meters
 )
 
-# Simplified patterns for other body parts (to be refined)
+# Additional patterns for other body parts
 # All positions in meters
 HEAD_PATTERN = MarkerPattern(
     name="head",
     marker_positions=np.array([
-        [40.0, 0.0, 0.0],
-        [-40.0, 0.0, 0.0],
-        [0.0, 40.0, 0.0],
-        [0.0, 0.0, 50.0],
+        [36.0, 12.0, 18.0],
+        [-34.0, 10.0, 16.0],
+        [2.0, -38.0, 17.0],
+        [0.0, 18.0, 66.0],
+    ], dtype=np.float64) * 0.001,  # Convert mm to meters
+    marker_diameter=0.014  # 14mm in meters
+)
+
+CHEST_PATTERN = MarkerPattern(
+    name="chest",
+    marker_positions=np.array([
+        [46.0, -6.0, 14.0],
+        [-10.0, 42.0, 16.0],
+        [-42.0, -18.0, 15.0],
+        [18.0, 14.0, 62.0],
+    ], dtype=np.float64) * 0.001,  # Convert mm to meters
+    marker_diameter=0.014  # 14mm in meters
+)
+
+LEFT_FOOT_PATTERN = MarkerPattern(
+    name="left_foot",
+    marker_positions=np.array([
+        [54.0, -16.0, 13.0],
+        [-20.0, -38.0, 15.0],
+        [-40.0, 22.0, 14.0],
+        [8.0, 28.0, 61.0],
+    ], dtype=np.float64) * 0.001,  # Convert mm to meters
+    marker_diameter=0.014  # 14mm in meters
+)
+
+RIGHT_FOOT_PATTERN = MarkerPattern(
+    name="right_foot",
+    marker_positions=np.array([
+        [24.0, -42.0, 12.0],
+        [-36.0, -20.0, 18.0],
+        [28.0, 18.0, 16.0],
+        [-18.0, 30.0, 61.0],
     ], dtype=np.float64) * 0.001,  # Convert mm to meters
     marker_diameter=0.014  # 14mm in meters
 )
