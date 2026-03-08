@@ -421,15 +421,6 @@ class DebugPreview:
         except Exception:
             self.close_window()
 
-    def show_placeholder(self, title: str, lines: list[str] | None = None) -> None:
-        if not self._enabled:
-            return
-        try:
-            canvas = self._build_placeholder_canvas(title, lines)
-            self._render_canvas(canvas)
-        except Exception:
-            self.close_window()
-
     def close(self) -> None:
         if not self._enabled:
             return
@@ -458,41 +449,6 @@ class DebugPreview:
             cv2.imshow(self._window_name, canvas)
             _ = cv2.waitKey(1)
             self._last_canvas = canvas.copy()
-
-    def _build_placeholder_canvas(self, title: str, lines: list[str] | None) -> np.ndarray:
-        with self._lock:
-            last_canvas = None if self._last_canvas is None else self._last_canvas.copy()
-        if last_canvas is not None:
-            canvas = cv2.addWeighted(
-                last_canvas,
-                0.18,
-                np.zeros_like(last_canvas),
-                0.82,
-                0,
-            )
-        else:
-            canvas = np.zeros((720, 1280, 3), dtype=np.uint8)
-
-        overlay_lines = [title]
-        if lines:
-            overlay_lines.extend(lines)
-
-        top = 56
-        for index, line in enumerate(overlay_lines):
-            font_scale = 1.0 if index == 0 else 0.7
-            thickness = 2 if index == 0 else 1
-            cv2.putText(
-                canvas,
-                line,
-                (32, top),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                font_scale,
-                (0, 220, 255),
-                thickness,
-                cv2.LINE_AA,
-            )
-            top += 40 if index == 0 else 30
-        return canvas
 
     def _build_canvas(
         self,
@@ -1032,17 +988,9 @@ class ControlServer:
             self._log("preview backend started")
         except BackendUnavailableError:
             self._log("preview backend unavailable")
-            self._show_debug_preview_placeholder(
-                "PREVIEW_BACKEND_UNAVAILABLE",
-                [f"state={self._state}", "preview=backend-unavailable"],
-            )
             return
         except Exception:
             self._log("preview backend start failed")
-            self._show_debug_preview_placeholder(
-                "PREVIEW_BACKEND_FAILED",
-                [f"state={self._state}", "preview=backend-start-failed"],
-            )
             return
 
         with self._state_lock:
@@ -1543,14 +1491,6 @@ class ControlServer:
                 self._log("mask init backend started source=fresh")
             else:
                 self._log("mask init backend source=preview_handoff")
-            self._show_debug_preview_placeholder(
-                "MASK_INIT",
-                [
-                    f"state={STATE_MASK_INIT}",
-                    f"frames={frames} threshold={threshold}",
-                    "preview=paused-window-retained",
-                ],
-            )
             with self._state_lock:
                 fps_for_timeout = float(self._desired_fps or self._config.target_fps or 1.0)
             estimated_capture_s = float(frames) / max(1.0, fps_for_timeout)
@@ -1930,12 +1870,6 @@ class ControlServer:
             camera_id=self._config.camera_id,
             extra_lines=extra_lines,
         )
-
-    def _show_debug_preview_placeholder(self, title: str, lines: list[str] | None = None) -> None:
-        preview = self._debug_preview
-        if preview is None or not preview.enabled:
-            return
-        preview.show_placeholder(title, lines)
 
     def _set_target_fps(self, fps: int) -> None:
         fps_value = int(fps)

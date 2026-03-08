@@ -124,36 +124,25 @@ def test_mask_start_reuses_preview_backend_when_available(monkeypatch: pytest.Mo
     assert response["ack"] is True
 
 
-def test_mask_start_shows_placeholder_without_recreating_window(
+def test_mask_start_does_not_touch_debug_preview_during_mask_init(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=True))
     preview = server._debug_preview
     assert preview is not None
     preview_backend = DummyBackend(DummyBackendConfig(width=32, height=24, num_dots=0))
-    placeholder_calls: list[tuple[str, list[str] | None]] = []
 
     monkeypatch.setattr(server, "_take_preview_backend_for_mask", lambda: preview_backend)
     monkeypatch.setattr(server, "_start_preview_loop", lambda: None)
     monkeypatch.setattr(
         preview,
-        "show_placeholder",
-        lambda title, lines=None: placeholder_calls.append((title, lines)),
+        "show",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("mask_start should not render preview")),
     )
 
     response = server._handle_mask_start("req-1", "pi-cam-01", {"frames": 2, "threshold": 200})
 
     assert response["ack"] is True
-    assert placeholder_calls == [
-        (
-            "MASK_INIT",
-            [
-                "state=MASK_INIT",
-                "frames=2 threshold=200",
-                "preview=paused-window-retained",
-            ],
-        )
-    ]
 
 
 def test_resolve_debug_preview_enabled_requires_display(monkeypatch: pytest.MonkeyPatch) -> None:
