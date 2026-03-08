@@ -9,6 +9,7 @@
 - 1マス換算: `150 / 5 = 30.0 mm`
 - 本手順での指定値: `--square-length-mm 30.0`
 - 実機メモ: `LensPosition=5.2` が現時点で最も安定
+- Loutrack2 の現行 live capture 既定解像度: `2304x1296`
 
 ---
 

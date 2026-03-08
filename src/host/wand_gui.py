@@ -156,18 +156,25 @@ HTML_PAGE = """<!doctype html>
       grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.95fr);
       gap: 18px;
       margin-top: 18px;
+      align-items: start;
+    }
+    .grid > * {
+      min-width: 0;
     }
     .stack {
       display: grid;
       gap: 18px;
+      min-width: 0;
+      align-content: start;
     }
     .card,
     .step-card {
       padding: 22px;
+      min-width: 0;
+      overflow: hidden;
     }
     .step-card {
       position: relative;
-      overflow: hidden;
     }
     .step-card::after {
       content: "";
@@ -326,7 +333,11 @@ HTML_PAGE = """<!doctype html>
       border-radius: 18px;
       overflow: auto;
       min-height: 240px;
+      max-width: 100%;
+      max-height: min(70vh, 960px);
       white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
     @media (max-width: 980px) {
       .grid {

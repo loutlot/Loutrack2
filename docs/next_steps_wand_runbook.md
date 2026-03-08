@@ -98,9 +98,19 @@ python src/pi/capture.py --help
 python src/pi/capture.py
 ```
 
+既定の capture 解像度は `2304x1296`（`docs/next_steps_charuco.md` の live 較正前提と同じ）である。
+
 9. 検出状況を Pi 上で確認したい場合は debug preview 付きで起動:
 
 ```bash
+python src/pi/capture.py --debug-preview
+```
+
+SSH で Pi に入って起動する場合は、先に desktop display を渡す:
+
+```bash
+export DISPLAY=:0
+export XAUTHORITY=/home/<PI_USER>/.Xauthority
 python src/pi/capture.py --debug-preview
 ```
 
@@ -118,7 +128,7 @@ debug preview で確認できる内容:
 - 既定値を上書きしたい場合のみ `--camera-id "$CAMERA_ID"` を指定する
 - ポート変更時のみ `--tcp-port`（Pi 側）と `--port`（Host 側）を同じ値に合わせる
 - `--debug-preview` は debug 用。Pi がデスクトップモードなら OpenCV window が常時更新される
-- GUI が使えない headless 環境では window 作成に失敗し、自動で無効化される
+- `DISPLAY` がない SSH shell / headless 環境では preview は起動前に自動で無効化される
 
 ### 2.3 Pi 側 capture サービスの確認
 

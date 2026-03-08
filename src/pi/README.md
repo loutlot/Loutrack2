@@ -4,6 +4,7 @@
 
 - TCP control (NDJSON): `0.0.0.0:8554`
 - UDP frames (one JSON per datagram): default `255.255.255.255:5000`
+- Default capture resolution: `2304x1296`
 
 ## Run locally (dummy backend)
 
@@ -37,7 +38,14 @@ To show a local OpenCV debug preview on the Pi during idle, mask setup, and wand
   --debug-preview
 ```
 
-The preview is debug-only. It stays active while the service is idle, while `mask_start` is building the mask, and while frames are streaming. It overlays accepted blobs, the active mask, and current detection parameters. If OpenCV window creation fails, the service keeps running and the preview disables itself.
+If you start capture over SSH, make sure the desktop X display is exported first.
+
+```bash
+export DISPLAY=:0
+export XAUTHORITY=/home/pi/.Xauthority
+```
+
+The preview is debug-only. It stays active while the service is idle, while `mask_start` is building the mask, and while frames are streaming. It overlays accepted blobs, the active mask, and current detection parameters. If `DISPLAY` is not set, the service now disables the preview before touching OpenCV HighGUI and keeps running without the window.
 
 If `picamera2` is not available, the service stays alive (e.g. `ping` still works) and `start` returns `ack:false` with `error_code=6`.
 

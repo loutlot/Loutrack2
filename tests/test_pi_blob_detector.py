@@ -4,11 +4,19 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.pi.capture import ControlServer, ControlServerConfig, DummyBackend, DummyBackendConfig, detect_blobs
+from src.pi.capture import (
+    ControlServer,
+    ControlServerConfig,
+    DummyBackend,
+    DummyBackendConfig,
+    detect_blobs,
+    resolve_debug_preview_enabled,
+)
 
 
 def _expected_centers(cfg: DummyBackendConfig, frame_index: int) -> list[tuple[int, int]]:
@@ -74,3 +82,13 @@ def test_control_server_ping_includes_blob_diagnostics() -> None:
     assert result["debug_preview_enabled"] is False
     assert result["debug_preview_active"] is False
     assert result["blob_diagnostics"]["threshold"] == 200
+
+
+def test_resolve_debug_preview_enabled_requires_display(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DISPLAY", raising=False)
+    assert resolve_debug_preview_enabled(True) is False
+
+
+def test_resolve_debug_preview_enabled_accepts_display(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DISPLAY", ":0")
+    assert resolve_debug_preview_enabled(True) is True

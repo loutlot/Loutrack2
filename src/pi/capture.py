@@ -5,8 +5,10 @@ import argparse
 import importlib
 import json
 import math
+import os
 import socket
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -38,6 +40,8 @@ MASK_DILATE_PX = 2
 MASK_MAX_RATIO_WARNING = 0.4
 DEFAULT_CIRCULARITY_MIN = 0.0
 IDLE_PREVIEW_FPS = 15.0
+DEFAULT_CAPTURE_WIDTH = 2304
+DEFAULT_CAPTURE_HEIGHT = 1296
 
 MAX_LINE_BYTES = 65536
 LINE_TIMEOUT_SECONDS = 2.0
@@ -134,6 +138,25 @@ def get_default_camera_id() -> str:
     if fallback:
         return fallback
     return "pi-cam-01"
+
+
+def resolve_debug_preview_enabled(requested: bool) -> bool:
+    if not requested:
+        return False
+
+    display = os.environ.get("DISPLAY", "").strip()
+    if display:
+        return True
+
+    print(
+        (
+            "warning: --debug-preview requested but DISPLAY is not set; "
+            "preview disabled. Run from the Pi desktop terminal, or export "
+            "DISPLAY=:0 and XAUTHORITY=/home/<PI_USER>/.Xauthority before starting capture."
+        ),
+        file=sys.stderr,
+    )
+    return False
 
 
 class UDPFrameEmitter:
@@ -334,8 +357,8 @@ class UDPFrameEmitter:
 
 @dataclass
 class DummyBackendConfig:
-    width: int = 640
-    height: int = 480
+    width: int = DEFAULT_CAPTURE_WIDTH
+    height: int = DEFAULT_CAPTURE_HEIGHT
     num_dots: int = 3
     seed: int = 0
     dot_radius: int = 3
@@ -551,8 +574,8 @@ class DummyBackend:
 
 @dataclass
 class Picamera2BackendConfig:
-    width: int = 640
-    height: int = 480
+    width: int = DEFAULT_CAPTURE_WIDTH
+    height: int = DEFAULT_CAPTURE_HEIGHT
     format: str = "RGB888"
 
 
@@ -1976,7 +1999,7 @@ def parse_args() -> ControlServerConfig:
         udp_host=udp_host,
         udp_port=udp_port,
         backend=backend,
-        debug_preview=debug_preview,
+        debug_preview=resolve_debug_preview_enabled(debug_preview),
     )
 
 
