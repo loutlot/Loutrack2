@@ -21,42 +21,42 @@ class _FakeControl:
     def __init__(self):
         self.calls = []
 
-    def _resp(self, name, camera_id):
-        self.calls.append((name, camera_id))
+    def _resp(self, name, camera_id, timeout):
+        self.calls.append((name, camera_id, timeout))
         return {"ack": True}
 
     def ping(self, ip, port, camera_id, timeout=2.0):
-        return self._resp("ping", camera_id)
+        return self._resp("ping", camera_id, timeout)
 
     def set_exposure(self, ip, port, camera_id, value, timeout=2.0):
-        return self._resp("set_exposure", camera_id)
+        return self._resp("set_exposure", camera_id, timeout)
 
     def set_gain(self, ip, port, camera_id, value, timeout=2.0):
-        return self._resp("set_gain", camera_id)
+        return self._resp("set_gain", camera_id, timeout)
 
     def set_fps(self, ip, port, camera_id, value, timeout=2.0):
-        return self._resp("set_fps", camera_id)
+        return self._resp("set_fps", camera_id, timeout)
 
     def set_focus(self, ip, port, camera_id, value, timeout=2.0):
-        return self._resp("set_focus", camera_id)
+        return self._resp("set_focus", camera_id, timeout)
 
     def set_threshold(self, ip, port, camera_id, value, timeout=2.0):
-        return self._resp("set_threshold", camera_id)
+        return self._resp("set_threshold", camera_id, timeout)
 
     def set_blob_diameter(self, ip, port, camera_id, min_px=None, max_px=None, timeout=2.0):
-        return self._resp("set_blob_diameter", camera_id)
+        return self._resp("set_blob_diameter", camera_id, timeout)
 
     def set_circularity_min(self, ip, port, camera_id, value, timeout=2.0):
-        return self._resp("set_circularity_min", camera_id)
+        return self._resp("set_circularity_min", camera_id, timeout)
 
     def mask_start(self, ip, port, camera_id, timeout=2.0, **kwargs):
-        return self._resp("mask_start", camera_id)
+        return self._resp("mask_start", camera_id, timeout)
 
     def start(self, ip, port, camera_id, mode, timeout=2.0):
-        return self._resp("start", camera_id)
+        return self._resp("start", camera_id, timeout)
 
     def stop(self, ip, port, camera_id, timeout=2.0):
-        return self._resp("stop", camera_id)
+        return self._resp("stop", camera_id, timeout)
 
 
 def test_wand_points_mm_defaults() -> None:
@@ -116,6 +116,8 @@ def test_run_session_control_order(monkeypatch, tmp_path: Path) -> None:
     metadata_path = Path(result["metadata_path"])
     assert metadata_path.exists()
     assert metadata_path.parent == tmp_path
+    mask_timeouts = [timeout for name, _camera_id, timeout in fake_control.calls if name == "mask_start"]
+    assert mask_timeouts == [10.0, 10.0]
 
 
 if __name__ == "__main__":

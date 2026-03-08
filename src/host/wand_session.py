@@ -53,6 +53,7 @@ class WandSession:
         receiver: Optional[Any] = None,
         control: Any = control_module,
         timeout_s: float = 2.0,
+        mask_timeout_s: float = 10.0,
     ) -> None:
         self.inventory_path = inventory_path or (
             Path(__file__).resolve().parents[1] / "deploy" / "hosts.ini"
@@ -60,6 +61,7 @@ class WandSession:
         self.receiver = receiver
         self.control = control
         self.timeout_s = timeout_s
+        self.mask_timeout_s = mask_timeout_s
         self.default_output_dir = Path("logs") / "wand_sessions"
 
     def load_inventory(self) -> Dict[str, CameraTarget]:
@@ -118,6 +120,7 @@ class WandSession:
 
     def _broadcast(self, targets: Iterable[CameraTarget], fn_name: str, **kwargs: Any) -> Dict[str, Dict[str, Any]]:
         fn = getattr(self.control, fn_name)
+        timeout = self.mask_timeout_s if fn_name == "mask_start" else self.timeout_s
         results: Dict[str, Dict[str, Any]] = {}
         for target in targets:
             try:
@@ -125,7 +128,7 @@ class WandSession:
                     target.ip,
                     target.control_port,
                     camera_id=target.camera_id,
-                    timeout=self.timeout_s,
+                    timeout=timeout,
                     **kwargs,
                 )
             except Exception as exc:

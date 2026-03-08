@@ -38,11 +38,13 @@ MASK_HIT_RATIO = 0.7
 MASK_MIN_AREA_PX = 4
 MASK_DILATE_PX = 2
 MASK_MAX_RATIO_WARNING = 0.4
+MASK_INIT_TIMEOUT_SECONDS = 10.0
 DEFAULT_CIRCULARITY_MIN = 0.0
 IDLE_PREVIEW_FPS = 15.0
 DEFAULT_CAPTURE_WIDTH = 2304
 DEFAULT_CAPTURE_HEIGHT = 1296
 DEFAULT_TARGET_FPS = 56
+PREVIEW_STOP_TIMEOUT_SECONDS = 2.0
 
 MAX_LINE_BYTES = 65536
 LINE_TIMEOUT_SECONDS = 2.0
@@ -813,6 +815,7 @@ class ControlServerConfig:
     mask_min_area_px: int = MASK_MIN_AREA_PX
     mask_dilate_px: int = MASK_DILATE_PX
     mask_max_ratio_warning: float = MASK_MAX_RATIO_WARNING
+    mask_init_timeout_s: float = MASK_INIT_TIMEOUT_SECONDS
     debug_preview: bool = False
 
 
@@ -936,16 +939,23 @@ class ControlServer:
 
         thread.start()
 
-    def _stop_preview_loop(self) -> None:
+    def _stop_preview_loop(self, timeout_s: float = PREVIEW_STOP_TIMEOUT_SECONDS) -> bool:
         with self._state_lock:
             stop_event = self._preview_stop_event
             thread = self._preview_thread
+            backend = self._preview_backend
             self._preview_stop_event = None
 
         if stop_event is not None:
             stop_event.set()
+        if backend is not None:
+            try:
+                backend.stop()
+            except Exception:
+                pass
         if thread is not None and thread.is_alive():
-            thread.join(timeout=1.0)
+            thread.join(timeout=max(0.0, float(timeout_s)))
+        return thread is None or not thread.is_alive()
 
     def _preview_loop(self, stop_event: threading.Event) -> None:
         try:
@@ -1426,7 +1436,16 @@ class ControlServer:
                 )
             self._state = STATE_MASK_INIT
 
-        self._stop_preview_loop()
+        self._log(f"mask init started frames={frames} threshold={threshold}")
+        if not self._stop_preview_loop():
+            self._cancel_mask_state()
+            self._log("mask init aborted: preview backend did not stop cleanly")
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INTERNAL,
+                error_message="internal_error: mask_start_failed: preview_stop_timeout",
+            )
         backend: FrameBackend | None = None
         mask: np.ndarray | None = None
         mask_pixels = 0
@@ -1437,6 +1456,13 @@ class ControlServer:
             backend = self._ensure_backend()
             self._apply_backend_settings(backend)
             backend.start()
+            with self._state_lock:
+                fps_for_timeout = float(self._desired_fps or self._config.target_fps or 1.0)
+            estimated_capture_s = float(frames) / max(1.0, fps_for_timeout)
+            mask_timeout_s = max(
+                float(self._config.mask_init_timeout_s),
+                estimated_capture_s * 4.0 + 2.0,
+            )
             mask, mask_pixels, last_frame = self._build_static_mask(
                 backend,
                 frames,
@@ -1444,13 +1470,25 @@ class ControlServer:
                 float(hit_ratio),
                 min_area,
                 dilate,
+                deadline_monotonic=time.perf_counter() + mask_timeout_s,
             )
             mask_ratio = mask_pixels / float(mask.size)
             if mask_ratio > float(self._config.mask_max_ratio_warning):
                 warning = f"mask_ratio_high ({mask_ratio:.3f})"
+        except TimeoutError as exc:
+            self._cancel_mask_state()
+            self._start_preview_loop()
+            self._log(f"mask init timed out: {exc}")
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INTERNAL,
+                error_message=f"internal_error: mask_start_timeout: {exc}",
+            )
         except BackendUnavailableError as exc:
             self._cancel_mask_state()
             self._start_preview_loop()
+            self._log(f"mask init backend unavailable: {exc}")
             return self._error_response(
                 request_id=request_id,
                 request_camera_id=request_camera_id,
@@ -1460,6 +1498,7 @@ class ControlServer:
         except Exception as exc:
             self._cancel_mask_state()
             self._start_preview_loop()
+            self._log(f"mask init failed: {exc}")
             return self._error_response(
                 request_id=request_id,
                 request_camera_id=request_camera_id,
@@ -1476,6 +1515,11 @@ class ControlServer:
             self._mask_ratio = mask_ratio
             self._mask_warning = warning
             self._state = STATE_READY
+        self._log(
+            "mask init completed "
+            f"pixels={mask_pixels} ratio={mask_ratio:.3f}"
+            + (f" warning={warning}" if warning else "")
+        )
 
         if last_frame is not None:
             final_blobs, final_stats = detect_blobs(
@@ -1715,10 +1759,13 @@ class ControlServer:
         hit_ratio: float,
         min_area: int,
         dilate: int,
+        deadline_monotonic: float | None = None,
     ) -> tuple[np.ndarray, int, np.ndarray | None]:
         hit_counts: np.ndarray | None = None
         last_frame: np.ndarray | None = None
         for frame_index in range(frames):
+            if deadline_monotonic is not None and time.perf_counter() > deadline_monotonic:
+                raise TimeoutError("mask_init_timed_out")
             frame = backend.capture_array()
             last_frame = frame
             gray = (

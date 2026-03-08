@@ -93,6 +93,21 @@ def test_mask_start_can_refresh_existing_mask() -> None:
     assert second["ack"] is True
 
 
+def test_mask_start_timeout_resets_state() -> None:
+    server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=False))
+
+    def _raise_timeout(*args, **kwargs):
+        raise TimeoutError("mask_init_timed_out")
+
+    server._build_static_mask = _raise_timeout  # type: ignore[method-assign]
+    response = server._handle_mask_start("req-1", "pi-cam-01", {"frames": 2, "threshold": 200})
+
+    assert response["ack"] is False
+    assert "mask_start_timeout" in response["error_message"]
+    ping = server._handle_ping("req-2", "pi-cam-01")
+    assert ping["result"]["state"] == "IDLE"
+
+
 def test_resolve_debug_preview_enabled_requires_display(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DISPLAY", raising=False)
     assert resolve_debug_preview_enabled(True) is False
