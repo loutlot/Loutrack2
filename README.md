@@ -12,6 +12,7 @@ Raspberry Pi Camera 3 Noir Wide を使ったアウトサイドイン型モーシ
 | 較正成果物 schema 運用 | ✅ 実装済み | `schema/calibration_intrinsics_v1.json`, `schema/calibration_extrinsics_v1.json` |
 | 5剛体の常用 tracking UI | 🚧 進行中（Step1-3 最小実装） | `docs/10_in_progress/tracking_gui_plan.md`, `src/host/wand_gui.py`, `tests/test_wand_gui.py` |
 | SteamVR 出力 | ⏳ 未着手 | （実装ファイルなし） |
+| LED board BOM 整理 | ✅ 回路図ベース数量 + 購入候補/URL を反映済み | `hardware/LED board/bom.md`, `hardware/LED board/kicad/LEDHat1.4_low_heat/LEDHat.kicad_sch` |
 
 ## まずどこから手を付けるか（閲覧者向け）
 
