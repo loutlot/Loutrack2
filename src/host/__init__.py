@@ -30,6 +30,7 @@ from .rigid import (
     LEFT_FOOT_PATTERN, RIGHT_FOOT_PATTERN
 )
 from .pipeline import TrackingPipeline, TrackingSession
+from .tracking_runtime import TrackingRuntime
 from .visualize import TrackingVisualizer, SimpleGraph
 from .sync_eval import SyncEvaluator
 from .wand_session import (
@@ -97,6 +98,7 @@ __all__ = [
     # Pipeline
     "TrackingPipeline",
     "TrackingSession",
+    "TrackingRuntime",
     "SyncEvaluator",
     "send_request",
     "ping",

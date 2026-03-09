@@ -205,6 +205,20 @@ pipeline.stop()
 
 ---
 
+### tracking_runtime.py - GUI向け tracking runtime
+
+`TrackingPipeline` を GUI 利用向けにラップし、start/stop/status/scene snapshot を提供。
+camera frustum近接面のコーナー計算、rigid markerのworld変換、簡易trail保持を担当。
+
+**主要クラス/関数**:
+| 名前 | 説明 |
+|------|------|
+| `TrackingRuntime` | GUI向けランタイムラッパー |
+| `compute_frustum_near_corners_world()` | frustum近接面4点をworldで計算 |
+| `compute_markers_world()` | rigid markerをlocal->world変換 |
+
+---
+
 ### sync_eval.py - 同期評価
 
 ペアリング結果から同期品質を評価し、許容窓の推奨値を算出。

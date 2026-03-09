@@ -10,7 +10,7 @@ Raspberry Pi Camera 3 Noir Wide を使ったアウトサイドイン型モーシ
 | Host 受信 + ペアリング + 三角測量 | ✅ 実装済み | `src/host/receiver.py`, `src/host/geo.py`, `src/host/pipeline.py` |
 | wand 外部較正（収録/GUI/solver） | ✅ 実装済み | `src/host/wand_gui.py`, `src/host/wand_session.py`, `src/camera-calibration/calibrate_extrinsics.py` |
 | 較正成果物 schema 運用 | ✅ 実装済み | `schema/calibration_intrinsics_v1.json`, `schema/calibration_extrinsics_v1.json` |
-| 5剛体の常用 tracking UI | 🚧 進行中 | `docs/10_in_progress/tracking_gui_plan.md` |
+| 5剛体の常用 tracking UI | 🚧 進行中（Step1-3 最小実装） | `docs/10_in_progress/tracking_gui_plan.md`, `src/host/wand_gui.py`, `tests/test_wand_gui.py` |
 | SteamVR 出力 | ⏳ 未着手 | （実装ファイルなし） |
 
 ## まずどこから手を付けるか（閲覧者向け）
@@ -31,6 +31,9 @@ Raspberry Pi Camera 3 Noir Wide を使ったアウトサイドイン型モーシ
 - Host で multi-camera フレームをペアリングし、三角測量と再投影誤差評価ができる。
 - Host から Pi への `mask_start/start/stop` と露光・ゲイン等の制御ができる。
 - wand 収録ログ（JSONL）から extrinsics を生成し、geo モジュールで読み込める。
+- `wand_gui` 同一 HTML で `Calibration/Tracking` を切替でき、tracking の status/scene API と Start/Stop 導線を使える。
+- `tracking_runtime.stop()` 後は scene snapshot を空状態へ戻し、status で `last_stop_summary` を保持するようにして GUI 側の整合を改善済み。
+- tracking review fix として、`wand_gui` の tracking start は extrinsics JSON 単体ではなく calibration directory を `TrackingPipeline` へ渡すようにし、GUI 再起動時も既存 extrinsics を自動再検出し、pose 空時でも scene snapshot が更新されるようにした。
 - 同期評価・GUI 状態・control transport について pytest ベースの回帰テストがある。
 
 ## 未完了/課題（次に進めるべき点）
@@ -54,6 +57,8 @@ Raspberry Pi Camera 3 Noir Wide を使ったアウトサイドイン型モーシ
 ### Phase C: tracking GUI 実装
 - `docs/10_in_progress/tracking_gui_plan.md` に沿って Page 2 を実装。
 - 3D 表示、frustum 表示、health panel を段階導入。
+- Step1-4 最小実装として `src/host/tracking_runtime.py` を追加し、`src/host/pipeline.py` に最新 triangulation snapshot accessor を追加。
+- 追加した runtime の幾何計算・状態遷移は `tests/test_tracking_runtime.py` で単体検証。
 
 ### Phase D: 出力統合
 - 5剛体 tracking の評価基準を固定。

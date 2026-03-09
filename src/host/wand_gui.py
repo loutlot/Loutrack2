@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 import threading
 import importlib.util
 from http import HTTPStatus
@@ -18,10 +19,12 @@ if __package__ in (None, ""):
         sys.path.insert(0, str(MODULE_SRC_ROOT))
     from host.receiver import UDPReceiver
     from host.logger import FrameLogger
+    from host.tracking_runtime import TrackingRuntime
     from host.wand_session import SessionConfig, WandSession
 else:
     from .receiver import UDPReceiver
     from .logger import FrameLogger
+    from .tracking_runtime import TrackingRuntime
     from .wand_session import SessionConfig, WandSession
 
 
@@ -105,6 +108,34 @@ HTML_PAGE = """<!doctype html>
       display: flex;
       flex-wrap: wrap;
       gap: 10px;
+    }
+    .page-nav {
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .page-tab {
+      background: rgba(31, 42, 48, 0.08);
+      color: var(--ink);
+    }
+    .page-tab.active {
+      background: var(--teal);
+      color: #fff;
+    }
+    .page {
+      display: none;
+    }
+    .page.active {
+      display: block;
+    }
+    .tracking-empty {
+      margin-bottom: 14px;
+      padding: 12px 14px;
+      border-radius: 16px;
+      border: 1px solid var(--line);
+      background: rgba(193, 91, 49, 0.10);
+      color: var(--warm);
+      font-weight: 700;
     }
     .hero-note {
       padding: 14px 16px;
@@ -376,6 +407,10 @@ HTML_PAGE = """<!doctype html>
         Pi を <code>--debug-preview</code> 付きで起動していれば、blob 調整、mask 結果、wand 収録中の OpenCV preview が Pi デスクトップに継続表示されます。
       </div>
       <div class="hero-actions">
+        <div class="page-nav" aria-label="page navigation">
+          <button id="tabCalibration" class="page-tab active" type="button">Calibration</button>
+          <button id="tabTracking" class="page-tab" type="button">Tracking</button>
+        </div>
         <button class="secondary" data-command="refresh">Refresh</button>
         <button class="ghost" data-command="ping">Ping</button>
       </div>
@@ -388,6 +423,7 @@ HTML_PAGE = """<!doctype html>
       </div>
     </section>
 
+    <section id="pageCalibration" class="page active">
     <div class="grid">
       <div class="stack">
         <section class="card">
@@ -509,6 +545,48 @@ HTML_PAGE = """<!doctype html>
         </section>
       </div>
     </div>
+    </section>
+
+    <section id="pageTracking" class="page">
+      <div class="grid">
+        <div class="stack">
+          <section class="card">
+            <div class="step-head">
+              <div class="step-title">
+                <div class="eyebrow">Tracking Scene</div>
+                <h2>Scene Snapshot JSON</h2>
+              </div>
+            </div>
+            <div id="trackingEmpty" class="tracking-empty">Generate extrinsics first</div>
+            <pre class="console" id="trackingScene"></pre>
+          </section>
+        </div>
+        <div class="stack">
+          <section class="card">
+            <div class="step-head">
+              <div class="step-title">
+                <div class="eyebrow">Tracking Control</div>
+                <h2>Start / Stop</h2>
+              </div>
+            </div>
+            <p id="trackingExtrinsicsPath"></p>
+            <div class="button-row">
+              <button id="trackingStart" class="secondary" type="button">Start Tracking</button>
+              <button id="trackingStop" class="ghost" type="button">Stop Tracking</button>
+            </div>
+          </section>
+          <section class="card">
+            <div class="step-head">
+              <div class="step-title">
+                <div class="eyebrow">Tracking Status</div>
+                <h2>Status JSON</h2>
+              </div>
+            </div>
+            <pre class="console" id="trackingStatus"></pre>
+          </section>
+        </div>
+      </div>
+    </section>
   </main>
   <script>
     const sliders = ["exposure", "gain", "fps", "focus", "threshold", "circularity", "blobMin", "blobMax", "maskThreshold", "maskSeconds"];
@@ -570,9 +648,20 @@ HTML_PAGE = """<!doctype html>
       stepMaskStatus: document.getElementById("stepMaskStatus"),
       stepWandStatus: document.getElementById("stepWandStatus"),
       stepExtrinsicsStatus: document.getElementById("stepExtrinsicsStatus"),
+      tabCalibration: document.getElementById("tabCalibration"),
+      tabTracking: document.getElementById("tabTracking"),
+      pageCalibration: document.getElementById("pageCalibration"),
+      pageTracking: document.getElementById("pageTracking"),
+      trackingEmpty: document.getElementById("trackingEmpty"),
+      trackingStart: document.getElementById("trackingStart"),
+      trackingStop: document.getElementById("trackingStop"),
+      trackingStatus: document.getElementById("trackingStatus"),
+      trackingScene: document.getElementById("trackingScene"),
+      trackingExtrinsicsPath: document.getElementById("trackingExtrinsicsPath"),
     };
     const sliderUpdateTimers = {};
     const SLIDER_DEBOUNCE_MS = 200;
+    let activePage = "calibration";
 
     function selectedCameraIds() {
       return [...document.querySelectorAll("input[data-camera]:checked")].map((item) => item.dataset.camera);
@@ -742,6 +831,31 @@ HTML_PAGE = """<!doctype html>
       }).join("");
     }
 
+    function setActivePage(pageName) {
+      activePage = pageName === "tracking" ? "tracking" : "calibration";
+      const calibrationActive = activePage === "calibration";
+      elements.pageCalibration.classList.toggle("active", calibrationActive);
+      elements.pageTracking.classList.toggle("active", !calibrationActive);
+      elements.tabCalibration.classList.toggle("active", calibrationActive);
+      elements.tabTracking.classList.toggle("active", !calibrationActive);
+    }
+
+    async function loadTracking() {
+      const [statusResponse, sceneResponse] = await Promise.all([
+        fetch("/api/tracking/status"),
+        fetch("/api/tracking/scene"),
+      ]);
+      const status = await statusResponse.json();
+      const scene = await sceneResponse.json();
+      const emptyText = status.empty_state || scene.empty_state || "";
+      elements.trackingEmpty.style.display = emptyText ? "block" : "none";
+      elements.trackingEmpty.textContent = emptyText;
+      elements.trackingStart.disabled = !status.start_allowed;
+      elements.trackingExtrinsicsPath.textContent = `Extrinsics: ${status.latest_extrinsics_path || "(none)"}`;
+      elements.trackingStatus.textContent = JSON.stringify(status, null, 2);
+      elements.trackingScene.textContent = JSON.stringify(scene, null, 2);
+    }
+
     async function loadState() {
       const response = await fetch("/api/state");
       const state = await response.json();
@@ -770,6 +884,7 @@ HTML_PAGE = """<!doctype html>
       renderCameraSummary(state.cameras || []);
       renderWorkflow(state);
       elements.status.textContent = JSON.stringify(state.last_result, null, 2);
+      await loadTracking();
     }
 
     async function postJson(url, payload) {
@@ -805,6 +920,23 @@ HTML_PAGE = """<!doctype html>
       await loadState();
     });
 
+    elements.tabCalibration.addEventListener("click", () => setActivePage("calibration"));
+    elements.tabTracking.addEventListener("click", () => setActivePage("tracking"));
+
+    elements.trackingStart.addEventListener("click", async () => {
+      await postJson("/api/tracking/start", {
+        patterns: ["waist"],
+      });
+      setActivePage("tracking");
+      await loadState();
+    });
+
+    elements.trackingStop.addEventListener("click", async () => {
+      await postJson("/api/tracking/stop", {});
+      setActivePage("tracking");
+      await loadState();
+    });
+
     sliders.forEach((name) => {
       elements[name].addEventListener("input", () => {
         values[name].textContent = elements[name].value;
@@ -825,6 +957,7 @@ HTML_PAGE = """<!doctype html>
       });
     });
 
+    setActivePage(activePage);
     loadState();
     setInterval(loadState, 3000);
   </script>
@@ -839,6 +972,7 @@ class WandGuiState:
         session: WandSession,
         receiver: UDPReceiver,
         settings_path: Path | None = None,
+        tracking_runtime: TrackingRuntime | None = None,
     ) -> None:
         self.session = session
         self.receiver = receiver
@@ -857,6 +991,10 @@ class WandGuiState:
         if hasattr(self.receiver, "set_frame_callback"):
             self.receiver.set_frame_callback(self._on_frame_received)
         self._extrinsics_solver = _load_extrinsics_solver()
+        self.tracking_runtime = tracking_runtime or TrackingRuntime()
+        self.latest_extrinsics_path: Path | None = None
+        self.latest_extrinsics_quality: Dict[str, Any] | None = None
+        self._restore_latest_extrinsics(DEFAULT_EXTRINSICS_OUTPUT_PATH)
 
     def _default_config(self) -> SessionConfig:
         return SessionConfig(exposure_us=12000, gain=8.0, fps=56, duration_s=60.0)
@@ -1012,10 +1150,7 @@ class WandGuiState:
         )
         capture_log_exists = self.capture_log_path.exists() and self.capture_log_path.is_file()
         wand_capture_complete = self._capture_completed and capture_log_exists
-        extrinsics_ready = bool(
-            isinstance(self.last_result.get("generate_extrinsics"), dict)
-            and self.last_result["generate_extrinsics"].get("ok")
-        )
+        extrinsics_ready = self._tracking_extrinsics_ready()
 
         active_segment = "blob"
         if extrinsics_ready:
@@ -1041,8 +1176,103 @@ class WandGuiState:
             "wand_capture_complete": wand_capture_complete,
             "wand_capture_log_path": str(self.capture_log_path),
             "extrinsics_ready": extrinsics_ready,
+            "latest_extrinsics_path": str(self.latest_extrinsics_path) if self.latest_extrinsics_path else None,
+            "latest_extrinsics_quality": self.latest_extrinsics_quality,
             "active_segment": active_segment,
         }
+
+    def _tracking_extrinsics_ready(self) -> bool:
+        path = self.latest_extrinsics_path
+        return path is not None and path.exists() and path.is_file()
+
+    @staticmethod
+    def _summarize_extrinsics_quality(camera_rows: Any) -> Dict[str, Any]:
+        quality_rows: List[Dict[str, Any]] = []
+        if isinstance(camera_rows, list):
+            for row in camera_rows:
+                if isinstance(row, dict) and isinstance(row.get("quality"), dict):
+                    quality_rows.append(row["quality"])
+        return {
+            "pair_count_total": int(sum(float(item.get("pair_count", 0) or 0) for item in quality_rows)),
+            "median_reproj_error_px_max": float(
+                max((float(item.get("median_reproj_error_px", 0.0) or 0.0) for item in quality_rows), default=0.0)
+            ),
+            "inlier_ratio_min": float(
+                min((float(item.get("inlier_ratio", 1.0) or 1.0) for item in quality_rows), default=1.0)
+            ),
+        }
+
+    def _restore_latest_extrinsics(self, path: Path) -> None:
+        if not path.exists() or not path.is_file():
+            return
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        if not isinstance(payload, dict):
+            return
+        self.latest_extrinsics_path = path
+        self.latest_extrinsics_quality = self._summarize_extrinsics_quality(payload.get("cameras"))
+
+    def _resolve_tracking_calibration_path(self, raw_path: str) -> Path:
+        candidate = raw_path.strip()
+        if not candidate and self.latest_extrinsics_path is not None:
+            candidate = str(self.latest_extrinsics_path)
+        if not candidate:
+            raise ValueError("generate extrinsics first")
+
+        resolved = Path(candidate)
+        if resolved.is_dir():
+            return resolved
+        if resolved.is_file() and resolved.name.startswith("calibration_extrinsics_v1"):
+            return resolved.parent
+        raise ValueError("tracking calibration_path must be a calibration directory or extrinsics file")
+
+    def get_tracking_status(self) -> Dict[str, Any]:
+        status = self.tracking_runtime.status()
+        start_allowed = self._tracking_extrinsics_ready()
+        return {
+            **status,
+            "start_allowed": start_allowed,
+            "empty_state": None if start_allowed else "Generate extrinsics first",
+            "latest_extrinsics_path": str(self.latest_extrinsics_path) if self.latest_extrinsics_path else None,
+            "latest_extrinsics_quality": self.latest_extrinsics_quality,
+        }
+
+    def get_tracking_scene(self) -> Dict[str, Any]:
+        start_allowed = self._tracking_extrinsics_ready()
+        if not start_allowed:
+            return {
+                "tracking": {
+                    "running": False,
+                    "frames_processed": 0,
+                    "poses_estimated": 0,
+                },
+                "cameras": [],
+                "rigid_bodies": [],
+                "raw_points": [],
+                "timestamp_us": int(time.time() * 1_000_000),
+                "empty_state": "Generate extrinsics first",
+            }
+        return self.tracking_runtime.scene_snapshot()
+
+    def start_tracking(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        resolved = self._resolve_tracking_calibration_path(str(payload.get("calibration_path") or ""))
+        patterns = payload.get("patterns", ["waist"])
+        if not isinstance(patterns, list):
+            patterns = ["waist"]
+        status = self.tracking_runtime.start(str(resolved), [str(item) for item in patterns])
+        response = {"ok": True, **status, "running": True}
+        self.last_result = {"tracking_start": response}
+        return response
+
+    def stop_tracking(self) -> Dict[str, Any]:
+        stop_result = self.tracking_runtime.stop()
+        summary = stop_result.get("summary", stop_result) if isinstance(stop_result, dict) else {}
+        status = self.tracking_runtime.status()
+        response = {"ok": True, "summary": summary, **status, "running": False}
+        self.last_result = {"tracking_stop": response}
+        return response
 
     def get_state(self) -> Dict[str, Any]:
         cameras = self.refresh_targets()
@@ -1052,6 +1282,7 @@ class WandGuiState:
             "workflow": self._workflow_summary(cameras),
             "last_result": self.last_result,
             "receiver": self.receiver.stats,
+            "tracking": self.get_tracking_status(),
         }
 
     def apply_config(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1131,7 +1362,7 @@ class WandGuiState:
             raise ValueError(f"log_path is not a file: {resolved_log_path}")
 
         try:
-            result = self._extrinsics_solver(
+            raw_result = self._extrinsics_solver(
                 intrinsics_path=intrinsics_path,
                 log_path=str(resolved_log_path),
                 output_path=output_path,
@@ -1139,12 +1370,23 @@ class WandGuiState:
         except FileNotFoundError as exc:
             missing_path = Path(getattr(exc, "filename", "") or str(resolved_log_path))
             raise ValueError(f"log_path does not exist: {missing_path}") from exc
+        if not isinstance(raw_result, dict):
+            raise ValueError("extrinsics solver returned invalid response")
+
+        camera_rows = raw_result.get("cameras")
+        camera_count = len(camera_rows) if isinstance(camera_rows, list) else 0
+        quality_summary = self._summarize_extrinsics_quality(camera_rows)
+
+        resolved_output = Path(output_path)
         summary = {
             "ok": True,
-            "reference_camera_id": result.get("reference_camera_id"),
-            "camera_count": len(result.get("cameras", [])),
-            "output_path": output_path,
+            "reference_camera_id": raw_result.get("reference_camera_id"),
+            "camera_count": camera_count,
+            "output_path": str(resolved_output),
+            "quality": quality_summary,
         }
+        self.latest_extrinsics_path = resolved_output
+        self.latest_extrinsics_quality = quality_summary
         self.last_result = {"generate_extrinsics": summary}
         return self.last_result
 
@@ -1210,11 +1452,17 @@ class WandGuiHandler(BaseHTTPRequestHandler):
     state: WandGuiState
 
     def do_GET(self) -> None:
-        if self.path == "/":
+        if self.path in ("/", "/index.html"):
             self._send_html(HTML_PAGE)
             return
         if self.path == "/api/state":
             self._send_json(self.state.get_state())
+            return
+        if self.path == "/api/tracking/status":
+            self._send_json(self.state.get_tracking_status())
+            return
+        if self.path == "/api/tracking/scene":
+            self._send_json(self.state.get_tracking_scene())
             return
         self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -1229,6 +1477,12 @@ class WandGuiHandler(BaseHTTPRequestHandler):
                 return
             if self.path == "/api/generate_extrinsics":
                 self._send_json(self.state.generate_extrinsics(payload))
+                return
+            if self.path == "/api/tracking/start":
+                self._send_json(self.state.start_tracking(payload))
+                return
+            if self.path == "/api/tracking/stop":
+                self._send_json(self.state.stop_tracking())
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
         except ValueError as exc:

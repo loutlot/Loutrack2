@@ -7,6 +7,7 @@ Provides the complete processing chain:
 
 import time
 import threading
+import numpy as np
 from typing import Optional, Dict, Any, List, Callable
 from datetime import datetime
 
@@ -83,6 +84,13 @@ class TrackingPipeline:
         # State
         self._running = False
         self._last_timestamp = 0
+        self._triangulation_lock = threading.Lock()
+        self._latest_triangulation_snapshot: Dict[str, Any] = {
+            "timestamp": 0,
+            "points_3d": [],
+            "reprojection_errors": [],
+            "pair_timestamp_range_us": 0,
+        }
         
         # Statistics
         self.frames_processed = 0
@@ -177,9 +185,27 @@ class TrackingPipeline:
                 points_3d = result.get("points_3d", [])
             else:
                 points_3d = []
+
+            points_3d_list = list(points_3d) if points_3d is not None else []
+            point_count = len(points_3d_list)
+
+            with self._triangulation_lock:
+                self._latest_triangulation_snapshot = {
+                    "timestamp": timestamp,
+                    "points_3d": [
+                        point.tolist() if hasattr(point, "tolist") else list(point)
+                        for point in points_3d_list
+                    ],
+                    "reprojection_errors": list(result.get("reprojection_errors", [])),
+                    "pair_timestamp_range_us": paired_frames.timestamp_range_us,
+                }
             
             # Estimate rigid body poses
-            points_array = points_3d if points_3d else []
+            points_array = (
+                np.asarray(points_3d_list, dtype=np.float64)
+                if point_count > 0
+                else np.empty((0, 3), dtype=np.float64)
+            )
             
             poses = self.rigid_estimator.process_points(points_array, timestamp)
             
@@ -192,14 +218,14 @@ class TrackingPipeline:
                     frame_index=frame.frame_index
                 )
             
-            if points_3d:
+            if point_count > 0:
                 self.metrics.record_triangulation(
-                    len(points_3d),
+                    point_count,
                     result.get("reprojection_errors", [])
                 )
             
             # Callback
-            if self._pose_callback and poses:
+            if self._pose_callback:
                 self._pose_callback(poses)
             
             self.frames_processed += 1
@@ -226,6 +252,16 @@ class TrackingPipeline:
     @property
     def is_running(self) -> bool:
         return self._running
+
+    def get_latest_triangulation_snapshot(self) -> Dict[str, Any]:
+        """Get latest triangulation output for GUI/runtime consumers."""
+        with self._triangulation_lock:
+            return {
+                "timestamp": self._latest_triangulation_snapshot["timestamp"],
+                "points_3d": [list(point) for point in self._latest_triangulation_snapshot["points_3d"]],
+                "reprojection_errors": list(self._latest_triangulation_snapshot["reprojection_errors"]),
+                "pair_timestamp_range_us": self._latest_triangulation_snapshot["pair_timestamp_range_us"],
+            }
 
 
 class TrackingSession:
