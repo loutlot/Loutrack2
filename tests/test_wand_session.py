@@ -60,7 +60,12 @@ class _FakeControl:
 
 
 def test_wand_points_mm_defaults() -> None:
-    assert WAND_POINTS_MM == ((0.0, 0.0, 0.0), (168.0, 0.0, 0.0), (0.0, 243.0, 0.0))
+    assert WAND_POINTS_MM == (
+        (0.0, 0.0, 0.0),
+        (168.0, 0.0, 0.0),
+        (84.0, 121.5, 0.0),
+        (0.0, 243.0, 0.0),
+    )
 
 
 def test_discovery_prefers_passive_ip(tmp_path: Path) -> None:

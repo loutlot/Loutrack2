@@ -18,6 +18,7 @@ WAND_OUTER_LONG_MM = 257.0
 WAND_POINTS_MM: Tuple[Tuple[float, float, float], ...] = (
     (0.0, 0.0, 0.0),
     (168.0, 0.0, 0.0),
+    (84.0, 121.5, 0.0),
     (0.0, 243.0, 0.0),
 )
 

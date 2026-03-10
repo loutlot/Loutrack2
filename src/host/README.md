@@ -272,7 +272,7 @@ print(result["session_id"])
 |------|------|
 | `WandSession` | wand収録制御の実行クラス |
 | `SessionConfig` | 収録パラメータ |
-| `WAND_POINTS_MM` | wand 3点の固定3D座標（mm） |
+| `WAND_POINTS_MM` | wand 4点の固定3D座標（mm） |
 
 ---
 

@@ -724,6 +724,8 @@ HTML_PAGE = """<!doctype html>
             <label for="intrinsicsPath">Intrinsics Dir<input id="intrinsicsPath" type="text" value="calibration"></label>
             <label for="logPath">Log Path<input id="logPath" type="text" value="logs/wand_capture.jsonl"></label>
             <label for="outputPath">Output Path<input id="outputPath" type="text" value="calibration/calibration_extrinsics_v1.json"></label>
+            <label for="pairWindowUs">Pair Window (us)<input id="pairWindowUs" type="number" min="1" step="100" value="8000"></label>
+            <label for="minPairs">Min Pairs<input id="minPairs" type="number" min="1" step="1" value="8"></label>
           </div>
           <div class="button-row">
             <button id="generateExtrinsics">Generate Extrinsics</button>
@@ -819,7 +821,14 @@ HTML_PAGE = """<!doctype html>
     </section>
   </main>
   <script type="module">
-    import * as THREE from "/static/vendor/three.module.min.js";
+    let THREE = null;
+    async function ensureThreeLoaded() {
+      if (THREE) {
+        return THREE;
+      }
+      THREE = await import("/static/vendor/three.module.min.js");
+      return THREE;
+    }
     const sliders = ["exposure", "gain", "fps", "focus", "threshold", "circularity", "blobMin", "blobMax", "maskThreshold", "maskSeconds"];  
     const sliderNames = new Set(sliders);
     const stepOrder = ["blob", "mask", "wand", "extrinsics"];
@@ -859,6 +868,8 @@ HTML_PAGE = """<!doctype html>
       intrinsicsPath: document.getElementById("intrinsicsPath"),
       logPath: document.getElementById("logPath"),
       outputPath: document.getElementById("outputPath"),
+      pairWindowUs: document.getElementById("pairWindowUs"),
+      minPairs: document.getElementById("minPairs"),
       selectionMetric: document.getElementById("selectionMetric"),
       selectionSummary: document.getElementById("selectionSummary"),
       blobMetric: document.getElementById("blobMetric"),
@@ -899,7 +910,7 @@ HTML_PAGE = """<!doctype html>
       trackingScene: document.getElementById("trackingScene"),
       trackingExtrinsicsPath: document.getElementById("trackingExtrinsicsPath"),
     };
-    const trackingViewer = createTrackingViewer();
+    let trackingViewer = createTrackingViewer();
     const sliderUpdateTimers = {};
     function createTrackingViewer() {
       const canvas = elements.trackingViewerCanvas;
@@ -907,7 +918,35 @@ HTML_PAGE = """<!doctype html>
       if (!canvas || !overlay) {
         return { update: () => {}, setEmpty: () => {}, resize: () => {} };
       }
-      const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+      if (!THREE) {
+        const fallbackMessage = "3D viewer loading...";
+        overlay.textContent = fallbackMessage;
+        overlay.style.display = "flex";
+        return {
+          update: () => {},
+          setEmpty(message) {
+            overlay.textContent = message || fallbackMessage;
+            overlay.style.display = "flex";
+          },
+          resize: () => {},
+        };
+      }
+      let renderer;
+      try {
+        renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+      } catch (error) {
+        const fallbackMessage = "3D viewer unavailable (WebGL unsupported). Calibration controls still work.";
+        overlay.textContent = fallbackMessage;
+        overlay.style.display = "flex";
+        return {
+          update: () => {},
+          setEmpty(message) {
+            overlay.textContent = message || fallbackMessage;
+            overlay.style.display = "flex";
+          },
+          resize: () => {},
+        };
+      }
       renderer.setPixelRatio(window.devicePixelRatio || 1);
       const scene = new THREE.Scene();
       scene.background = new THREE.Color(0xf7f3ee);
@@ -1180,6 +1219,22 @@ HTML_PAGE = """<!doctype html>
     }
     const SLIDER_DEBOUNCE_MS = 200;
     let activePage = "calibration";
+    let loadStateInFlight = false;
+
+    function reportUiError(context, error) {
+      const message = error instanceof Error ? error.message : String(error);
+      elements.status.textContent = JSON.stringify({ error: `${context}: ${message}` }, null, 2);
+    }
+
+    async function initTrackingViewer() {
+      try {
+        await ensureThreeLoaded();
+        trackingViewer = createTrackingViewer();
+      } catch (error) {
+        reportUiError("three_import", error);
+        trackingViewer.setEmpty("3D viewer unavailable (three.js import failed). Calibration controls still work.");
+      }
+    }
 
     function selectedCameraIds() {
       return [...document.querySelectorAll("input[data-camera]:checked")].map((item) => item.dataset.camera);
@@ -1460,6 +1515,9 @@ HTML_PAGE = """<!doctype html>
         fetch("/api/tracking/status"),
         fetch("/api/tracking/scene"),
       ]);
+      if (!statusResponse.ok || !sceneResponse.ok) {
+        throw new Error(`tracking_fetch_failed status=${statusResponse.status} scene=${sceneResponse.status}`);
+      }
       const status = await statusResponse.json();
       const scene = await sceneResponse.json();
       elements.trackingStart.disabled = !status.start_allowed;
@@ -1476,6 +1534,9 @@ HTML_PAGE = """<!doctype html>
 
     async function loadState() {
       const response = await fetch("/api/state");
+      if (!response.ok) {
+        throw new Error(`state_fetch_failed status=${response.status}`);
+      }
       const state = await response.json();
       const configMap = {
         exposure: state.config.exposure_us,
@@ -1506,53 +1567,104 @@ HTML_PAGE = """<!doctype html>
     }
 
     async function postJson(url, payload) {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify(payload),
-      });
-      return response.json();
+      let response;
+      try {
+        response = await fetch(url, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(payload),
+        });
+      } catch (error) {
+        throw new Error(`network_error url=${url} reason=${error instanceof Error ? error.message : String(error)}`);
+      }
+      let body = {};
+      try {
+        body = await response.json();
+      } catch (error) {
+        throw new Error(`invalid_json_response url=${url} status=${response.status}`);
+      }
+      if (!response.ok) {
+        const reason = body && typeof body === "object" && "error" in body ? body.error : `http_${response.status}`;
+        throw new Error(`request_failed url=${url} reason=${reason}`);
+      }
+      return body;
+    }
+
+    async function safeLoadState() {
+      if (loadStateInFlight) {
+        return;
+      }
+      loadStateInFlight = true;
+      try {
+        await loadState();
+      } catch (error) {
+        reportUiError("load_state", error);
+      } finally {
+        loadStateInFlight = false;
+      }
     }
 
     document.getElementById("applyConfig").addEventListener("click", async () => {
-      await postJson("/api/config", configPayload());
-      await loadState();
+      try {
+        await postJson("/api/config", configPayload());
+        await safeLoadState();
+      } catch (error) {
+        reportUiError("apply_config", error);
+      }
     });
 
     document.querySelectorAll("button[data-command]").forEach((button) => {
       button.addEventListener("click", async () => {
-        await postJson("/api/command", {
-          command: button.dataset.command,
-          camera_ids: selectedCameraIds(),
-        });
-        await loadState();
+        try {
+          await postJson("/api/command", {
+            command: button.dataset.command,
+            camera_ids: selectedCameraIds(),
+          });
+          await safeLoadState();
+        } catch (error) {
+          reportUiError(`command_${button.dataset.command || "unknown"}`, error);
+        }
       });
     });
 
     document.getElementById("generateExtrinsics").addEventListener("click", async () => {
-      await postJson("/api/generate_extrinsics", {
-        intrinsics_path: elements.intrinsicsPath.value,
-        log_path: elements.logPath.value,
-        output_path: elements.outputPath.value,
-      });
-      await loadState();
+      try {
+        await postJson("/api/generate_extrinsics", {
+          intrinsics_path: elements.intrinsicsPath.value,
+          log_path: elements.logPath.value,
+          output_path: elements.outputPath.value,
+          pair_window_us: Number(elements.pairWindowUs.value),
+          min_pairs: Number(elements.minPairs.value),
+        });
+        await safeLoadState();
+      } catch (error) {
+        reportUiError("generate_extrinsics", error);
+      }
     });
 
     elements.tabCalibration.addEventListener("click", () => setActivePage("calibration"));
     elements.tabTracking.addEventListener("click", () => setActivePage("tracking"));
 
     elements.trackingStart.addEventListener("click", async () => {
-      await postJson("/api/tracking/start", {
-        patterns: ["waist"],
-      });
-      setActivePage("tracking");
-      await loadState();
+      try {
+        await postJson("/api/tracking/start", {
+          patterns: ["waist"],
+        });
+        setActivePage("tracking");
+        await safeLoadState();
+      } catch (error) {
+        reportUiError("tracking_start", error);
+      }
     });
 
     elements.trackingStop.addEventListener("click", async () => {
-      await postJson("/api/tracking/stop", {});
-      setActivePage("tracking");
-      await loadState();
+      try {
+        await postJson("/api/tracking/stop", {});
+        setActivePage("tracking");
+        await safeLoadState();
+      } catch (error) {
+        reportUiError("tracking_stop", error);
+      }
     });
 
     sliders.forEach((name) => {
@@ -1567,7 +1679,9 @@ HTML_PAGE = """<!doctype html>
         sliderUpdateTimers[name] = setTimeout(async () => {
           try {
             await postJson("/api/config", configPayload());
-            await loadState();
+            await safeLoadState();
+          } catch (error) {
+            reportUiError(`slider_${name}`, error);
           } finally {
             sliderUpdateTimers[name] = null;
           }
@@ -1576,8 +1690,9 @@ HTML_PAGE = """<!doctype html>
     });
 
     setActivePage(activePage);
-    loadState();
-    setInterval(loadState, 3000);
+    initTrackingViewer();
+    safeLoadState();
+    setInterval(safeLoadState, 3000);
   </script>
 </body>
 </html>
@@ -1832,6 +1947,14 @@ class WandGuiState:
         self.latest_extrinsics_path = path
         self.latest_extrinsics_quality = self._summarize_extrinsics_quality(payload.get("cameras"))
 
+    @staticmethod
+    def _resolve_project_path(raw_path: str, fallback: Path) -> Path:
+        candidate = raw_path.strip() if raw_path.strip() else str(fallback)
+        resolved = Path(candidate)
+        if not resolved.is_absolute():
+            resolved = PROJECT_ROOT / resolved
+        return resolved
+
     def _resolve_tracking_calibration_path(self, raw_path: str) -> Path:
         candidate = raw_path.strip()
         if not candidate and self.latest_extrinsics_path is not None:
@@ -1840,6 +1963,8 @@ class WandGuiState:
             raise ValueError("generate extrinsics first")
 
         resolved = Path(candidate)
+        if not resolved.is_absolute():
+            resolved = PROJECT_ROOT / resolved
         if resolved.is_dir():
             return resolved
         if resolved.is_file() and resolved.name.startswith("calibration_extrinsics_v1"):
@@ -1903,10 +2028,23 @@ class WandGuiState:
             "tracking": self.get_tracking_status(),
         }
 
+    def _sync_selected_camera_ids(self, payload: Dict[str, Any]) -> None:
+        if "camera_ids" not in payload:
+            return
+        raw_camera_ids = payload.get("camera_ids")
+        if raw_camera_ids is None:
+            self.selected_camera_ids = []
+            return
+        if not isinstance(raw_camera_ids, list):
+            raise ValueError("camera_ids must be a list")
+        self.selected_camera_ids = [
+            str(camera_id).strip()
+            for camera_id in raw_camera_ids
+            if str(camera_id).strip()
+        ]
+
     def apply_config(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        camera_ids = list(payload.get("camera_ids", []))
-        if camera_ids:
-            self.selected_camera_ids = camera_ids
+        self._sync_selected_camera_ids(payload)
         self.config = self._build_session_config(payload)
         self._persist_config()
 
@@ -1918,9 +2056,7 @@ class WandGuiState:
 
     def run_command(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         command = str(payload.get("command", "")).strip()
-        camera_ids = list(payload.get("camera_ids", []))
-        if camera_ids:
-            self.selected_camera_ids = camera_ids
+        self._sync_selected_camera_ids(payload)
 
         if command == "refresh":
             result = {"cameras": self.refresh_targets()}
@@ -1963,17 +2099,19 @@ class WandGuiState:
         return self.last_result
 
     def generate_extrinsics(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        intrinsics_path = str(payload.get("intrinsics_path", "calibration")).strip()
-        log_path = str(payload.get("log_path", str(DEFAULT_WAND_LOG_PATH))).strip()
-        output_path = str(
-            payload.get("output_path", str(DEFAULT_EXTRINSICS_OUTPUT_PATH))
-        ).strip()
-        if not log_path:
-            log_path = str(DEFAULT_WAND_LOG_PATH)
-        if not output_path:
-            output_path = str(DEFAULT_EXTRINSICS_OUTPUT_PATH)
+        intrinsics_raw = str(payload.get("intrinsics_path", "calibration")).strip()
+        log_raw = str(payload.get("log_path", str(DEFAULT_WAND_LOG_PATH))).strip()
+        output_raw = str(payload.get("output_path", str(DEFAULT_EXTRINSICS_OUTPUT_PATH))).strip()
+        intrinsics_path = self._resolve_project_path(intrinsics_raw, Path("calibration"))
+        resolved_log_path = self._resolve_project_path(log_raw, DEFAULT_WAND_LOG_PATH)
+        resolved_output = self._resolve_project_path(output_raw, DEFAULT_EXTRINSICS_OUTPUT_PATH)
+        pair_window_us = int(payload.get("pair_window_us", 8000))
+        min_pairs = int(payload.get("min_pairs", 8))
+        if pair_window_us < 1:
+            raise ValueError("pair_window_us must be >= 1")
+        if min_pairs < 1:
+            raise ValueError("min_pairs must be >= 1")
 
-        resolved_log_path = Path(log_path)
         if not resolved_log_path.exists():
             raise ValueError(f"log_path does not exist: {resolved_log_path}")
         if not resolved_log_path.is_file():
@@ -1981,9 +2119,11 @@ class WandGuiState:
 
         try:
             raw_result = self._extrinsics_solver(
-                intrinsics_path=intrinsics_path,
+                intrinsics_path=str(intrinsics_path),
                 log_path=str(resolved_log_path),
-                output_path=output_path,
+                output_path=str(resolved_output),
+                pair_window_us=pair_window_us,
+                min_pairs=min_pairs,
             )
         except FileNotFoundError as exc:
             missing_path = Path(getattr(exc, "filename", "") or str(resolved_log_path))
@@ -1995,7 +2135,6 @@ class WandGuiState:
         camera_count = len(camera_rows) if isinstance(camera_rows, list) else 0
         quality_summary = self._summarize_extrinsics_quality(camera_rows)
 
-        resolved_output = Path(output_path)
         summary = {
             "ok": True,
             "reference_camera_id": raw_result.get("reference_camera_id"),
@@ -2095,25 +2234,37 @@ class WandGuiHandler(BaseHTTPRequestHandler):
                 self._send_json(self.state.apply_config(payload))
                 return
             if self.path == "/api/command":
+                self._debug_log(
+                    f"POST /api/command command={payload.get('command')} camera_ids={payload.get('camera_ids')}"
+                )
                 self._send_json(self.state.run_command(payload))
                 return
             if self.path == "/api/generate_extrinsics":
+                self._debug_log("POST /api/generate_extrinsics")
                 self._send_json(self.state.generate_extrinsics(payload))
                 return
             if self.path == "/api/tracking/start":
+                self._debug_log("POST /api/tracking/start")
                 self._send_json(self.state.start_tracking(payload))
                 return
             if self.path == "/api/tracking/stop":
+                self._debug_log("POST /api/tracking/stop")
                 self._send_json(self.state.stop_tracking())
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
         except ValueError as exc:
+            self._debug_log(f"BAD_REQUEST path={self.path} error={exc}")
             self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
         except Exception as exc:  # noqa: BLE001
+            self._debug_log(f"INTERNAL_ERROR path={self.path} error={exc}")
             self._send_json({"error": f"internal_error: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def log_message(self, format: str, *args: Any) -> None:
         return
+
+    @staticmethod
+    def _debug_log(message: str) -> None:
+        print(f"[wand_gui] {message}", flush=True)
 
     def _read_json(self) -> Dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0"))

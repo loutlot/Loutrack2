@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from pathlib import Path
 from typing import Any, Dict
 
-from host.wand_gui import HTML_PAGE, WandGuiState, _resolve_static_asset
+from host.wand_gui import HTML_PAGE, PROJECT_ROOT, WandGuiState, _resolve_static_asset
 from host.wand_session import CameraTarget
 
 
@@ -177,10 +177,30 @@ def test_gui_state_apply_and_command(tmp_path: Path, monkeypatch) -> None:
     mask_cleared = state.run_command({"command": "mask_stop", "camera_ids": ["pi-cam-01"]})
     assert "mask_stop" in mask_cleared
 
-    state._extrinsics_solver = lambda **kwargs: {  # type: ignore[attr-defined]
-        "reference_camera_id": "pi-cam-01",
-        "cameras": [{"camera_id": "pi-cam-01"}, {"camera_id": "pi-cam-02"}],
-    }
+    called: dict[str, object] = {}
+
+    def _solver(**kwargs):  # type: ignore[no-untyped-def]
+        called.update(kwargs)
+        output_path = Path(str(kwargs["output_path"]))
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            json.dumps(
+                {
+                    "reference_camera_id": "pi-cam-01",
+                    "cameras": [
+                        {"camera_id": "pi-cam-01", "quality": {}},
+                        {"camera_id": "pi-cam-02", "quality": {}},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return {
+            "reference_camera_id": "pi-cam-01",
+            "cameras": [{"camera_id": "pi-cam-01"}, {"camera_id": "pi-cam-02"}],
+        }
+
+    state._extrinsics_solver = _solver  # type: ignore[attr-defined]
     log_path = tmp_path / "wand_capture.jsonl"
     log_path.write_text("{}", encoding="utf-8")
     generated = state.generate_extrinsics(
@@ -193,15 +213,17 @@ def test_gui_state_apply_and_command(tmp_path: Path, monkeypatch) -> None:
     assert generated["generate_extrinsics"]["ok"] is True
     assert generated["generate_extrinsics"]["camera_count"] == 2
     assert generated["generate_extrinsics"]["quality"]["pair_count_total"] >= 0
+    assert called["pair_window_us"] == 8000
+    assert called["min_pairs"] == 8
 
     snapshot = state.get_state()
     assert snapshot["workflow"]["extrinsics_ready"] is True
-    assert snapshot["workflow"]["latest_extrinsics_path"] == "calibration/calibration_extrinsics_v1.json"
+    assert snapshot["workflow"]["latest_extrinsics_path"] == str(PROJECT_ROOT / "calibration/calibration_extrinsics_v1.json")
 
     tracking_start = state.start_tracking({"patterns": ["waist"]})
     assert tracking_start["ok"] is True
     assert tracking_start["running"] is True
-    assert state.tracking_runtime.started_with == ("calibration", ["waist"])
+    assert state.tracking_runtime.started_with == (str(PROJECT_ROOT / "calibration"), ["waist"])
 
     tracking_status = state.get_tracking_status()
     assert tracking_status["start_allowed"] is True
@@ -220,6 +242,11 @@ def test_gui_state_apply_and_command(tmp_path: Path, monkeypatch) -> None:
 def test_gui_html_normalizes_blob_range() -> None:
     assert "function normalizedBlobRange()" in HTML_PAGE
     assert "maxValue = minValue;" in HTML_PAGE
+    assert "function reportUiError(context, error)" in HTML_PAGE
+    assert "async function ensureThreeLoaded()" in HTML_PAGE
+    assert "3D viewer unavailable (WebGL unsupported). Calibration controls still work." in HTML_PAGE
+    assert "id=\"pairWindowUs\"" in HTML_PAGE
+    assert "id=\"minPairs\"" in HTML_PAGE
 
 
 def test_generate_extrinsics_rejects_missing_log_path(tmp_path: Path, monkeypatch) -> None:
@@ -241,6 +268,39 @@ def test_generate_extrinsics_rejects_missing_log_path(tmp_path: Path, monkeypatc
         assert "log_path does not exist" in str(exc)
     else:
         raise AssertionError("generate_extrinsics should reject missing log path")
+
+
+def test_generate_extrinsics_passes_pairing_overrides(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("host.wand_gui.DEFAULT_EXTRINSICS_OUTPUT_PATH", tmp_path / "missing_extrinsics.json")
+    state = WandGuiState(
+        session=_FakeSession(),
+        receiver=_FakeReceiver(),
+        settings_path=tmp_path / "wand_gui_settings.json",
+        tracking_runtime=_FakeTrackingRuntime(),
+    )
+    called: dict[str, object] = {}
+
+    def _solver(**kwargs):  # type: ignore[no-untyped-def]
+        called.update(kwargs)
+        return {
+            "reference_camera_id": "pi-cam-01",
+            "cameras": [{"camera_id": "pi-cam-01"}],
+        }
+
+    state._extrinsics_solver = _solver  # type: ignore[attr-defined]
+    log_path = tmp_path / "wand_capture.jsonl"
+    log_path.write_text("{}", encoding="utf-8")
+
+    state.generate_extrinsics(
+        {
+            "log_path": str(log_path),
+            "pair_window_us": 5000,
+            "min_pairs": 12,
+        }
+    )
+
+    assert called["pair_window_us"] == 5000
+    assert called["min_pairs"] == 12
 
 
 def test_start_stop_writes_wand_capture_log(tmp_path: Path, monkeypatch) -> None:
@@ -303,6 +363,23 @@ def test_gui_loads_persisted_settings(tmp_path: Path, monkeypatch) -> None:
     assert snapshot["config"]["exposure_us"] == 15000
     assert snapshot["config"]["gain"] == 9.0
     assert snapshot["config"]["threshold"] == 215
+
+
+def test_refresh_with_empty_camera_selection_clears_stale_filter(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("host.wand_gui.DEFAULT_EXTRINSICS_OUTPUT_PATH", tmp_path / "missing_extrinsics.json")
+    state = WandGuiState(
+        session=_FakeSession(),
+        receiver=_FakeReceiver(),
+        settings_path=tmp_path / "wand_gui_settings.json",
+        tracking_runtime=_FakeTrackingRuntime(),
+    )
+    state.selected_camera_ids = ["missing-camera"]
+
+    refreshed = state.run_command({"command": "refresh", "camera_ids": []})
+
+    assert state.selected_camera_ids == []
+    cameras = refreshed["cameras"]
+    assert [camera["camera_id"] for camera in cameras] == ["pi-cam-01", "pi-cam-02"]
 
 
 def test_tracking_empty_state_and_start_rejection(tmp_path: Path, monkeypatch) -> None:

@@ -200,7 +200,7 @@ PY
 
 ### 2.7 wand 物理条件の確認
 
-- wand 定義: `WAND_POINTS_MM = [(0,0,0), (168,0,0), (0,243,0)]` (B5サイズ)
+- wand 定義: `WAND_POINTS_MM = [(0,0,0), (168,0,0), (84,121.5,0), (0,243,0)]` (B5長辺中点を含む4点)
 - 3 marker の center-to-center 実寸が定義値と一致
 - マーカー径 14mm
 
@@ -295,7 +295,7 @@ python src/camera-calibration/calibrate_extrinsics.py \
   --intrinsics calibration \
   --log logs/<wand_capture_log>.jsonl \
   --output calibration/calibration_extrinsics_v1.json \
-  --pair-window-us 12000 \
+  --pair-window-us 8000 \
   --min-pairs 8
 ```
 
