@@ -29,6 +29,7 @@ from wand_samples import LabeledFrameObservation, MultiViewSample, build_multivi
 DEFAULT_PAIR_WINDOW_US = 8000
 DEFAULT_MIN_PAIRS = 8
 DEFAULT_MAX_BA_SAMPLES = 320
+DEFAULT_MIN_LABEL_CONFIDENCE = 0.45
 DEFAULT_OUTPUT = "calibration/calibration_extrinsics_v1.json"
 
 
@@ -72,11 +73,20 @@ def load_wand_log(path: str | Path) -> Dict[str, List[FrameObservation]]:
 
 def label_observations(
     observations: Dict[str, Sequence[FrameObservation]],
-) -> Tuple[Dict[str, List[LabeledFrameObservation]], Dict[str, int]]:
+    min_label_confidence: float,
+) -> Tuple[Dict[str, List[LabeledFrameObservation]], Dict[str, int], List[float]]:
     labeled: Dict[str, List[LabeledFrameObservation]] = {}
-    dropped_counts = {"not_enough_blobs": 0, "failed_labeling": 0}
+    dropped_counts = {
+        "not_enough_blobs": 0,
+        "failed_labeling": 0,
+        "temporal_jump": 0,
+        "low_confidence": 0,
+    }
+    accepted_confidences: List[float] = []
     for camera_id, frames in observations.items():
         rows: List[LabeledFrameObservation] = []
+        motion_history_px: List[float] = []
+        prev_points: Optional[np.ndarray] = None
         for frame in frames:
             if len(frame.blobs) < len(WAND_POINTS_MM):
                 dropped_counts["not_enough_blobs"] += 1
@@ -84,6 +94,26 @@ def label_observations(
             label = canonicalize_wand_points(frame.blobs)
             if label is None:
                 dropped_counts["failed_labeling"] += 1
+                continue
+            line_score = max(0.0, 1.0 - (label.collinearity_error / 0.035))
+            midpoint_score = max(0.0, 1.0 - (label.midpoint_ratio_error / 0.35))
+            temporal_score = 0.8
+            if prev_points is not None:
+                per_label_motion = np.linalg.norm(label.points - prev_points, axis=1)
+                motion_med = float(np.median(per_label_motion))
+                motion_max = float(np.max(per_label_motion))
+                baseline_med = float(np.median(motion_history_px[-20:])) if motion_history_px else motion_med
+                max_allowed = max(80.0, baseline_med * 3.5)
+                if motion_max > max_allowed:
+                    dropped_counts["temporal_jump"] += 1
+                    continue
+                temporal_score = max(0.0, min(1.0, 1.0 - (motion_max / max_allowed)))
+                motion_history_px.append(motion_med)
+            else:
+                motion_history_px.append(0.0)
+            confidence = float((0.45 * line_score) + (0.35 * midpoint_score) + (0.20 * temporal_score))
+            if confidence < min_label_confidence:
+                dropped_counts["low_confidence"] += 1
                 continue
             rows.append(
                 LabeledFrameObservation(
@@ -93,10 +123,13 @@ def label_observations(
                     image_points=label.points,
                     collinearity_error=label.collinearity_error,
                     midpoint_ratio_error=label.midpoint_ratio_error,
+                    confidence=confidence,
                 )
             )
+            accepted_confidences.append(confidence)
+            prev_points = label.points
         labeled[camera_id] = rows
-    return labeled, dropped_counts
+    return labeled, dropped_counts, accepted_confidences
 
 
 def _normalized_points(camera: Any, points: np.ndarray) -> np.ndarray:
@@ -329,6 +362,7 @@ def solve_wand_extrinsics(
     pair_window_us: int = DEFAULT_PAIR_WINDOW_US,
     min_pairs: int = DEFAULT_MIN_PAIRS,
     max_ba_samples: int = DEFAULT_MAX_BA_SAMPLES,
+    min_label_confidence: float = DEFAULT_MIN_LABEL_CONFIDENCE,
     reference_camera_id: Optional[str] = None,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -351,7 +385,12 @@ def solve_wand_extrinsics(
         if camera_id in available_cameras
     }
 
-    labeled_by_camera, dropped_counts = label_observations(observations)
+    if not (0.0 <= min_label_confidence <= 1.0):
+        raise ValueError("min_label_confidence must be within [0,1]")
+    labeled_by_camera, dropped_counts, label_confidences = label_observations(
+        observations,
+        min_label_confidence=min_label_confidence,
+    )
     samples_all = build_multiview_samples(
         labeled_by_camera=labeled_by_camera,
         reference_camera_id=ref_camera_id,
@@ -518,6 +557,7 @@ def solve_wand_extrinsics(
             "pair_window_us": pair_window_us,
             "min_pairs": min_pairs,
             "max_ba_samples": max_ba_samples,
+            "min_label_confidence": min_label_confidence,
             "target_camera_ids": solved_cameras,
             "sample_count": len(samples),
             "accepted_sample_count": len(samples_for_ba),
@@ -530,6 +570,13 @@ def solve_wand_extrinsics(
                 "max": float(np.max(sample_spans)) if sample_spans.size else 0.0,
             },
             "dropped_frame_counts_by_reason": dropped_counts,
+            "label_confidence_stats": {
+                "count": len(label_confidences),
+                "p50": float(np.percentile(label_confidences, 50)) if label_confidences else 0.0,
+                "p90": float(np.percentile(label_confidences, 90)) if label_confidences else 0.0,
+                "min": float(min(label_confidences)) if label_confidences else 0.0,
+                "mean": float(np.mean(label_confidences)) if label_confidences else 0.0,
+            },
             "optimizer": {
                 "iterations": ba.optimizer_iterations,
                 "cost": ba.optimizer_cost,
@@ -552,6 +599,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pair-window-us", type=int, default=DEFAULT_PAIR_WINDOW_US, help="Maximum timestamp delta for pairing")
     parser.add_argument("--min-pairs", type=int, default=DEFAULT_MIN_PAIRS, help="Minimum paired observations per camera pair")
     parser.add_argument("--max-ba-samples", type=int, default=DEFAULT_MAX_BA_SAMPLES, help="Maximum multiview samples used for BA")
+    parser.add_argument("--min-label-confidence", type=float, default=DEFAULT_MIN_LABEL_CONFIDENCE, help="Minimum per-frame labeling confidence [0,1]")
     parser.add_argument("--reference-camera", default=None, help="Reference camera ID")
     parser.add_argument("--session-id", default=None, help="Optional session ID for metadata")
     return parser.parse_args()
@@ -566,6 +614,7 @@ def main() -> None:
         pair_window_us=args.pair_window_us,
         min_pairs=args.min_pairs,
         max_ba_samples=args.max_ba_samples,
+        min_label_confidence=args.min_label_confidence,
         reference_camera_id=args.reference_camera,
         session_id=args.session_id,
     )

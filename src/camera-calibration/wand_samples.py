@@ -14,6 +14,7 @@ class LabeledFrameObservation:
     image_points: np.ndarray  # shape=(4,2)
     collinearity_error: float
     midpoint_ratio_error: float
+    confidence: float
 
 
 @dataclass(frozen=True)

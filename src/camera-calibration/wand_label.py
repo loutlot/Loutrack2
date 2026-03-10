@@ -48,8 +48,8 @@ def canonicalize_wand_points(
         return None
 
     line_ids = list(best_triplet)
-    elbow_id = ({0, 1, 2, 3} - set(line_ids)).pop()
-    elbow_pt = pts[elbow_id]
+    short_id = ({0, 1, 2, 3} - set(line_ids)).pop()
+    short_pt = pts[short_id]
 
     mid_id = None
     endpoint_pair = None
@@ -74,11 +74,12 @@ def canonicalize_wand_points(
         return None
 
     endpoint_a, endpoint_b = endpoint_pair
-    dist_a = float(np.linalg.norm(elbow_pt - pts[endpoint_a]))
-    dist_b = float(np.linalg.norm(elbow_pt - pts[endpoint_b]))
+    dist_a = float(np.linalg.norm(short_pt - pts[endpoint_a]))
+    dist_b = float(np.linalg.norm(short_pt - pts[endpoint_b]))
     if min(dist_a, dist_b) <= 2.0 or abs(dist_a - dist_b) <= 1.0:
         return None
-    short_id, long_id = ((endpoint_a, endpoint_b) if dist_a <= dist_b else (endpoint_b, endpoint_a))
+    elbow_id, long_id = ((endpoint_a, endpoint_b) if dist_a <= dist_b else (endpoint_b, endpoint_a))
+    elbow_pt = pts[elbow_id]
     long_pt = pts[long_id]
 
     long_len = float(np.linalg.norm(long_pt - elbow_pt))
@@ -90,7 +91,7 @@ def canonicalize_wand_points(
         return None
 
     return WandLabelResult(
-        points=np.stack([elbow_pt, pts[short_id], pts[mid_id], long_pt], axis=0),
+        points=np.stack([elbow_pt, short_pt, pts[mid_id], long_pt], axis=0),
         collinearity_error=float(best_area_norm),
         midpoint_ratio_error=float(ratio_err),
     )

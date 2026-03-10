@@ -156,7 +156,7 @@ wand 収録ログから推定した world-to-camera extrinsics。
   "wand": {
     "name": "wand_l_b5_v1",
     "marker_diameter_mm": 14.0,
-    "points_mm": [[0, 0, 0], [168, 0, 0], [84, 121.5, 0], [0, 243, 0]]
+    "points_mm": [[0, 0, 0], [182, 0, 0], [0, 128.5, 0], [0, 257, 0]]
   },
   "cameras": [
     {

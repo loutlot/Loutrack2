@@ -14,12 +14,12 @@ WAND_NAME = "wand_l_b5_v1"
 WAND_MARKER_DIAMETER_MM = 14.0
 WAND_OUTER_SHORT_MM = 182.0
 WAND_OUTER_LONG_MM = 257.0
-# Center-to-center distances derived from B5 outer size and 14mm blobs.
+# Center-to-center distances are defined directly from the measured wand geometry.
 WAND_POINTS_MM: Tuple[Tuple[float, float, float], ...] = (
     (0.0, 0.0, 0.0),
-    (168.0, 0.0, 0.0),
-    (84.0, 121.5, 0.0),
-    (0.0, 243.0, 0.0),
+    (WAND_OUTER_SHORT_MM, 0.0, 0.0),
+    (0.0, WAND_OUTER_LONG_MM / 2.0, 0.0),
+    (0.0, WAND_OUTER_LONG_MM, 0.0),
 )
 
 
