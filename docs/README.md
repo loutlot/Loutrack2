@@ -17,9 +17,9 @@
 
 1. `docs/00_pre_implementation/requirements_def.md`
 2. `docs/00_pre_implementation/implementation_plan.md`
-3. `docs/10_in_progress/wand_extrinsics_plan.md`
-4. `docs/10_in_progress/next_steps_wand_runbook.md`
-5. `docs/10_in_progress/tracking_gui_plan.md`
+3. `docs/10_in_progress/gui_runbook.md`
+4. `docs/10_in_progress/tracking_gui_plan.md`
+5. `docs/20_completed/24_next_steps_wand_runbook.md`
 
 ## context ディレクトリの扱い
 

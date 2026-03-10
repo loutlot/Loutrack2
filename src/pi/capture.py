@@ -752,6 +752,8 @@ class Picamera2Backend:
         picam2 = self._picam2
 
         controls: dict[str, object] = {}
+        if self._exposure_us is not None or self._gain is not None:
+            controls["AeEnable"] = False
         if self._exposure_us is not None:
             controls["ExposureTime"] = int(self._exposure_us)
         if self._gain is not None:
@@ -760,6 +762,7 @@ class Picamera2Backend:
             frame_us = int(round(1_000_000 / float(self._fps)))
             controls["FrameDurationLimits"] = (frame_us, frame_us)
         if self._focus is not None:
+            controls["AfMode"] = self._manual_focus_mode()
             controls["LensPosition"] = float(self._focus)
 
         if not controls:
@@ -769,6 +772,21 @@ class Picamera2Backend:
             _ = picam2.set_controls(controls)
         except Exception:
             return
+
+    @staticmethod
+    def _manual_focus_mode() -> int:
+        try:
+            libcamera = importlib.import_module("libcamera")
+        except Exception:
+            return 0
+
+        controls_mod = getattr(libcamera, "controls", None)
+        if controls_mod is None:
+            return 0
+        af_mode_enum = getattr(controls_mod, "AfModeEnum", None)
+        if af_mode_enum is None:
+            return 0
+        return int(getattr(af_mode_enum, "Manual", 0))
 
 
 def detect_blobs(

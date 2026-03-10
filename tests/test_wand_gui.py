@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from pathlib import Path
 from typing import Any, Dict
 
-from host.wand_gui import HTML_PAGE, WandGuiState
+from host.wand_gui import HTML_PAGE, WandGuiState, _resolve_static_asset
 from host.wand_session import CameraTarget
 
 
@@ -318,7 +318,7 @@ def test_tracking_empty_state_and_start_rejection(tmp_path: Path, monkeypatch) -
     assert status["start_allowed"] is False
     assert status["empty_state"] == "Generate extrinsics first"
     assert scene["empty_state"] == "Generate extrinsics first"
-    assert "Generate extrinsics first" in HTML_PAGE
+    assert "Waiting for scene data" in HTML_PAGE
 
     try:
         state.start_tracking({"patterns": ["waist"]})
@@ -367,3 +367,37 @@ def test_state_restores_existing_default_extrinsics_on_startup(tmp_path: Path, m
     assert tracking_status["start_allowed"] is True
     assert tracking_status["latest_extrinsics_path"] == str(default_extrinsics)
     assert tracking_status["latest_extrinsics_quality"]["pair_count_total"] == 12
+
+
+def test_resolve_static_asset_prefers_repo_root_static(tmp_path: Path, monkeypatch) -> None:
+    repo_static = tmp_path / "static"
+    module_static = tmp_path / "src" / "static"
+    repo_static.mkdir(parents=True)
+    module_static.mkdir(parents=True)
+    repo_asset = repo_static / "vendor" / "three.module.min.js"
+    module_asset = module_static / "vendor" / "three.module.min.js"
+    repo_asset.parent.mkdir(parents=True)
+    module_asset.parent.mkdir(parents=True)
+    repo_asset.write_text("repo-root", encoding="utf-8")
+    module_asset.write_text("module-src", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "host.wand_gui.STATIC_DIR_CANDIDATES",
+        (repo_static, module_static),
+    )
+
+    resolved = _resolve_static_asset("vendor/three.module.min.js")
+
+    assert resolved == repo_asset
+
+
+def test_resolve_static_asset_rejects_path_traversal(tmp_path: Path, monkeypatch) -> None:
+    repo_static = tmp_path / "static"
+    repo_static.mkdir()
+    outside = tmp_path / "static-evil"
+    outside.mkdir()
+    (outside / "secret.js").write_text("nope", encoding="utf-8")
+
+    monkeypatch.setattr("host.wand_gui.STATIC_DIR_CANDIDATES", (repo_static,))
+
+    assert _resolve_static_asset("../static-evil/secret.js") is None

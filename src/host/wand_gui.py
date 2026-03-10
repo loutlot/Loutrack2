@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MODULE_SRC_ROOT = Path(__file__).resolve().parents[1]
 
 if __package__ in (None, ""):
@@ -32,6 +33,10 @@ DEFAULT_SETTINGS_PATH = Path("logs") / "wand_gui_settings.json"
 DEFAULT_WAND_LOG_PATH = Path("logs") / "wand_capture.jsonl"
 DEFAULT_EXTRINSICS_OUTPUT_PATH = Path("calibration") / "calibration_extrinsics_v1.json"
 DEFAULT_CAPTURE_LOG_DIR = Path("logs")
+STATIC_DIR_CANDIDATES = (
+    PROJECT_ROOT / "static",
+    MODULE_SRC_ROOT / "static",
+)
 
 
 HTML_PAGE = """<!doctype html>
@@ -199,6 +204,189 @@ HTML_PAGE = """<!doctype html>
     }
     .grid > * {
       min-width: 0;
+    }
+    .tracking-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.8fr);
+      gap: 18px;
+      margin-top: 18px;
+      align-items: stretch;
+    }
+    .tracking-main {
+      display: grid;
+      gap: 12px;
+    }
+    .tracking-viewer-card {
+      display: grid;
+      gap: 10px;
+    }
+    .tracking-viewer-inner {
+      position: relative;
+      min-height: 360px;
+      border-radius: 20px;
+      border: 1px solid var(--line);
+      overflow: hidden;
+      background: #fff;
+    }
+    .tracking-viewer-inner canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+    .tracking-viewer-empty {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 16px;
+      font-weight: 700;
+      color: var(--warm);
+      background: rgba(255, 255, 255, 0.85);
+      pointer-events: none;
+      font-size: 15px;
+    }
+    .tracking-empty-sm {
+      padding: 10px 14px;
+      border-radius: 12px;
+      border: 1px dashed var(--line);
+      background: rgba(255, 255, 255, 0.8);
+      text-align: center;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .tracking-viewer-footer {
+      color: var(--muted);
+      font-size: 13px;
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .tracking-viewer-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    .tracking-state-badge {
+      border-radius: 999px;
+      padding: 6px 14px;
+      background: rgba(31, 42, 48, 0.12);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .tracking-state-badge[data-state="running"] {
+      background: var(--teal);
+      color: #fff;
+    }
+    .tracking-state-badge[data-state="error"] {
+      background: var(--danger);
+      color: #fff;
+    }
+    .tracking-side {
+      display: grid;
+      gap: 16px;
+    }
+    .tracking-controls-row {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: center;
+    }
+    .tracking-control-buttons {
+      display: flex;
+      gap: 8px;
+    }
+    .tracking-control-footer {
+      margin-top: 10px;
+      font-size: 13px;
+    }
+    .tracking-health-card,
+    .tracking-rigid-card {
+      display: grid;
+      gap: 10px;
+    }
+    .tracking-health-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+    .tracking-health-grid {
+      display: grid;
+      gap: 10px;
+    }
+    .tracking-camera-card {
+      padding: 12px;
+      border-radius: 16px;
+      background: var(--panel-strong);
+      border: 1px solid var(--line);
+      display: grid;
+      gap: 6px;
+    }
+    .tracking-camera-card strong {
+      font-size: 16px;
+    }
+    .tracking-card-metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 6px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .tracking-card-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    .tracking-card-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .tracking-card-badge.ok {
+      background: rgba(100, 116, 71, 0.16);
+      color: var(--olive);
+    }
+    .tracking-card-badge.warn {
+      background: rgba(193, 91, 49, 0.12);
+      color: var(--warm);
+    }
+    .tracking-rigid-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .tracking-rigid-row {
+      border-radius: 16px;
+      border: 1px solid var(--line);
+      padding: 12px;
+      background: var(--panel-strong);
+      display: grid;
+      gap: 6px;
+    }
+    .tracking-rigid-row.invalid {
+      border-color: rgba(158, 63, 51, 0.4);
+    }
+    .tracking-rigid-row header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    .tracking-rigid-row small {
+      color: var(--muted);
+    }
+    .tracking-json-stack {
+      display: grid;
+      gap: 12px;
     }
     .stack {
       display: grid;
@@ -382,6 +570,9 @@ HTML_PAGE = """<!doctype html>
       .grid {
         grid-template-columns: 1fr;
       }
+      .tracking-grid {
+        grid-template-columns: 1fr;
+      }
     }
     @media (max-width: 720px) {
       main {
@@ -389,6 +580,13 @@ HTML_PAGE = """<!doctype html>
       }
       .controls-grid {
         grid-template-columns: 1fr;
+      }
+      .tracking-grid {
+        grid-template-columns: 1fr;
+      }
+      .tracking-controls-row {
+        flex-direction: column;
+        align-items: flex-start;
       }
     }
   </style>
@@ -548,48 +746,81 @@ HTML_PAGE = """<!doctype html>
     </section>
 
     <section id="pageTracking" class="page">
-      <div class="grid">
-        <div class="stack">
-          <section class="card">
-            <div class="step-head">
-              <div class="step-title">
+      <div class="tracking-grid">
+        <div class="tracking-main">
+          <section class="card tracking-viewer-card">
+            <div class="tracking-viewer-header">
+              <div class="tracking-viewer-title">
                 <div class="eyebrow">Tracking Scene</div>
-                <h2>Scene Snapshot JSON</h2>
+                <h2>3D Monitoring</h2>
               </div>
+              <span class="tracking-state-badge" id="trackingStatusBadge">Idle</span>
             </div>
-            <div id="trackingEmpty" class="tracking-empty">Generate extrinsics first</div>
-            <pre class="console" id="trackingScene"></pre>
+            <div class="tracking-viewer-inner">
+              <canvas id="trackingViewerCanvas" aria-label="Tracking scene viewport"></canvas>
+              <div class="tracking-viewer-empty" id="trackingViewerEmpty">Waiting for scene data</div>
+            </div>
+            <div class="tracking-viewer-footer">
+              <span id="trackingSceneTimestamp">Last scene: --</span>
+              <span id="trackingSceneHint"></span>
+            </div>
           </section>
+          <div class="tracking-json-stack">
+            <section class="card">
+              <div class="step-head">
+                <div class="step-title">
+                  <h2>Status JSON</h2>
+                </div>
+              </div>
+              <pre class="console" id="trackingStatus"></pre>
+            </section>
+            <section class="card">
+              <div class="step-head">
+                <div class="step-title">
+                  <h2>Scene Snapshot JSON</h2>
+                </div>
+              </div>
+              <pre class="console" id="trackingScene"></pre>
+            </section>
+          </div>
         </div>
-        <div class="stack">
-          <section class="card">
-            <div class="step-head">
-              <div class="step-title">
-                <div class="eyebrow">Tracking Control</div>
-                <h2>Start / Stop</h2>
+        <div class="tracking-side">
+          <section class="card tracking-controls">
+            <div class="tracking-controls-row">
+              <div>
+                <p class="eyebrow">Tracking Control</p>
+                <p id="trackingExtrinsicsPath"></p>
+              </div>
+              <div class="tracking-control-buttons">
+                <button id="trackingStart" class="secondary" type="button">Start Tracking</button>
+                <button id="trackingStop" class="ghost" type="button">Stop Tracking</button>
               </div>
             </div>
-            <p id="trackingExtrinsicsPath"></p>
-            <div class="button-row">
-              <button id="trackingStart" class="secondary" type="button">Start Tracking</button>
-              <button id="trackingStop" class="ghost" type="button">Stop Tracking</button>
+            <div class="tracking-control-footer">
+              <span id="trackingLastUpdate">waiting for data</span>
             </div>
           </section>
-          <section class="card">
-            <div class="step-head">
-              <div class="step-title">
-                <div class="eyebrow">Tracking Status</div>
-                <h2>Status JSON</h2>
-              </div>
+          <section class="card tracking-health-card">
+            <div class="tracking-health-header">
+              <div class="eyebrow">Camera Health</div>
+              <span id="trackingSyncCoverage"></span>
             </div>
-            <pre class="console" id="trackingStatus"></pre>
+            <div id="trackingCameraHealth" class="tracking-health-grid"></div>
+          </section>
+          <section class="card tracking-rigid-card">
+            <div class="tracking-health-header">
+              <div class="eyebrow">Rigid Bodies</div>
+              <span id="trackingRigidCount">0 tracked</span>
+            </div>
+            <div id="trackingRigidList" class="tracking-rigid-list"></div>
           </section>
         </div>
       </div>
     </section>
   </main>
-  <script>
-    const sliders = ["exposure", "gain", "fps", "focus", "threshold", "circularity", "blobMin", "blobMax", "maskThreshold", "maskSeconds"];
+  <script type="module">
+    import * as THREE from "/static/vendor/three.module.min.js";
+    const sliders = ["exposure", "gain", "fps", "focus", "threshold", "circularity", "blobMin", "blobMax", "maskThreshold", "maskSeconds"];  
     const sliderNames = new Set(sliders);
     const stepOrder = ["blob", "mask", "wand", "extrinsics"];
     const stepLabels = {
@@ -652,14 +883,301 @@ HTML_PAGE = """<!doctype html>
       tabTracking: document.getElementById("tabTracking"),
       pageCalibration: document.getElementById("pageCalibration"),
       pageTracking: document.getElementById("pageTracking"),
-      trackingEmpty: document.getElementById("trackingEmpty"),
+      trackingViewerCanvas: document.getElementById("trackingViewerCanvas"),
+      trackingViewerEmpty: document.getElementById("trackingViewerEmpty"),
+      trackingStatusBadge: document.getElementById("trackingStatusBadge"),
+      trackingSceneTimestamp: document.getElementById("trackingSceneTimestamp"),
+      trackingSceneHint: document.getElementById("trackingSceneHint"),
+      trackingLastUpdate: document.getElementById("trackingLastUpdate"),
+      trackingSyncCoverage: document.getElementById("trackingSyncCoverage"),
+      trackingCameraHealth: document.getElementById("trackingCameraHealth"),
+      trackingRigidList: document.getElementById("trackingRigidList"),
+      trackingRigidCount: document.getElementById("trackingRigidCount"),
       trackingStart: document.getElementById("trackingStart"),
       trackingStop: document.getElementById("trackingStop"),
       trackingStatus: document.getElementById("trackingStatus"),
       trackingScene: document.getElementById("trackingScene"),
       trackingExtrinsicsPath: document.getElementById("trackingExtrinsicsPath"),
     };
+    const trackingViewer = createTrackingViewer();
     const sliderUpdateTimers = {};
+    function createTrackingViewer() {
+      const canvas = elements.trackingViewerCanvas;
+      const overlay = elements.trackingViewerEmpty;
+      if (!canvas || !overlay) {
+        return { update: () => {}, setEmpty: () => {}, resize: () => {} };
+      }
+      const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+      renderer.setPixelRatio(window.devicePixelRatio || 1);
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0xf7f3ee);
+      const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 25);
+      camera.position.set(0, 1.2, 2.4);
+
+      function resizeViewer() {
+        const width = canvas.clientWidth;
+        const height = canvas.clientHeight;
+        if (!width || !height) {
+          return;
+        }
+        renderer.setSize(width, height, false);
+        camera.aspect = width / height;
+        camera.updateProjectionMatrix();
+      }
+
+      const target = new THREE.Vector3(0, 1, 0);
+      let azimuth = 0;
+      let polar = Math.PI / 3;
+      let distance = 2.4;
+      let dragging = false;
+      const cursor = { x: 0, y: 0 };
+
+      function updateCameraPosition() {
+        const spherical = new THREE.Spherical(distance, polar, azimuth);
+        const offset = new THREE.Vector3();
+        offset.setFromSpherical(spherical);
+        offset.add(target);
+        camera.position.copy(offset);
+        camera.lookAt(target);
+      }
+
+      function handlePointerDown(event) {
+        dragging = true;
+        cursor.x = event.clientX;
+        cursor.y = event.clientY;
+        canvas.setPointerCapture?.(event.pointerId);
+      }
+
+      function handlePointerMove(event) {
+        if (!dragging) {
+          return;
+        }
+        const deltaX = event.clientX - cursor.x;
+        const deltaY = event.clientY - cursor.y;
+        cursor.x = event.clientX;
+        cursor.y = event.clientY;
+        azimuth -= deltaX * 0.005;
+        polar = Math.min(Math.PI - 0.1, Math.max(0.1, polar - deltaY * 0.005));
+      }
+
+      function handlePointerUp(event) {
+        dragging = false;
+        canvas.releasePointerCapture?.(event.pointerId);
+      }
+
+      canvas.addEventListener("pointerdown", handlePointerDown);
+      canvas.addEventListener("pointermove", handlePointerMove);
+      canvas.addEventListener("pointerup", handlePointerUp);
+      canvas.addEventListener("pointerleave", () => {
+        dragging = false;
+      });
+      canvas.addEventListener(
+        "wheel",
+        (event) => {
+          event.preventDefault();
+          distance = Math.min(8, Math.max(0.6, distance + event.deltaY * 0.01));
+        },
+        { passive: false }
+      );
+
+      resizeViewer();
+      window.addEventListener("resize", resizeViewer);
+
+      const grid = new THREE.GridHelper(6, 24, 0xd6d0c6, 0xf4efe6);
+      grid.rotation.x = Math.PI / 2;
+      scene.add(grid);
+      const axisHelper = new THREE.AxesHelper(0.45);
+      scene.add(axisHelper);
+
+      const rawPoints = new THREE.Points(
+        new THREE.BufferGeometry(),
+        new THREE.PointsMaterial({ color: 0xff6b35, size: 0.04, transparent: true, opacity: 0.75 })
+      );
+      scene.add(rawPoints);
+
+      const cameraHelpers = new Map();
+      const rigidsContainer = new THREE.Group();
+      scene.add(rigidsContainer);
+      const rigidHelpers = new Map();
+
+      function animate() {
+        updateCameraPosition();
+        renderer.render(scene, camera);
+        requestAnimationFrame(animate);
+      }
+      requestAnimationFrame(animate);
+
+      function buildFrustumSegments(cameraData) {
+        const corners = Array.isArray(cameraData.frustum_near_corners)
+          ? cameraData.frustum_near_corners.map((corner) => new THREE.Vector3(corner[0], corner[1], corner[2]))
+          : [];
+        const origin = new THREE.Vector3(...(cameraData.position || [0, 0, 0]));
+        const positions = [];
+        if (corners.length === 4) {
+          corners.forEach((corner) => {
+            positions.push(origin.x, origin.y, origin.z, corner.x, corner.y, corner.z);
+          });
+          for (let i = 0; i < corners.length; i += 1) {
+            const current = corners[i];
+            const next = corners[(i + 1) % corners.length];
+            positions.push(current.x, current.y, current.z, next.x, next.y, next.z);
+          }
+        }
+        return positions;
+      }
+
+      function updateCameras(list) {
+        const seen = new Set();
+        (list || []).forEach((cameraData) => {
+          const cameraId = String(cameraData.camera_id || "camera");
+          seen.add(cameraId);
+          let entry = cameraHelpers.get(cameraId);
+          if (!entry) {
+            const frustumGeo = new THREE.BufferGeometry();
+            const frustum = new THREE.LineSegments(
+              frustumGeo,
+              new THREE.LineBasicMaterial({ color: 0x1f6b70 })
+            );
+            const originSphere = new THREE.Mesh(
+              new THREE.SphereGeometry(0.03, 10, 10),
+              new THREE.MeshBasicMaterial({ color: 0x1f6b70 })
+            );
+            const group = new THREE.Group();
+            group.add(frustum);
+            group.add(originSphere);
+            scene.add(group);
+            entry = { group, frustum, originSphere };
+            cameraHelpers.set(cameraId, entry);
+          }
+          const positions = buildFrustumSegments(cameraData);
+          entry.frustum.geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+          entry.frustum.geometry.attributes.position.needsUpdate = true;
+          const pos = cameraData.position || [0, 0, 0];
+          entry.originSphere.position.set(pos[0], pos[1], pos[2]);
+        });
+        cameraHelpers.forEach((entry, id) => {
+          if (!seen.has(id)) {
+            scene.remove(entry.group);
+            cameraHelpers.delete(id);
+          }
+        });
+      }
+
+      function updateRigids(list) {
+        const seen = new Set();
+        (list || []).forEach((body) => {
+          const name = String(body.name || "rigid");
+          seen.add(name);
+          let entry = rigidHelpers.get(name);
+          if (!entry) {
+            const group = new THREE.Group();
+            const axisGeo = new THREE.BufferGeometry();
+            axisGeo.setAttribute(
+              "position",
+              new THREE.Float32BufferAttribute(
+                [0, 0, 0, 0.18, 0, 0, 0, 0, 0, 0, 0.18, 0, 0, 0, 0, 0, 0, 0.18],
+                3
+              )
+            );
+            const axisMaterial = new THREE.LineBasicMaterial({ color: 0xffffff });
+            const axis = new THREE.LineSegments(axisGeo, axisMaterial);
+            const trailLine = new THREE.Line(
+              new THREE.BufferGeometry(),
+              new THREE.LineBasicMaterial({ color: 0x1f6b70, transparent: true, opacity: 0.8 })
+            );
+            const markerParent = new THREE.Group();
+            group.add(axis);
+            group.add(trailLine);
+            group.add(markerParent);
+            rigidsContainer.add(group);
+            entry = { group, axis, trailLine, markerParent };
+            rigidHelpers.set(name, entry);
+          }
+          const { group, axis, trailLine, markerParent } = entry;
+          const position = body.position || [0, 0, 0];
+          group.position.set(position[0], position[1], position[2]);
+          const quaternion = body.quaternion || [1, 0, 0, 0];
+          group.quaternion.set(quaternion[1], quaternion[2], quaternion[3], quaternion[0]);
+          axis.material.color.set(body.valid ? 0x1f6b70 : 0x9e3f33);
+          const trailPoints = [];
+          (body.trail || []).forEach((point) => {
+            trailPoints.push(point[0], point[1], point[2]);
+          });
+          if (trailPoints.length) {
+            trailLine.geometry.setAttribute(
+              "position",
+              new THREE.Float32BufferAttribute(trailPoints, 3)
+            );
+            trailLine.geometry.attributes.position.needsUpdate = true;
+            trailLine.visible = true;
+          } else {
+            trailLine.geometry.setAttribute("position", new THREE.Float32BufferAttribute([], 3));
+            trailLine.geometry.attributes.position.needsUpdate = true;
+            trailLine.visible = false;
+          }
+          while (markerParent.children.length) {
+            markerParent.remove(markerParent.children[0]);
+          }
+          (body.markers_world || []).forEach((marker) => {
+            const sphere = new THREE.Mesh(
+              new THREE.SphereGeometry(0.011, 8, 8),
+              new THREE.MeshBasicMaterial({ color: 0xffc107 })
+            );
+            sphere.position.set(marker[0], marker[1], marker[2]);
+            markerParent.add(sphere);
+          });
+        });
+        rigidHelpers.forEach((entry, id) => {
+          if (!seen.has(id)) {
+            rigidsContainer.remove(entry.group);
+            rigidHelpers.delete(id);
+          }
+        });
+      }
+
+      function updateRawPoints(points = []) {
+        if (!Array.isArray(points) || points.length === 0) {
+          rawPoints.geometry.setAttribute("position", new THREE.Float32BufferAttribute([], 3));
+          rawPoints.geometry.attributes.position.needsUpdate = true;
+          rawPoints.visible = false;
+          return;
+        }
+        const buffer = new Float32Array(points.length * 3);
+        points.forEach((point, index) => {
+          buffer[index * 3 + 0] = point[0];
+          buffer[index * 3 + 1] = point[1];
+          buffer[index * 3 + 2] = point[2];
+        });
+        rawPoints.geometry.setAttribute("position", new THREE.BufferAttribute(buffer, 3));
+        rawPoints.geometry.attributes.position.needsUpdate = true;
+        rawPoints.visible = true;
+      }
+
+      function showOverlay(message) {
+        overlay.textContent = message || "";
+        overlay.style.display = message ? "flex" : "none";
+      }
+
+      return {
+        update(sceneSnapshot = {}, emptyMessage = "") {
+          updateCameras(sceneSnapshot.cameras || []);
+          updateRigids(sceneSnapshot.rigid_bodies || []);
+          updateRawPoints(sceneSnapshot.raw_points || []);
+          const hasGeometry =
+            (Array.isArray(sceneSnapshot.cameras) && sceneSnapshot.cameras.length > 0) ||
+            (Array.isArray(sceneSnapshot.rigid_bodies) && sceneSnapshot.rigid_bodies.length > 0);
+          if (!hasGeometry) {
+            showOverlay(emptyMessage || "Waiting for scene data");
+          } else {
+            showOverlay("");
+          }
+        },
+        setEmpty(message) {
+          showOverlay(message);
+        },
+        resize: resizeViewer,
+      };
+    }
     const SLIDER_DEBOUNCE_MS = 200;
     let activePage = "calibration";
 
@@ -826,9 +1344,103 @@ HTML_PAGE = """<!doctype html>
             <td>${previewState}</td>
             <td>${camera.healthy ? badge("OK", "ok") : badge("No Ack", "warn")}</td>
             <td>${escapeHtml(camera.last_error || "")}</td>
-          </tr>
-        `;
+        </tr>
+      `;
       }).join("");
+    }
+
+    function formatTrackingAge(timestampUs) {
+      if (!timestampUs) {
+        return "waiting for data";
+      }
+      const diffMs = Math.max(0, Date.now() - timestampUs / 1000);
+      const seconds = Math.round(diffMs / 1000);
+      return `Updated ${seconds}s ago`;
+    }
+
+    function renderTrackingBadge(status) {
+      const running = Boolean(status.running);
+      const state = running ? "running" : status.calibration_loaded ? "idle" : "error";
+      const text = running ? "Tracking" : status.calibration_loaded ? "Ready" : "Waiting";
+      elements.trackingStatusBadge.textContent = text;
+      elements.trackingStatusBadge.dataset.state = state;
+    }
+
+    function renderTrackingFooter(status, scene) {
+      const timestampUs = scene.timestamp_us || 0;
+      const timestamp = timestampUs ? new Date(timestampUs / 1000) : null;
+      elements.trackingSceneTimestamp.textContent = timestamp
+        ? `Last scene: ${timestamp.toLocaleTimeString()}`
+        : "Last scene: --";
+      elements.trackingLastUpdate.textContent = formatTrackingAge(timestampUs);
+      const cameraCount = (scene.cameras || []).length;
+      const rigidCount = (scene.rigid_bodies || []).length;
+      elements.trackingSceneHint.textContent = `${cameraCount} cameras · ${rigidCount} bodies`;
+      elements.trackingRigidCount.textContent = `${rigidCount} tracked`;
+      const coverage = status.sync?.coverage_5000us ?? status.sync?.coverage_target ?? null;
+      elements.trackingSyncCoverage.textContent = coverage != null
+        ? `Sync coverage ${(coverage * 100).toFixed(1)}%`
+        : "";
+    }
+
+    function renderCameraHealth(status) {
+      const cameras = status.metrics?.cameras || {};
+      const entries = Object.entries(cameras);
+      if (!entries.length) {
+        elements.trackingCameraHealth.innerHTML = '<div class="tracking-empty-sm">Waiting for camera metrics</div>';
+        return;
+      }
+      elements.trackingCameraHealth.innerHTML = entries
+        .map(([cameraId, metrics]) => {
+          const latency = Number(metrics.latency_ms ?? 0);
+          const fps = Number(metrics.fps ?? 0);
+          const blobAvg = Number(metrics.blob_count_avg ?? 0);
+          const statusClass = latency > 120 ? "warn" : "ok";
+          return `
+            <article class="tracking-camera-card">
+              <div class="tracking-card-title">
+                <strong>${escapeHtml(cameraId)}</strong>
+                <span class="tracking-card-badge ${statusClass}">${latency.toFixed(0)}ms latency</span>
+              </div>
+              <div class="tracking-card-metrics">
+                <span>FPS ${fps.toFixed(1)}</span>
+                <span>Frames ${metrics.frame_count ?? 0}</span>
+                <span>Missing ${metrics.missing_frames ?? 0}</span>
+                <span>Blob avg ${blobAvg.toFixed(1)}</span>
+              </div>
+            </article>
+          `;
+        })
+        .join("");
+    }
+
+    function renderRigidHealth(scene) {
+      const rigids = scene.rigid_bodies || [];
+      if (!rigids.length) {
+        elements.trackingRigidList.innerHTML = '<div class="tracking-empty-sm">Waiting for rigid body data</div>';
+        return;
+      }
+      elements.trackingRigidList.innerHTML = rigids
+        .map((body) => {
+          const validClass = body.valid ? "" : " invalid";
+          const badgeClass = body.valid ? "ok" : "warn";
+          const rms = Number(body.rms_error ?? 0).toFixed(3);
+          const trailLength = (body.trail || []).length;
+          return `
+            <article class="tracking-rigid-row${validClass}">
+              <header>
+                <strong>${escapeHtml(body.name)}</strong>
+                <span class="tracking-card-badge ${badgeClass}">${body.valid ? "Valid" : "Lost"}</span>
+              </header>
+              <div class="tracking-card-metrics">
+                <span>Observed ${body.observed_markers ?? 0}</span>
+                <span>RMS ${rms}</span>
+                <span>Trail ${trailLength}</span>
+              </div>
+            </article>
+          `;
+        })
+        .join("");
     }
 
     function setActivePage(pageName) {
@@ -838,6 +1450,9 @@ HTML_PAGE = """<!doctype html>
       elements.pageTracking.classList.toggle("active", !calibrationActive);
       elements.tabCalibration.classList.toggle("active", calibrationActive);
       elements.tabTracking.classList.toggle("active", !calibrationActive);
+      if (!calibrationActive) {
+        trackingViewer.resize();
+      }
     }
 
     async function loadTracking() {
@@ -847,13 +1462,16 @@ HTML_PAGE = """<!doctype html>
       ]);
       const status = await statusResponse.json();
       const scene = await sceneResponse.json();
-      const emptyText = status.empty_state || scene.empty_state || "";
-      elements.trackingEmpty.style.display = emptyText ? "block" : "none";
-      elements.trackingEmpty.textContent = emptyText;
       elements.trackingStart.disabled = !status.start_allowed;
       elements.trackingExtrinsicsPath.textContent = `Extrinsics: ${status.latest_extrinsics_path || "(none)"}`;
       elements.trackingStatus.textContent = JSON.stringify(status, null, 2);
       elements.trackingScene.textContent = JSON.stringify(scene, null, 2);
+      const emptyText = status.empty_state || scene.empty_state || "";
+      renderTrackingBadge(status);
+      renderTrackingFooter(status, scene);
+      renderCameraHealth(status);
+      renderRigidHealth(scene);
+      trackingViewer.update(scene, emptyText);
     }
 
     async function loadState() {
@@ -1452,16 +2070,20 @@ class WandGuiHandler(BaseHTTPRequestHandler):
     state: WandGuiState
 
     def do_GET(self) -> None:
-        if self.path in ("/", "/index.html"):
+        path = self.path.split("?", 1)[0]
+        if path.startswith("/static/"):
+            self._serve_static(path[len("/static/"):])
+            return
+        if path in ("/", "/index.html"):
             self._send_html(HTML_PAGE)
             return
-        if self.path == "/api/state":
+        if path == "/api/state":
             self._send_json(self.state.get_state())
             return
-        if self.path == "/api/tracking/status":
+        if path == "/api/tracking/status":
             self._send_json(self.state.get_tracking_status())
             return
-        if self.path == "/api/tracking/scene":
+        if path == "/api/tracking/scene":
             self._send_json(self.state.get_tracking_scene())
             return
         self.send_error(HTTPStatus.NOT_FOUND)
@@ -1513,6 +2135,47 @@ class WandGuiHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+    def _serve_static(self, rel_path: str) -> None:
+        target = _resolve_static_asset(rel_path)
+        if target is None:
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        try:
+            data = target.read_bytes()
+        except Exception:
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", self._guess_content_type(target.suffix))
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    @staticmethod
+    def _guess_content_type(suffix: str) -> str:
+        mapping = {
+            ".js": "application/javascript",
+            ".mjs": "application/javascript",
+            ".css": "text/css",
+            ".json": "application/json",
+            ".html": "text/html",
+        }
+        return mapping.get(suffix.lower(), "application/octet-stream")
+
+
+def _resolve_static_asset(rel_path: str) -> Optional[Path]:
+    candidate = Path(rel_path.lstrip("/"))
+    for static_dir in STATIC_DIR_CANDIDATES:
+        try:
+            static_root = static_dir.resolve()
+            target = (static_root / candidate).resolve()
+            target.relative_to(static_root)
+        except Exception:
+            continue
+        if target.exists() and target.is_file():
+            return target
+    return None
 
 
 def parse_args() -> argparse.Namespace:
