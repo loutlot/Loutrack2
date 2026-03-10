@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import cv2
 import numpy as np
 
 SRC_ROOT = Path(__file__).resolve().parents[1]
@@ -28,10 +29,13 @@ from extrinsics_scale import apply_wand_metric_alignment
 from extrinsics_validate import validate_extrinsics
 from host.geo import CalibrationLoader
 from host.wand_session import WAND_MARKER_DIAMETER_MM, WAND_NAME, WAND_POINTS_MM
+from wand_bundle_adjustment import run_joint_bundle_adjustment
+from wand_samples import MultiViewSample
 
 
 DEFAULT_PAIR_WINDOW_US = 8000
 DEFAULT_MIN_PAIRS = 8
+DEFAULT_MAX_BA_SAMPLES = 80
 DEFAULT_OUTPUT = "calibration/calibration_extrinsics_v1.json"
 
 
@@ -126,11 +130,186 @@ def _camera_poses_from_payload(payload: Dict[str, Any]) -> Dict[str, Tuple[np.nd
     return poses
 
 
+def _downsample_samples_uniform(samples: List[Any], max_samples: int) -> List[Any]:
+    if max_samples <= 0 or len(samples) <= max_samples:
+        return list(samples)
+    if max_samples == 1:
+        return [samples[len(samples) // 2]]
+    indices = np.linspace(0, len(samples) - 1, num=max_samples)
+    picked = []
+    used: set[int] = set()
+    for idx_float in indices:
+        idx = int(round(float(idx_float)))
+        idx = max(0, min(len(samples) - 1, idx))
+        if idx in used:
+            continue
+        used.add(idx)
+        picked.append(samples[idx])
+    return picked
+
+
+def _invert_camera_extrinsics(rotation: np.ndarray, translation: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    rotation_inv = rotation.T
+    translation_inv = -(rotation_inv @ translation.reshape(3, 1)).reshape(3)
+    return rotation_inv, translation_inv
+
+
+def _build_wand_metric_samples(
+    wand_observations_by_camera: Dict[str, List[Any]],
+    reference_camera_id: str,
+    pair_window_us: int,
+) -> List[MultiViewSample]:
+    refs = list(wand_observations_by_camera.get(reference_camera_id, []))
+    refs.sort(key=lambda item: item.timestamp)
+    camera_ids = sorted(camera_id for camera_id in wand_observations_by_camera.keys() if camera_id != reference_camera_id)
+    cursors = {camera_id: 0 for camera_id in camera_ids}
+    samples: List[MultiViewSample] = []
+    for ref in refs:
+        timestamps = {reference_camera_id: int(ref.timestamp)}
+        points_by_camera = {reference_camera_id: ref.image_points.astype(np.float64)}
+        for camera_id in camera_ids:
+            rows = wand_observations_by_camera.get(camera_id, [])
+            idx = cursors[camera_id]
+            while idx < len(rows) and rows[idx].timestamp < ref.timestamp - pair_window_us:
+                idx += 1
+            best_idx = -1
+            best_delta = pair_window_us + 1
+            scan = idx
+            while scan < len(rows):
+                row = rows[scan]
+                delta = abs(int(row.timestamp) - int(ref.timestamp))
+                if row.timestamp > ref.timestamp + pair_window_us:
+                    break
+                if delta < best_delta:
+                    best_delta = delta
+                    best_idx = scan
+                scan += 1
+            cursors[camera_id] = idx
+            if best_idx < 0:
+                continue
+            cursors[camera_id] = best_idx + 1
+            row = rows[best_idx]
+            timestamps[camera_id] = int(row.timestamp)
+            points_by_camera[camera_id] = row.image_points.astype(np.float64)
+        if len(points_by_camera) < 2:
+            continue
+        if max(timestamps.values()) - min(timestamps.values()) > pair_window_us:
+            continue
+        samples.append(
+            MultiViewSample(
+                sample_id=len(samples),
+                timestamps=timestamps,
+                image_points_by_camera=points_by_camera,
+            )
+        )
+    return samples
+
+
+def _init_wand_pose_for_sample(
+    sample: MultiViewSample,
+    camera_params: Dict[str, Any],
+    camera_poses: Dict[str, Tuple[np.ndarray, np.ndarray]],
+    object_points_m: np.ndarray,
+) -> Tuple[np.ndarray, np.ndarray]:
+    best: Tuple[np.ndarray, np.ndarray] | None = None
+    for camera_id, image_points in sample.image_points_by_camera.items():
+        camera = camera_params[camera_id]
+        ok, rvec_oc, tvec_oc = cv2.solvePnP(
+            object_points_m.astype(np.float64),
+            image_points.astype(np.float64),
+            camera.intrinsic_matrix.astype(np.float64),
+            camera.distortion_coeffs.astype(np.float64),
+            flags=cv2.SOLVEPNP_ITERATIVE,
+        )
+        if not ok:
+            continue
+        rotation_oc, _ = cv2.Rodrigues(rvec_oc)
+        rotation_cw, translation_cw = _invert_camera_extrinsics(*camera_poses[camera_id])
+        rotation_wo = rotation_cw @ rotation_oc
+        translation_wo = (rotation_cw @ tvec_oc.reshape(3, 1) + translation_cw.reshape(3, 1)).reshape(3)
+        best = (rotation_wo, translation_wo)
+        break
+    if best is None:
+        return np.eye(3, dtype=np.float64), np.array([0.0, 0.0, 1.0], dtype=np.float64)
+    return best
+
+
+def _project_rotation_to_so3(rotation: np.ndarray) -> np.ndarray:
+    u, _, vt = np.linalg.svd(rotation)
+    proj = u @ vt
+    if np.linalg.det(proj) < 0.0:
+        u[:, -1] *= -1.0
+        proj = u @ vt
+    return proj
+
+
+def _estimate_metric_camera_poses_from_wand(
+    camera_params: Dict[str, Any],
+    reference_camera_id: str,
+    wand_observations_by_camera: Dict[str, List[Any]],
+    pair_window_us: int,
+) -> Dict[str, Tuple[np.ndarray, np.ndarray]] | None:
+    samples = _build_wand_metric_samples(wand_observations_by_camera, reference_camera_id, pair_window_us)
+    if len(samples) < 4:
+        return None
+    object_points_m = np.asarray(WAND_POINTS_MM, dtype=np.float64) / 1000.0
+    poses: Dict[str, Tuple[np.ndarray, np.ndarray]] = {
+        reference_camera_id: (np.eye(3, dtype=np.float64), np.zeros(3, dtype=np.float64))
+    }
+    for camera_id in sorted(camera_params.keys()):
+        if camera_id == reference_camera_id:
+            continue
+        rot_rows: List[np.ndarray] = []
+        trans_rows: List[np.ndarray] = []
+        for sample in samples:
+            if reference_camera_id not in sample.image_points_by_camera or camera_id not in sample.image_points_by_camera:
+                continue
+            ref_camera = camera_params[reference_camera_id]
+            other_camera = camera_params[camera_id]
+            ok_ref, rvec_ref, tvec_ref = cv2.solvePnP(
+                object_points_m.astype(np.float64),
+                sample.image_points_by_camera[reference_camera_id].astype(np.float64),
+                ref_camera.intrinsic_matrix.astype(np.float64),
+                ref_camera.distortion_coeffs.astype(np.float64),
+                flags=cv2.SOLVEPNP_ITERATIVE,
+            )
+            ok_other, rvec_other, tvec_other = cv2.solvePnP(
+                object_points_m.astype(np.float64),
+                sample.image_points_by_camera[camera_id].astype(np.float64),
+                other_camera.intrinsic_matrix.astype(np.float64),
+                other_camera.distortion_coeffs.astype(np.float64),
+                flags=cv2.SOLVEPNP_ITERATIVE,
+            )
+            if not ok_ref or not ok_other:
+                continue
+            r_ref, _ = cv2.Rodrigues(rvec_ref)
+            r_other, _ = cv2.Rodrigues(rvec_other)
+            r_other_ref = r_other @ r_ref.T
+            t_other_ref = tvec_other.reshape(3) - (r_other_ref @ tvec_ref.reshape(3, 1)).reshape(3)
+            rot_rows.append(r_other_ref)
+            trans_rows.append(t_other_ref)
+        if len(rot_rows) < 4:
+            return None
+        rotation_avg = _project_rotation_to_so3(np.mean(np.stack(rot_rows, axis=0), axis=0))
+        translation_avg = np.median(np.stack(trans_rows, axis=0), axis=0)
+        poses[camera_id] = (rotation_avg, translation_avg.astype(np.float64))
+    return poses if len(poses) >= 2 else None
+
+
+def _validation_score(validation: Dict[str, Any]) -> float:
+    median_reproj = float(validation.get("median_reproj_error_px", 1e9) or 1e9)
+    floor_residual_mm = float(validation.get("floor_residual_mm", 500.0) or 500.0)
+    positive_depth_ratio = float(validation.get("positive_depth_ratio", 0.0) or 0.0)
+    depth_penalty = max(0.0, 0.98 - positive_depth_ratio) * 1000.0
+    return median_reproj + (0.05 * min(floor_residual_mm, 500.0)) + depth_penalty
+
+
 def solve_pose_capture_extrinsics(
     intrinsics_path: str | Path,
     pose_log_path: str | Path,
     pair_window_us: int = DEFAULT_PAIR_WINDOW_US,
     min_pairs: int = DEFAULT_MIN_PAIRS,
+    max_ba_samples: int = DEFAULT_MAX_BA_SAMPLES,
     reference_camera_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     calibrations = CalibrationLoader.load_intrinsics(str(intrinsics_path))
@@ -178,6 +357,8 @@ def solve_pose_capture_extrinsics(
         for sample in samples
         if len([camera_id for camera_id in sample.image_points_by_camera.keys() if camera_id in camera_params]) >= 2
     ]
+    accepted_sample_count = len(samples)
+    samples = _downsample_samples_uniform(samples, max_ba_samples)
     ba = run_pose_bundle_adjustment(
         camera_params=camera_params,
         reference_camera_id=ref_camera_id,
@@ -192,6 +373,7 @@ def solve_pose_capture_extrinsics(
         "camera_poses": ba.camera_poses,
         "camera_graph_edges": graph_edges,
         "sample_count": len(samples),
+        "accepted_sample_count": accepted_sample_count,
         "optimizer": {
             "iterations": ba.iterations,
             "cost": ba.cost,
@@ -207,6 +389,7 @@ def solve_extrinsics(
     output_path: str | Path = DEFAULT_OUTPUT,
     pair_window_us: int = DEFAULT_PAIR_WINDOW_US,
     min_pairs: int = DEFAULT_MIN_PAIRS,
+    max_ba_samples: int = DEFAULT_MAX_BA_SAMPLES,
     reference_camera_id: Optional[str] = None,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -215,6 +398,7 @@ def solve_extrinsics(
         pose_log_path=pose_log_path,
         pair_window_us=pair_window_us,
         min_pairs=min_pairs,
+        max_ba_samples=max_ba_samples,
         reference_camera_id=reference_camera_id,
     )
 
@@ -238,8 +422,9 @@ def solve_extrinsics(
         "wand_metric_log_path": None,
         "pair_window_us": pair_window_us,
         "min_pairs": min_pairs,
+        "max_ba_samples": max_ba_samples,
         "sample_count": int(pose_result["sample_count"]),
-        "accepted_sample_count": int(pose_result["sample_count"]),
+        "accepted_sample_count": int(pose_result["accepted_sample_count"]),
         "camera_graph_edges": pose_result["camera_graph_edges"],
         "optimizer": pose_result["optimizer"],
         "scale_source": "none",
@@ -286,22 +471,89 @@ def apply_wand_scale_floor(
         raise ValueError("intrinsics are missing for one or more extrinsics cameras")
 
     wand_obs = load_wand_metric_observations(wand_metric_log_path)
-    camera_poses_metric, metric_summary = apply_wand_metric_alignment(
+    metric_camera_poses_from_wand = _estimate_metric_camera_poses_from_wand(
         camera_params=camera_params,
-        camera_poses_similarity=camera_poses_similarity,
+        reference_camera_id=reference_camera_id,
         wand_observations_by_camera=wand_obs,
-        wand_points_mm=WAND_POINTS_MM,
-        up_axis="Z",
         pair_window_us=pair_window_us,
     )
-    validation = validate_extrinsics(
-        camera_params=camera_params,
-        camera_poses=camera_poses_metric,
-        wand_observations_by_camera=wand_obs,
-        wand_points_mm=WAND_POINTS_MM,
-        pair_window_us=pair_window_us,
-        up_axis="Z",
-    )
+    wand_metric_samples = _build_wand_metric_samples(wand_obs, reference_camera_id, pair_window_us=pair_window_us)
+    candidate_seeds: List[Tuple[str, Dict[str, Tuple[np.ndarray, np.ndarray]]]] = [
+        ("pose_capture_similarity", camera_poses_similarity),
+    ]
+    if metric_camera_poses_from_wand is not None:
+        candidate_seeds.append(("wand_pnp", metric_camera_poses_from_wand))
+
+    best_candidate: Tuple[Dict[str, Tuple[np.ndarray, np.ndarray]], Dict[str, Any], Dict[str, Any], float] | None = None
+    object_points_m = np.asarray(WAND_POINTS_MM, dtype=np.float64) / 1000.0
+    for metric_pose_source, pose_seed in candidate_seeds:
+        aligned_poses, aligned_summary = apply_wand_metric_alignment(
+            camera_params=camera_params,
+            camera_poses_similarity=pose_seed,
+            wand_observations_by_camera=wand_obs,
+            wand_points_mm=WAND_POINTS_MM,
+            up_axis="Z",
+            pair_window_us=pair_window_us,
+        )
+        aligned_summary["metric_pose_source"] = metric_pose_source
+        aligned_validation = validate_extrinsics(
+            camera_params=camera_params,
+            camera_poses=aligned_poses,
+            wand_observations_by_camera=wand_obs,
+            wand_points_mm=WAND_POINTS_MM,
+            pair_window_us=pair_window_us,
+            up_axis="Z",
+        )
+        aligned_score = _validation_score(aligned_validation)
+        if best_candidate is None or aligned_score < best_candidate[3]:
+            best_candidate = (aligned_poses, dict(aligned_summary), aligned_validation, aligned_score)
+
+        if len(wand_metric_samples) < 4:
+            continue
+        wand_poses_init = {
+            sample.sample_id: _init_wand_pose_for_sample(sample, camera_params, aligned_poses, object_points_m)
+            for sample in wand_metric_samples
+        }
+        translation_delta = max(
+            0.25,
+            max(
+                (
+                    float(np.linalg.norm(translation.reshape(3)))
+                    for camera_id, (_rotation, translation) in aligned_poses.items()
+                    if camera_id != reference_camera_id
+                ),
+                default=0.25,
+            ),
+        )
+        wand_ba = run_joint_bundle_adjustment(
+            camera_params=camera_params,
+            reference_camera_id=reference_camera_id,
+            samples=wand_metric_samples,
+            object_points_m=object_points_m,
+            camera_poses_init=aligned_poses,
+            wand_poses_init=wand_poses_init,
+            translation_max_delta_m=translation_delta,
+        )
+        refined_summary = dict(aligned_summary)
+        refined_summary["wand_refine_iterations"] = int(wand_ba.optimizer_iterations)
+        refined_summary["wand_refine_cost"] = float(wand_ba.optimizer_cost)
+        refined_summary["wand_refine_median_reproj_error_px"] = float(wand_ba.final_median_reproj_error_px)
+        refined_summary["wand_refine_p90_reproj_error_px"] = float(wand_ba.final_p90_reproj_error_px)
+        refined_validation = validate_extrinsics(
+            camera_params=camera_params,
+            camera_poses=wand_ba.camera_poses,
+            wand_observations_by_camera=wand_obs,
+            wand_points_mm=WAND_POINTS_MM,
+            pair_window_us=pair_window_us,
+            up_axis="Z",
+        )
+        refined_score = _validation_score(refined_validation)
+        if best_candidate is None or refined_score < best_candidate[3]:
+            best_candidate = (wand_ba.camera_poses, refined_summary, refined_validation, refined_score)
+
+    if best_candidate is None:
+        raise ValueError("Failed to produce a valid wand metric candidate")
+    camera_poses_metric, metric_summary, validation, _ = best_candidate
     previous_meta = payload.get("session_meta", {})
     if not isinstance(previous_meta, dict):
         previous_meta = {}
@@ -336,6 +588,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", default=DEFAULT_OUTPUT, help=f"Output JSON path (default: {DEFAULT_OUTPUT})")
     parser.add_argument("--pair-window-us", type=int, default=DEFAULT_PAIR_WINDOW_US, help="Maximum timestamp delta for pairing")
     parser.add_argument("--min-pairs", type=int, default=DEFAULT_MIN_PAIRS, help="Minimum paired observations per camera pair")
+    parser.add_argument("--max-ba-samples", type=int, default=DEFAULT_MAX_BA_SAMPLES, help="Maximum BA samples after uniform downsampling")
     parser.add_argument("--reference-camera", default=None, help="Reference camera ID")
     parser.add_argument("--session-id", default=None, help="Optional session ID for metadata")
     return parser.parse_args()
@@ -349,6 +602,7 @@ def main() -> None:
         output_path=args.output,
         pair_window_us=args.pair_window_us,
         min_pairs=args.min_pairs,
+        max_ba_samples=args.max_ba_samples,
         reference_camera_id=args.reference_camera,
         session_id=args.session_id,
     )
