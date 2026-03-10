@@ -664,3 +664,94 @@ GUI 追加項目:
 
 `jyjblrd` 寄りへ移す本質は、精巧な BA ではなく、
 校正時に解くべき correspondence 問題の難易度を根本的に下げることです。
+
+---
+
+## 13. 実装反映ログ（2026-03-11）
+
+この migration plan に基づき、以下を実装反映した。
+
+### 13.1 新規追加モジュール
+
+- `/src/camera-calibration/extrinsics_capture.py`
+  - `PoseCaptureObservation` / `WandMetricObservation` を定義
+  - `pose_capture` JSONL reader と validator を実装
+  - `wand_metric_capture` JSONL reader を実装
+  - pose log summary（quality, single_blob_ratio など）を出力
+- `/src/camera-calibration/extrinsics_samples.py`
+  - camera ごとの単点観測から multiview sample を構築
+  - `pair_window_us` 制約、`>=2 camera` 制約、単調 cursor 走査を実装
+  - sample quality（visible count / span / mean quality）を付与
+- `/src/camera-calibration/extrinsics_initializer.py`
+  - pair ごとの `findEssentialMat` / `recoverPose` 初期化を実装
+  - edge score（usable_points * inlier_ratio * angle_score）を算出
+  - graph から reference 起点で初期 pose 展開を実装
+- `/src/camera-calibration/extrinsics_ba.py`
+  - camera extrinsics + sampleごとの未知 3D 点を同時最適化
+  - `scipy.optimize.least_squares`（robust loss）を実装
+  - optimizer stats（iterations/cost/initial_cost）を返却
+- `/src/camera-calibration/extrinsics_scale.py`
+  - wand metric log から scale 候補を推定
+  - floor normal 推定と world-up 整列を実装
+  - similarity -> metric への camera pose 変換を実装
+- `/src/camera-calibration/extrinsics_validate.py`
+  - per-camera / global reprojection 指標を算出
+  - positive-depth ratio と baseline range を算出
+  - `session_meta.validation` へ保存可能な summary を返却
+
+### 13.2 既存 solver の置換
+
+- `/src/camera-calibration/calibrate_extrinsics.py` を刷新
+  - 新しい主経路 `solve_extrinsics(...)` を追加
+    - `pose_capture -> F/E 初期化 -> BA -> wand metric scale/floor -> validation`
+  - `session_meta.method = "pose_capture"` など provenance を保存
+  - `cameras[].rotation_matrix / translation_m` 互換を維持
+  - 旧 API 互換として `solve_wand_extrinsics(...)` は wrapper として残置
+
+### 13.3 Capture/GUI 経路の変更
+
+- `/src/pi/capture.py`
+  - start mode を `capture|pose_capture|wand_metric_capture` に拡張
+  - `pose_capture` 時は best blob 1 点を送出し、`blob_count` / `quality` を付与
+  - `wand_capture` 指定は内部で `wand_metric_capture` として扱う互換を追加
+- `/src/host/wand_session.py`
+  - `SessionConfig.capture_kind` を追加
+  - `run_session()` が capture kind に応じた start mode を送信
+- `/src/host/wand_gui.py`
+  - pose/wand metric の 2 種 log path 管理を追加
+  - command 経路に `start_pose_capture` / `start_wand_metric_capture` / 対応 stop を追加
+  - `generate_extrinsics` が `pose_log_path` / `wand_metric_log_path` を solver に渡すよう変更
+  - solver ローダを `solve_extrinsics` 優先に変更（旧関数 fallback あり）
+
+### 13.4 Schema/Docs 更新
+
+- `/schema/control.json`
+  - `start.params.mode` enum を `capture|pose_capture|wand_metric_capture` へ更新
+- `/README.md`
+  - 運用フローと CLI 例を新経路（pose + wand metric）へ更新
+- `/docs/10_in_progress/gui_runbook.md`
+  - Pose Capture / Wand Metric Capture の実運用手順を追記
+
+### 13.5 テスト更新
+
+- 新規追加
+  - `/tests/test_extrinsics_capture.py`
+  - `/tests/test_extrinsics_samples.py`
+  - `/tests/test_extrinsics_initializer.py`
+  - `/tests/test_extrinsics_ba.py`
+- 既存更新
+  - `/tests/test_wand_extrinsics.py`
+  - `/tests/test_wand_gui.py`
+
+### 13.6 この反映時点の検証状況
+
+- 実施済み
+  - `python3 -m compileall src/camera-calibration src/host src/pi tests` 通過
+- 未実施
+  - `pytest` による全テスト実行（環境に pytest が未導入のため）
+
+### 13.7 残タスク（運用前チェック）
+
+- 実機で GUI 経路（pose / wand metric capture 開始停止）が安定するか確認
+- `session_meta.validation` の運用閾値（reproj, floor residual など）を現場値へ確定
+- runbook を新フローで一周して手順文言を最終調整

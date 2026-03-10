@@ -45,6 +45,7 @@ class SessionConfig:
     mask_params: Optional[Dict[str, Any]] = None
     mask_retry: int = 1
     output_dir: Optional[Path] = None
+    capture_kind: str = "pose_capture"
 
 
 class WandSession:
@@ -187,7 +188,10 @@ class WandSession:
             if not self._all_acked(mask_resp):
                 raise RuntimeError("mask_start failed on one or more cameras")
 
-        start_resp = self._broadcast(targets, "start", mode="wand_capture")
+        start_mode = config.capture_kind if config.capture_kind else "pose_capture"
+        if start_mode == "wand_capture":
+            start_mode = "wand_metric_capture"
+        start_resp = self._broadcast(targets, "start", mode=start_mode)
         record("start", start_resp)
         if not self._all_acked(start_resp):
             stop_resp = self._broadcast(targets, "stop")
@@ -215,6 +219,7 @@ class WandSession:
                 "duration_s": config.duration_s,
                 "mask_params": dict(config.mask_params or {}),
                 "mask_retry": config.mask_retry,
+                "capture_kind": start_mode,
             },
             "wand": {
                 "name": WAND_NAME,

@@ -3,7 +3,7 @@
 Host GUI を使って、オペレーターが 1 セッションを安全に回すための手順書です。
 対象は次の 2 つです。
 
-- calibration ページで wand 収録と外部較正を完了する
+- calibration ページで pose capture / wand metric capture と外部較正を完了する
 - tracking ページで live 状態を確認する
 
 開発者向けの詳細説明は省き、現場で必要な判断と復旧に絞ります。
@@ -84,7 +84,7 @@ http://<HOST_IP>:8765/
 
 ### 4.2 Blob Detection Adjustment
 
-wand をカメラに見せながら次を調整します。
+単一点ターゲットをカメラに見せながら次を調整します。
 
 - `threshold`
 - `circularity`
@@ -96,7 +96,7 @@ wand をカメラに見せながら次を調整します。
 
 判断基準:
 
-- wand の 4 点が安定して拾える
+- pose capture 用の単一点が安定して拾える
 - 反射や背景ノイズが大量に拾われない
 - カメラごとの差が大きすぎない
 
@@ -118,6 +118,17 @@ wand をカメラに見せながら次を調整します。
 - 背景ノイズがむしろ増える
 
 この場合は `Build Mask` をやり直します。
+
+### 4.4 Pose Capture / Wand Metric Capture
+
+新フローでは収録を 2 段に分けます。
+
+1. `Start Pose Capture` で単一点ターゲットを空間全体で動かし、`logs/extrinsics_pose_capture.jsonl` を作る
+2. `Stop Capture` で pose 収録を止める
+3. 必要に応じて `Start Wand Metric Capture` を押し、床置き wand を短時間収録して `logs/extrinsics_wand_metric.jsonl` を作る
+4. `Stop Metric Capture` で metric 収録を止める
+
+`Extrinsics Generation` は上記の pose log を主入力として実行し、wand metric log が存在すれば scale/floor/validation まで同時に適用します。
 
 ### 4.4 Wand Capture
 
