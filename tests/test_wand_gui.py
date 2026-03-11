@@ -194,11 +194,15 @@ def test_generate_extrinsics_and_apply_wand_scale_floor_use_split_paths(tmp_path
             "intrinsics_path": "calibration",
             "wand_metric_log_path": str(wand_metric_log),
             "output_path": "calibration/calibration_extrinsics_v1.json",
+            "max_wand_metric_samples": 16,
+            "expected_baseline_m": 2.5,
         }
     )
     assert applied["apply_wand_scale_floor"]["ok"] is True
     assert "extrinsics_path" in applied_called
     assert "wand_metric_log_path" in applied_called
+    assert applied_called["max_wand_metric_samples"] == 16
+    assert applied_called["expected_baseline_m"] == 2.5
 
 
 def test_resolve_static_asset_prefers_repo_root_static(tmp_path: Path, monkeypatch) -> None:

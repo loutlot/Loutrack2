@@ -6,6 +6,8 @@ from typing import Dict, Optional, Sequence
 
 import numpy as np
 
+from wand_model import WAND_MID_RATIO
+
 
 @dataclass(frozen=True)
 class WandLabelResult:
@@ -23,7 +25,7 @@ def canonicalize_wand_points(
     *,
     min_blob_area: float = 0.0,
     collinearity_threshold: float = 0.035,
-    midpoint_ratio_threshold: float = 0.35,
+    midpoint_ratio_threshold: float = 0.12,
 ) -> Optional[WandLabelResult]:
     if len(blobs) < 4:
         return None
@@ -65,7 +67,7 @@ def canonicalize_wand_points(
         dist_line = float(abs(_cross2d(vec, pts[candidate_mid] - pts[endpoint_a])) / np.sqrt(denom))
         if not (0.10 <= t <= 0.90):
             continue
-        score = abs(t - 0.5) + (dist_line / scale)
+        score = abs(t - WAND_MID_RATIO) + (dist_line / scale)
         if score < best_mid_score:
             best_mid_score = score
             mid_id = candidate_mid
@@ -86,7 +88,7 @@ def canonicalize_wand_points(
     mid_len = float(np.linalg.norm(pts[mid_id] - elbow_pt))
     if long_len <= 1e-9:
         return None
-    ratio_err = abs((mid_len / long_len) - 0.5)
+    ratio_err = abs((mid_len / long_len) - WAND_MID_RATIO)
     if ratio_err > midpoint_ratio_threshold:
         return None
 

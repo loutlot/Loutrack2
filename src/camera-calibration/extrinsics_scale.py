@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Sequence, Tuple
 
+import cv2
 import numpy as np
 
 from extrinsics_capture import WandMetricObservation
 
 
-WAND_EDGE_PAIRS = ((0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3))
+WAND_EDGE_PAIRS = ((0, 1), (0, 2), (0, 3), (2, 3))
 
 
 def _camera_center(rotation: np.ndarray, translation: np.ndarray) -> np.ndarray:
@@ -88,14 +89,18 @@ def _build_wand_metric_multiview(
 
 
 def _triangulate_point_ls(
-    observations: Sequence[Tuple[np.ndarray, np.ndarray, np.ndarray]],
+    observations: Sequence[Tuple[np.ndarray, Any, np.ndarray]],
 ) -> np.ndarray | None:
     if len(observations) < 2:
         return None
     rows: List[np.ndarray] = []
-    for pmat, k, uv in observations:
-        inv_k = np.linalg.inv(k)
-        x = inv_k @ np.array([uv[0], uv[1], 1.0], dtype=np.float64)
+    for pmat, camera, uv in observations:
+        norm = cv2.undistortPoints(
+            uv.reshape(1, 1, 2).astype(np.float64),
+            camera.intrinsic_matrix.astype(np.float64),
+            camera.distortion_coeffs.astype(np.float64),
+        ).reshape(2)
+        x = np.array([norm[0], norm[1], 1.0], dtype=np.float64)
         rows.append(x[0] * pmat[2] - pmat[0])
         rows.append(x[1] * pmat[2] - pmat[1])
     a = np.stack(rows, axis=0)
@@ -104,6 +109,34 @@ def _triangulate_point_ls(
     if abs(float(xh[3])) < 1e-12:
         return None
     return (xh[:3] / xh[3]).astype(np.float64)
+
+
+def _estimate_similarity_transform(
+    reconstructed: np.ndarray,
+    model: np.ndarray,
+) -> Tuple[float, np.ndarray, np.ndarray, float] | None:
+    if reconstructed.shape != model.shape or reconstructed.shape[0] < 2:
+        return None
+    rec_center = np.mean(reconstructed, axis=0, keepdims=True)
+    model_center = np.mean(model, axis=0, keepdims=True)
+    rec_zero = reconstructed - rec_center
+    model_zero = model - model_center
+    rec_var = float(np.mean(np.sum(rec_zero * rec_zero, axis=1)))
+    if rec_var <= 1e-12:
+        return None
+    covariance = (model_zero.T @ rec_zero) / float(reconstructed.shape[0])
+    u, singular_values, vt = np.linalg.svd(covariance)
+    sign = np.eye(3, dtype=np.float64)
+    if np.linalg.det(u @ vt) < 0.0:
+        sign[-1, -1] = -1.0
+    rotation = u @ sign @ vt
+    scale = float(np.sum(np.diag(sign) * singular_values) / rec_var)
+    if not np.isfinite(scale) or scale <= 0.0:
+        return None
+    translation = (model_center.reshape(3) - scale * (rotation @ rec_center.reshape(3, 1)).reshape(3)).astype(np.float64)
+    aligned = (scale * (rotation @ reconstructed.T)).T + translation.reshape(1, 3)
+    rms_error_m = float(np.sqrt(np.mean(np.sum((aligned - model) ** 2, axis=1))))
+    return scale, rotation, translation, rms_error_m
 
 
 def apply_wand_metric_alignment(
@@ -137,17 +170,18 @@ def apply_wand_metric_alignment(
     floor_points: List[np.ndarray] = []
     elbow_points: List[np.ndarray] = []
     axis_vectors: List[np.ndarray] = []
+    shape_errors_mm: List[float] = []
     up = np.array([0.0, 0.0, 1.0], dtype=np.float64) if up_axis.upper() == "Z" else np.array([0.0, 1.0, 0.0], dtype=np.float64)
     target_axis = np.array([0.0, 1.0, 0.0], dtype=np.float64) if up_axis.upper() == "Z" else np.array([1.0, 0.0, 0.0], dtype=np.float64)
 
     for obs_by_camera in samples:
         tri_points: List[np.ndarray] = []
         for point_idx in range(4):
-            obs_rows: List[Tuple[np.ndarray, np.ndarray, np.ndarray]] = []
+            obs_rows: List[Tuple[np.ndarray, Any, np.ndarray]] = []
             for camera_id, points in obs_by_camera.items():
                 rotation, translation = camera_poses_similarity[camera_id]
                 pmat = np.hstack([rotation, translation.reshape(3, 1)])
-                obs_rows.append((pmat, camera_params[camera_id].intrinsic_matrix, points[point_idx]))
+                obs_rows.append((pmat, camera_params[camera_id], points[point_idx]))
             point = _triangulate_point_ls(obs_rows)
             if point is None:
                 tri_points = []
@@ -161,8 +195,19 @@ def apply_wand_metric_alignment(
         valid = rec_edges > 1e-9
         if np.count_nonzero(valid) < 3:
             continue
-        scale = float(np.median(known_edges[valid] / rec_edges[valid]))
+        similarity_fit = _estimate_similarity_transform(tri, wand_points_m)
+        if similarity_fit is None:
+            continue
+        scale_fit, _rotation_fit, _translation_fit, shape_error_m = similarity_fit
+        edge_scale = float(np.median(known_edges[valid] / rec_edges[valid]))
+        rel_scale_delta = abs(scale_fit - edge_scale) / max(scale_fit, edge_scale, 1e-9)
+        if rel_scale_delta > 0.35:
+            continue
+        scale = float(np.median(np.array([scale_fit, edge_scale], dtype=np.float64)))
+        if not np.isfinite(scale) or scale <= 0.0:
+            continue
         scale_candidates.append(scale)
+        shape_errors_mm.append(shape_error_m * 1000.0)
 
         tri_metric = tri * scale
         floor_points.append(tri_metric)
@@ -177,7 +222,15 @@ def apply_wand_metric_alignment(
             "wand_metric_frames": 0,
         }
 
-    scale = float(np.median(scale_candidates))
+    scale_array = np.asarray(scale_candidates, dtype=np.float64)
+    if scale_array.size >= 3:
+        scale_med = float(np.median(scale_array))
+        scale_mad = float(np.median(np.abs(scale_array - scale_med)))
+        if scale_mad > 1e-9:
+            keep = np.abs(scale_array - scale_med) <= (2.5 * scale_mad)
+            if np.count_nonzero(keep) >= 1:
+                scale_array = scale_array[keep]
+    scale = float(np.median(scale_array))
     all_floor = np.concatenate(floor_points, axis=0)
     centroid = np.mean(all_floor, axis=0)
     centered = all_floor - centroid
@@ -226,6 +279,7 @@ def apply_wand_metric_alignment(
         "floor_source": "wand_floor_metric",
         "scale_m_per_unit": scale,
         "wand_metric_frames": len(floor_points),
+        "shape_rms_error_mm": float(np.median(np.asarray(shape_errors_mm, dtype=np.float64))) if shape_errors_mm else 0.0,
         "floor_normal_similarity": floor_normal.tolist(),
         "origin_world": origin.tolist(),
         "origin_marker": "elbow",

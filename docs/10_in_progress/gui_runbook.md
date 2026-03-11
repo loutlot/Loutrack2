@@ -128,7 +128,8 @@ http://<HOST_IP>:8765/
 3. 必要に応じて `Start Wand Metric Capture` を押し、床置き wand を短時間収録して `logs/extrinsics_wand_metric.jsonl` を作る
 4. `Stop Metric Capture` で metric 収録を止める
 
-`Extrinsics Generation` は上記の pose log を主入力として実行し、wand metric log が存在すれば scale/floor/validation まで同時に適用します。
+`Generate Extrinsics` は上記の pose log を主入力として similarity extrinsics を作ります。
+scale / floor / world origin は、そのあと `Apply Wand Scale/Floor` で別適用します。
 
 ### 4.4 Wand Capture
 
@@ -168,6 +169,17 @@ http://<HOST_IP>:8765/
 - 品質確認には `session_meta.pair_delta_us_stats` と `session_meta.optimizer` も使う
 
 ここで失敗した場合は、まず wand 収録不足（同時観測不足）を疑います。
+
+### 4.6 Apply Wand Scale/Floor
+
+`Apply Wand Scale/Floor` を実行し、次を確認します。
+
+- `session_meta.scale_source` が `wand_floor_metric`
+- `session_meta.floor_source` が `wand_floor_metric`
+- `session_meta.wand_metric_frames` が `1` 以上
+- 最新出力が `calibration/calibration_extrinsics_v1.json` に上書きされる
+
+wand は床置き前提で、物理座標は `[elbow, short, mid, long] = [(0,0), (0,182), (132,0), (257,0)] mm` を使います。
 
 ## 5. Tracking ページ運用
 

@@ -27,6 +27,7 @@ class WandMetricObservation:
     timestamp: int
     frame_index: int
     image_points: np.ndarray
+    raw_points: np.ndarray
     confidence: float
 
 
@@ -122,16 +123,25 @@ def load_wand_metric_observations(path: str | Path) -> Dict[str, List[WandMetric
             blobs = payload.get("blobs", [])
             if not isinstance(blobs, list) or len(blobs) < 4:
                 continue
+            top4 = sorted(blobs, key=lambda blob: float(blob.get("area", 0.0)), reverse=True)[:4]
+            raw_points = np.array(
+                [[float(blob.get("x", 0.0)), float(blob.get("y", 0.0))] for blob in top4],
+                dtype=np.float64,
+            )
             label = canonicalize_wand_points(blobs)
             if label is None:
-                continue
-            confidence = float(max(0.0, 1.0 - label.collinearity_error * 6.0))
+                image_points = raw_points
+                confidence = 0.0
+            else:
+                image_points = label.points.astype(np.float64)
+                confidence = float(max(0.0, 1.0 - label.collinearity_error * 6.0))
             rows.setdefault(camera_id, []).append(
                 WandMetricObservation(
                     camera_id=camera_id,
                     timestamp=int(payload.get("timestamp", 0)),
                     frame_index=int(payload.get("frame_index", 0)),
-                    image_points=label.points.astype(np.float64),
+                    image_points=image_points,
+                    raw_points=raw_points,
                     confidence=confidence,
                 )
             )

@@ -8,18 +8,12 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from . import control as control_module
-
-
-WAND_NAME = "wand_l_b5_v1"
-WAND_MARKER_DIAMETER_MM = 14.0
-WAND_OUTER_SHORT_MM = 182.0
-WAND_OUTER_LONG_MM = 257.0
-# Center-to-center distances are defined directly from the measured wand geometry.
-WAND_POINTS_MM: Tuple[Tuple[float, float, float], ...] = (
-    (0.0, 0.0, 0.0),
-    (WAND_OUTER_SHORT_MM, 0.0, 0.0),
-    (0.0, WAND_OUTER_LONG_MM / 2.0, 0.0),
-    (0.0, WAND_OUTER_LONG_MM, 0.0),
+from wand_model import (
+    WAND_MARKER_DIAMETER_MM,
+    WAND_NAME,
+    WAND_OUTER_LONG_MM,
+    WAND_OUTER_SHORT_MM,
+    WAND_POINTS_MM,
 )
 
 

@@ -22,6 +22,7 @@ class MultiViewSample:
     sample_id: int
     timestamps: Dict[str, int]
     image_points_by_camera: Dict[str, np.ndarray]
+    raw_points_by_camera: Dict[str, np.ndarray] | None = None
 
 
 def build_multiview_samples(

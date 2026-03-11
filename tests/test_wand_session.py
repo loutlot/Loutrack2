@@ -62,9 +62,9 @@ class _FakeControl:
 def test_wand_points_mm_defaults() -> None:
     assert WAND_POINTS_MM == (
         (0.0, 0.0, 0.0),
-        (182.0, 0.0, 0.0),
-        (0.0, 128.5, 0.0),
-        (0.0, 257.0, 0.0),
+        (0.0, 182.0, 0.0),
+        (132.0, 0.0, 0.0),
+        (257.0, 0.0, 0.0),
     )
 
 

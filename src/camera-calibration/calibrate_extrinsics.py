@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import sys
 from datetime import datetime, timezone
@@ -28,15 +29,20 @@ from extrinsics_samples import build_pose_multiview_samples
 from extrinsics_scale import apply_wand_metric_alignment
 from extrinsics_validate import validate_extrinsics
 from host.geo import CalibrationLoader
-from host.wand_session import WAND_MARKER_DIAMETER_MM, WAND_NAME, WAND_POINTS_MM
 from wand_bundle_adjustment import run_joint_bundle_adjustment
+from wand_model import WAND_POINTS_MM, wand_payload
 from wand_samples import MultiViewSample
 
 
 DEFAULT_PAIR_WINDOW_US = 8000
 DEFAULT_MIN_PAIRS = 8
 DEFAULT_MAX_BA_SAMPLES = 80
+DEFAULT_MAX_WAND_METRIC_SAMPLES = 16
 DEFAULT_OUTPUT = "calibration/calibration_extrinsics_v1.json"
+
+
+def _current_wand_payload() -> Dict[str, Any]:
+    return wand_payload()
 
 
 def _to_cameras_output(
@@ -97,11 +103,7 @@ def _serialize_result(
         "reference_camera_id": reference_camera_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "wand": wand_payload
-        or {
-            "name": WAND_NAME,
-            "marker_diameter_mm": WAND_MARKER_DIAMETER_MM,
-            "points_mm": [list(point) for point in WAND_POINTS_MM],
-        },
+        or _current_wand_payload(),
         "session_meta": session_meta,
         "cameras": cameras_output,
     }
@@ -148,6 +150,17 @@ def _downsample_samples_uniform(samples: List[Any], max_samples: int) -> List[An
     return picked
 
 
+def _pick_middle_samples(samples: List[Any], max_samples: int) -> List[Any]:
+    if max_samples <= 0 or len(samples) <= max_samples:
+        return list(samples)
+    mid = len(samples) // 2
+    if max_samples == 1:
+        return [samples[mid]]
+    start = max(0, mid - (max_samples // 2))
+    end = min(len(samples), start + max_samples)
+    return list(samples[start:end])
+
+
 def _invert_camera_extrinsics(rotation: np.ndarray, translation: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     rotation_inv = rotation.T
     translation_inv = -(rotation_inv @ translation.reshape(3, 1)).reshape(3)
@@ -167,6 +180,12 @@ def _build_wand_metric_samples(
     for ref in refs:
         timestamps = {reference_camera_id: int(ref.timestamp)}
         points_by_camera = {reference_camera_id: ref.image_points.astype(np.float64)}
+        raw_points_by_camera = {
+            reference_camera_id: np.asarray(
+                getattr(ref, "raw_points", ref.image_points),
+                dtype=np.float64,
+            )
+        }
         for camera_id in camera_ids:
             rows = wand_observations_by_camera.get(camera_id, [])
             idx = cursors[camera_id]
@@ -191,6 +210,10 @@ def _build_wand_metric_samples(
             row = rows[best_idx]
             timestamps[camera_id] = int(row.timestamp)
             points_by_camera[camera_id] = row.image_points.astype(np.float64)
+            raw_points_by_camera[camera_id] = np.asarray(
+                getattr(row, "raw_points", row.image_points),
+                dtype=np.float64,
+            )
         if len(points_by_camera) < 2:
             continue
         if max(timestamps.values()) - min(timestamps.values()) > pair_window_us:
@@ -200,9 +223,76 @@ def _build_wand_metric_samples(
                 sample_id=len(samples),
                 timestamps=timestamps,
                 image_points_by_camera=points_by_camera,
+                raw_points_by_camera=raw_points_by_camera,
             )
         )
     return samples
+
+
+def _relabel_points_by_pnp(
+    camera: Any,
+    raw_points: np.ndarray,
+    object_points_m: np.ndarray,
+) -> tuple[np.ndarray, float] | None:
+    if raw_points.shape != (4, 2):
+        return None
+    best_points: np.ndarray | None = None
+    best_error = float("inf")
+    solvepnp_flag = getattr(cv2, "SOLVEPNP_IPPE", cv2.SOLVEPNP_ITERATIVE)
+    for perm in itertools.permutations(range(4)):
+        image_points = raw_points[list(perm)].astype(np.float64)
+        ok, rvec, tvec = cv2.solvePnP(
+            object_points_m.astype(np.float64),
+            image_points,
+            camera.intrinsic_matrix.astype(np.float64),
+            camera.distortion_coeffs.astype(np.float64),
+            flags=solvepnp_flag,
+        )
+        if not ok:
+            continue
+        proj, _ = cv2.projectPoints(
+            object_points_m.astype(np.float64),
+            rvec.reshape(3, 1),
+            tvec.reshape(3, 1),
+            camera.intrinsic_matrix.astype(np.float64),
+            camera.distortion_coeffs.astype(np.float64),
+        )
+        pred = proj.reshape(-1, 2)
+        error = float(np.median(np.linalg.norm(pred - image_points, axis=1)))
+        if error < best_error:
+            best_error = error
+            best_points = image_points
+    if best_points is None:
+        return None
+    return best_points, best_error
+
+
+def _relabel_wand_samples_with_pnp(
+    samples: List[MultiViewSample],
+    camera_params: Dict[str, Any],
+    object_points_m: np.ndarray,
+) -> List[MultiViewSample]:
+    relabeled: List[MultiViewSample] = []
+    for sample in samples:
+        image_points_by_camera: Dict[str, np.ndarray] = {}
+        raw_points_by_camera = sample.raw_points_by_camera or {}
+        for camera_id, image_points in sample.image_points_by_camera.items():
+            camera = camera_params.get(camera_id)
+            raw_points = raw_points_by_camera.get(camera_id)
+            if camera is None or raw_points is None:
+                image_points_by_camera[camera_id] = image_points
+                continue
+            refined = _relabel_points_by_pnp(camera, raw_points.astype(np.float64), object_points_m)
+            image_points_by_camera[camera_id] = refined[0] if refined is not None else image_points
+        relabeled.append(
+            MultiViewSample(
+                sample_id=sample.sample_id,
+                timestamps=dict(sample.timestamps),
+                image_points_by_camera=image_points_by_camera,
+                raw_points_by_camera=dict(raw_points_by_camera) if raw_points_by_camera else None,
+            )
+        )
+    return relabeled
 
 
 def _init_wand_pose_for_sample(
@@ -300,8 +390,14 @@ def _validation_score(validation: Dict[str, Any]) -> float:
     median_reproj = float(validation.get("median_reproj_error_px", 1e9) or 1e9)
     floor_residual_mm = float(validation.get("floor_residual_mm", 500.0) or 500.0)
     positive_depth_ratio = float(validation.get("positive_depth_ratio", 0.0) or 0.0)
+    baseline_target_m = validation.get("baseline_target_m")
+    baseline_range = validation.get("baseline_range_m") or [0.0, 0.0]
     depth_penalty = max(0.0, 0.98 - positive_depth_ratio) * 1000.0
-    return median_reproj + (0.05 * min(floor_residual_mm, 500.0)) + depth_penalty
+    baseline_penalty = 0.0
+    if baseline_target_m is not None and isinstance(baseline_range, list) and len(baseline_range) == 2:
+        baseline_mid = 0.5 * (float(baseline_range[0]) + float(baseline_range[1]))
+        baseline_penalty = 40.0 * abs(baseline_mid - float(baseline_target_m))
+    return median_reproj + (0.05 * min(floor_residual_mm, 500.0)) + depth_penalty + baseline_penalty
 
 
 def solve_pose_capture_extrinsics(
@@ -451,6 +547,8 @@ def apply_wand_scale_floor(
     wand_metric_log_path: str | Path,
     output_path: str | Path | None = None,
     pair_window_us: int = DEFAULT_PAIR_WINDOW_US,
+    max_wand_metric_samples: int = DEFAULT_MAX_WAND_METRIC_SAMPLES,
+    expected_baseline_m: float | None = None,
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     calibrations = CalibrationLoader.load_intrinsics(str(intrinsics_path))
@@ -471,13 +569,34 @@ def apply_wand_scale_floor(
         raise ValueError("intrinsics are missing for one or more extrinsics cameras")
 
     wand_obs = load_wand_metric_observations(wand_metric_log_path)
+    wand_metric_samples_all = _build_wand_metric_samples(wand_obs, reference_camera_id, pair_window_us=pair_window_us)
+    wand_metric_samples = _pick_middle_samples(wand_metric_samples_all, max_wand_metric_samples)
+    if not wand_metric_samples:
+        raise ValueError("No valid wand metric samples were built from the wand metric log")
+    object_points_m = np.asarray(WAND_POINTS_MM, dtype=np.float64) / 1000.0
+    wand_metric_samples = _relabel_wand_samples_with_pnp(
+        wand_metric_samples,
+        camera_params=camera_params,
+        object_points_m=object_points_m,
+    )
+    wand_obs_trimmed: Dict[str, List[Any]] = {}
+    for sample in wand_metric_samples:
+        for camera_id, points in sample.image_points_by_camera.items():
+            wand_obs_trimmed.setdefault(camera_id, []).append(
+                type("WandObsRow", (), {
+                    "camera_id": camera_id,
+                    "timestamp": sample.timestamps[camera_id],
+                    "frame_index": 0,
+                    "image_points": points,
+                    "confidence": 1.0,
+                })()
+            )
     metric_camera_poses_from_wand = _estimate_metric_camera_poses_from_wand(
         camera_params=camera_params,
         reference_camera_id=reference_camera_id,
-        wand_observations_by_camera=wand_obs,
+        wand_observations_by_camera=wand_obs_trimmed,
         pair_window_us=pair_window_us,
     )
-    wand_metric_samples = _build_wand_metric_samples(wand_obs, reference_camera_id, pair_window_us=pair_window_us)
     candidate_seeds: List[Tuple[str, Dict[str, Tuple[np.ndarray, np.ndarray]]]] = [
         ("pose_capture_similarity", camera_poses_similarity),
     ]
@@ -485,12 +604,11 @@ def apply_wand_scale_floor(
         candidate_seeds.append(("wand_pnp", metric_camera_poses_from_wand))
 
     best_candidate: Tuple[Dict[str, Tuple[np.ndarray, np.ndarray]], Dict[str, Any], Dict[str, Any], float] | None = None
-    object_points_m = np.asarray(WAND_POINTS_MM, dtype=np.float64) / 1000.0
     for metric_pose_source, pose_seed in candidate_seeds:
         aligned_poses, aligned_summary = apply_wand_metric_alignment(
             camera_params=camera_params,
             camera_poses_similarity=pose_seed,
-            wand_observations_by_camera=wand_obs,
+            wand_observations_by_camera=wand_obs_trimmed,
             wand_points_mm=WAND_POINTS_MM,
             up_axis="Z",
             pair_window_us=pair_window_us,
@@ -499,11 +617,13 @@ def apply_wand_scale_floor(
         aligned_validation = validate_extrinsics(
             camera_params=camera_params,
             camera_poses=aligned_poses,
-            wand_observations_by_camera=wand_obs,
+            wand_observations_by_camera=wand_obs_trimmed,
             wand_points_mm=WAND_POINTS_MM,
             pair_window_us=pair_window_us,
             up_axis="Z",
         )
+        if expected_baseline_m is not None:
+            aligned_validation["baseline_target_m"] = float(expected_baseline_m)
         aligned_score = _validation_score(aligned_validation)
         if best_candidate is None or aligned_score < best_candidate[3]:
             best_candidate = (aligned_poses, dict(aligned_summary), aligned_validation, aligned_score)
@@ -542,11 +662,13 @@ def apply_wand_scale_floor(
         refined_validation = validate_extrinsics(
             camera_params=camera_params,
             camera_poses=wand_ba.camera_poses,
-            wand_observations_by_camera=wand_obs,
+            wand_observations_by_camera=wand_obs_trimmed,
             wand_points_mm=WAND_POINTS_MM,
             pair_window_us=pair_window_us,
             up_axis="Z",
         )
+        if expected_baseline_m is not None:
+            refined_validation["baseline_target_m"] = float(expected_baseline_m)
         refined_score = _validation_score(refined_validation)
         if best_candidate is None or refined_score < best_candidate[3]:
             best_candidate = (wand_ba.camera_poses, refined_summary, refined_validation, refined_score)
@@ -563,6 +685,8 @@ def apply_wand_scale_floor(
         "session_id": session_id if session_id is not None else previous_meta.get("session_id"),
         "wand_metric_log_path": str(Path(wand_metric_log_path)),
         "pair_window_us": pair_window_us,
+        "max_wand_metric_samples": max_wand_metric_samples,
+        "expected_baseline_m": float(expected_baseline_m) if expected_baseline_m is not None else None,
         **metric_summary,
         "scale_m_per_unit": float(metric_summary.get("scale_m_per_unit", 1.0)),
         "wand_metric_frames": int(metric_summary.get("wand_metric_frames", 0)),
@@ -576,7 +700,7 @@ def apply_wand_scale_floor(
         sample_count=int(previous_meta.get("sample_count", 0) or 0),
         per_camera_median_reproj_px=dict(validation.get("per_camera_median_reproj_px", {})),
         session_meta=session_meta,
-        wand_payload=payload.get("wand") if isinstance(payload.get("wand"), dict) else None,
+        wand_payload=_current_wand_payload(),
     )
 
 
@@ -589,6 +713,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pair-window-us", type=int, default=DEFAULT_PAIR_WINDOW_US, help="Maximum timestamp delta for pairing")
     parser.add_argument("--min-pairs", type=int, default=DEFAULT_MIN_PAIRS, help="Minimum paired observations per camera pair")
     parser.add_argument("--max-ba-samples", type=int, default=DEFAULT_MAX_BA_SAMPLES, help="Maximum BA samples after uniform downsampling")
+    parser.add_argument("--max-wand-metric-samples", type=int, default=DEFAULT_MAX_WAND_METRIC_SAMPLES, help="Maximum wand metric samples; default uses only the middle frame")
+    parser.add_argument("--expected-baseline-m", type=float, default=None, help="Optional measured camera baseline used as a validation prior")
     parser.add_argument("--reference-camera", default=None, help="Reference camera ID")
     parser.add_argument("--session-id", default=None, help="Optional session ID for metadata")
     return parser.parse_args()
@@ -613,6 +739,8 @@ def main() -> None:
             wand_metric_log_path=args.wand_metric_log,
             output_path=args.output,
             pair_window_us=args.pair_window_us,
+            max_wand_metric_samples=args.max_wand_metric_samples,
+            expected_baseline_m=args.expected_baseline_m,
             session_id=args.session_id,
         )
     print(json.dumps(result, indent=2, ensure_ascii=False))

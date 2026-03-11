@@ -726,10 +726,12 @@ HTML_PAGE = """<!doctype html>
           <div class="controls-grid">
             <label for="intrinsicsPath">Intrinsics Dir<input id="intrinsicsPath" type="text" value="calibration"></label>
              <label for="logPath">Pose Log Path<input id="logPath" type="text" value="logs/extrinsics_pose_capture.jsonl"></label>
-             <label for="wandMetricLogPath">Wand Metric Log<input id="wandMetricLogPath" type="text" value="logs/extrinsics_wand_metric.jsonl"></label>
+            <label for="wandMetricLogPath">Wand Metric Log<input id="wandMetricLogPath" type="text" value="logs/extrinsics_wand_metric.jsonl"></label>
             <label for="outputPath">Output Path<input id="outputPath" type="text" value="calibration/calibration_extrinsics_v1.json"></label>
             <label for="pairWindowUs">Pair Window (us)<input id="pairWindowUs" type="number" min="1" step="100" value="8000"></label>
             <label for="minPairs">Min Pairs<input id="minPairs" type="number" min="1" step="1" value="8"></label>
+            <label for="maxWandMetricSamples">Wand Metric Samples<input id="maxWandMetricSamples" type="number" min="1" step="1" value="16"></label>
+            <label for="expectedBaselineM">Expected Baseline (m)<input id="expectedBaselineM" type="number" min="0" step="0.01" value=""></label>
           </div>
           <div class="button-row">
             <button id="generateExtrinsics">Generate Extrinsics</button>
@@ -876,6 +878,8 @@ HTML_PAGE = """<!doctype html>
       outputPath: document.getElementById("outputPath"),
       pairWindowUs: document.getElementById("pairWindowUs"),
       minPairs: document.getElementById("minPairs"),
+      maxWandMetricSamples: document.getElementById("maxWandMetricSamples"),
+      expectedBaselineM: document.getElementById("expectedBaselineM"),
       selectionMetric: document.getElementById("selectionMetric"),
       selectionSummary: document.getElementById("selectionSummary"),
       blobMetric: document.getElementById("blobMetric"),
@@ -1657,6 +1661,8 @@ HTML_PAGE = """<!doctype html>
           wand_metric_log_path: elements.wandMetricLogPath.value,
           output_path: elements.outputPath.value,
           pair_window_us: Number(elements.pairWindowUs.value),
+          max_wand_metric_samples: Number(elements.maxWandMetricSamples.value),
+          expected_baseline_m: elements.expectedBaselineM.value === "" ? null : Number(elements.expectedBaselineM.value),
         });
         await safeLoadState();
       } catch (error) {
@@ -2202,8 +2208,15 @@ class WandGuiState:
         resolved_wand_metric = self._resolve_project_path(wand_metric_raw, DEFAULT_WAND_METRIC_LOG_PATH)
         resolved_output = self._resolve_project_path(output_raw, DEFAULT_EXTRINSICS_OUTPUT_PATH)
         pair_window_us = int(payload.get("pair_window_us", 8000))
+        max_wand_metric_samples = int(payload.get("max_wand_metric_samples", 16))
+        expected_baseline_raw = payload.get("expected_baseline_m")
         if pair_window_us < 1:
             raise ValueError("pair_window_us must be >= 1")
+        if max_wand_metric_samples < 1:
+            raise ValueError("max_wand_metric_samples must be >= 1")
+        expected_baseline_m = None if expected_baseline_raw in (None, "") else float(expected_baseline_raw)
+        if expected_baseline_m is not None and expected_baseline_m <= 0.0:
+            raise ValueError("expected_baseline_m must be > 0")
         if not resolved_output.exists() or not resolved_output.is_file():
             raise ValueError(f"output_path does not exist: {resolved_output}")
         if not resolved_wand_metric.exists() or not resolved_wand_metric.is_file():
@@ -2216,6 +2229,8 @@ class WandGuiState:
                 wand_metric_log_path=str(resolved_wand_metric),
                 output_path=str(resolved_output),
                 pair_window_us=pair_window_us,
+                max_wand_metric_samples=max_wand_metric_samples,
+                expected_baseline_m=expected_baseline_m,
             )
         except FileNotFoundError as exc:
             missing_path = Path(getattr(exc, "filename", "") or str(resolved_wand_metric))

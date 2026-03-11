@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "reference_camera_id": "pi-cam-01",
-  "created_at": "2026-03-10T18:15:57.530759+00:00",
+  "created_at": "2026-03-11T18:15:23.883951+00:00",
   "wand": {
     "name": "wand_l_b5_v1",
     "marker_diameter_mm": 14.0,
@@ -12,18 +12,18 @@
         0.0
       ],
       [
+        0.0,
         182.0,
+        0.0
+      ],
+      [
+        132.0,
         0.0,
         0.0
       ],
       [
-        0.0,
-        128.5,
-        0.0
-      ],
-      [
-        0.0,
         257.0,
+        0.0,
         0.0
       ]
     ]
@@ -31,63 +31,67 @@
   "session_meta": {
     "session_id": null,
     "method": "pose_capture",
-    "pose_capture_log_path": "logs/extrinsics_pose_capture.jsonl",
-    "wand_metric_log_path": "logs/extrinsics_wand_metric.jsonl",
+    "pose_capture_log_path": "logs/extrinsics_pose_capture copy.jsonl",
+    "wand_metric_log_path": "logs/extrinsics_wand_metric copy.jsonl",
     "pair_window_us": 8000,
     "min_pairs": 8,
-    "max_ba_samples": 80,
-    "sample_count": 80,
-    "accepted_sample_count": 1434,
+    "max_ba_samples": 20,
+    "sample_count": 20,
+    "accepted_sample_count": 1711,
     "camera_graph_edges": [
       {
         "camera_a": "pi-cam-01",
         "camera_b": "pi-cam-02",
-        "usable_points": 1114.0,
-        "inlier_ratio": 0.7768479776847977,
+        "usable_points": 1711.0,
+        "inlier_ratio": 1.0,
         "angle_score": 1.0,
-        "score": 865.4086471408647
+        "score": 1711.0
       }
     ],
     "optimizer": {
-      "iterations": 36,
-      "cost": 110675.56091316341,
-      "initial_cost": 52888308041740.54
+      "iterations": 94,
+      "cost": 703.2868992040266,
+      "initial_cost": 23644.760929997272
     },
     "scale_source": "wand_floor_metric",
     "floor_source": "wand_floor_metric",
-    "scale_m_per_unit": 7.312065661838668,
-    "wand_metric_frames": 104,
+    "scale_m_per_unit": 7.939052301193655,
+    "wand_metric_frames": 16,
     "validation": {
-      "median_reproj_error_px": 166.8611185134814,
-      "p90_reproj_error_px": 253.54866579125314,
+      "median_reproj_error_px": 27.615260414827297,
+      "p90_reproj_error_px": 43.300017261123244,
       "positive_depth_ratio": 1.0,
       "baseline_range_m": [
-        7.31211311122215,
-        7.31211311122215
+        8.285220824011663,
+        8.285220824011663
       ],
       "per_camera_median_reproj_px": {
-        "pi-cam-01": 217.30809495640898,
-        "pi-cam-02": 162.31431186782862
+        "pi-cam-01": 31.001645782899654,
+        "pi-cam-02": 21.96719348519936
       },
-      "floor_residual_mm": 6.156746334645378,
-      "world_up_consistency": 0.9999235646979681
+      "floor_residual_mm": 0.25445397748866716,
+      "world_up_consistency": 0.9999989694593892,
+      "baseline_target_m": 2.5
     },
     "capture_summary": {
       "camera_count": 2,
-      "observation_count": 2923,
+      "observation_count": 3505,
       "quality_p50": 1.0,
       "quality_p90": 1.0,
       "single_blob_ratio": 1.0
     },
+    "max_wand_metric_samples": 16,
+    "expected_baseline_m": 2.5,
+    "shape_rms_error_mm": 10.890054916160064,
     "floor_normal_similarity": [
-      0.21277012592576597,
-      0.9423125010319093,
-      0.2584105723698653
+      0.6338099893588286,
+      0.4721026955457611,
+      0.612702164389345
     ],
     "origin_world": [
-      1.2131699789706425,
-      -5.865608248621071,
-      1.6168323875033654
+      0.8143696369000792,
+      6.207970862985813,
+      4.743557070486128
     ],
     "origin_marker": "elbow",
     "aligned_axis_world": [
@@ -103,31 +107,31 @@
       "camera_id": "pi-cam-01",
       "rotation_matrix": [
         [
-          0.8972698686173409,
-          0.38682768306437615,
-          0.212770125925766
+          -0.6123596183219193,
+          -0.47254692384735175,
+          0.6338099893588286
         ],
         [
-          -0.2931296465674026,
-          0.16162351531338914,
-          0.9423125010319094
+          0.7901968691103168,
+          -0.3907786495020923,
+          0.4721026955457611
         ],
         [
-          0.33012390579097634,
-          -0.9078778458101008,
-          0.25841057236986525
+          0.024588735162386282,
+          0.7899312956553411,
+          0.612702164389345
         ]
       ],
       "translation_m": [
-        -0.8364251502459437,
-        0.2199250590624926,
-        6.143558775651082
+        -0.4257307582952192,
+        0.4570159468426689,
+        7.830282470506245
       ],
       "quality": {
         "pair_count": 0,
         "point_count": 0,
         "inlier_ratio": 1.0,
-        "median_reproj_error_px": 217.30809495640898,
+        "median_reproj_error_px": 31.001645782899654,
         "baseline_m": 0.0,
         "scale_m_per_unit": 1.0
       }
@@ -136,32 +140,32 @@
       "camera_id": "pi-cam-02",
       "rotation_matrix": [
         [
-          0.36021018714887365,
-          0.6777441620774993,
-          -0.6410237685484378
+          0.08473764332091129,
+          -0.8768060722089455,
+          -0.47331875469068385
         ],
         [
-          -0.8486433348891179,
-          -0.047264414027635676,
-          -0.5268496610181129
+          0.9369380562823318,
+          -0.09153105805541276,
+          0.337296818990549
         ],
         [
-          -0.3873668948457642,
-          0.7337771636787918,
-          0.5581379424847035
+          -0.3390672654419834,
+          -0.4720520915627623,
+          0.81375685088171
         ]
       ],
       "translation_m": [
-        -0.023039936148669782,
-        0.2610731833809834,
-        1.5385377808710077
+        0.331621695201614,
+        0.44147653172826784,
+        2.5494909640829375
       ],
       "quality": {
-        "pair_count": 80,
-        "point_count": 80,
+        "pair_count": 20,
+        "point_count": 20,
         "inlier_ratio": 1.0,
-        "median_reproj_error_px": 162.31431186782862,
-        "baseline_m": 7.31211311122215,
+        "median_reproj_error_px": 21.96719348519936,
+        "baseline_m": 8.285220824011663,
         "scale_m_per_unit": 1.0
       }
     }
