@@ -29,7 +29,7 @@ from extrinsics_samples import build_pose_multiview_samples
 from extrinsics_scale import apply_wand_metric_alignment
 from extrinsics_validate import validate_extrinsics
 from host.geo import CalibrationLoader
-from wand_bundle_adjustment import run_joint_bundle_adjustment
+from wand_bundle_adjustment import run_joint_bundle_adjustment, run_scale_bundle_adjustment
 from wand_model import WAND_POINTS_MM, wand_payload
 from wand_samples import MultiViewSample
 
@@ -178,6 +178,9 @@ def _build_wand_metric_samples(
     cursors = {camera_id: 0 for camera_id in camera_ids}
     samples: List[MultiViewSample] = []
     for ref in refs:
+        ref_confidence = float(getattr(ref, "confidence", 0.0))
+        if ref_confidence <= 0.0:
+            continue
         timestamps = {reference_camera_id: int(ref.timestamp)}
         points_by_camera = {reference_camera_id: ref.image_points.astype(np.float64)}
         raw_points_by_camera = {
@@ -186,6 +189,7 @@ def _build_wand_metric_samples(
                 dtype=np.float64,
             )
         }
+        confidence_by_camera = {reference_camera_id: ref_confidence}
         for camera_id in camera_ids:
             rows = wand_observations_by_camera.get(camera_id, [])
             idx = cursors[camera_id]
@@ -208,12 +212,16 @@ def _build_wand_metric_samples(
                 continue
             cursors[camera_id] = best_idx + 1
             row = rows[best_idx]
+            row_confidence = float(getattr(row, "confidence", 0.0))
+            if row_confidence <= 0.0:
+                continue
             timestamps[camera_id] = int(row.timestamp)
             points_by_camera[camera_id] = row.image_points.astype(np.float64)
             raw_points_by_camera[camera_id] = np.asarray(
                 getattr(row, "raw_points", row.image_points),
                 dtype=np.float64,
             )
+            confidence_by_camera[camera_id] = row_confidence
         if len(points_by_camera) < 2:
             continue
         if max(timestamps.values()) - min(timestamps.values()) > pair_window_us:
@@ -224,72 +232,280 @@ def _build_wand_metric_samples(
                 timestamps=timestamps,
                 image_points_by_camera=points_by_camera,
                 raw_points_by_camera=raw_points_by_camera,
+                confidence_by_camera=confidence_by_camera,
             )
         )
     return samples
 
 
-def _relabel_points_by_pnp(
-    camera: Any,
-    raw_points: np.ndarray,
-    object_points_m: np.ndarray,
-) -> tuple[np.ndarray, float] | None:
-    if raw_points.shape != (4, 2):
+def _estimate_similarity_transform_local(
+    reconstructed: np.ndarray,
+    model: np.ndarray,
+) -> tuple[float, np.ndarray, np.ndarray, float] | None:
+    if reconstructed.shape != model.shape or reconstructed.shape[0] < 2:
         return None
-    best_points: np.ndarray | None = None
-    best_error = float("inf")
-    solvepnp_flag = getattr(cv2, "SOLVEPNP_IPPE", cv2.SOLVEPNP_ITERATIVE)
-    for perm in itertools.permutations(range(4)):
-        image_points = raw_points[list(perm)].astype(np.float64)
-        ok, rvec, tvec = cv2.solvePnP(
-            object_points_m.astype(np.float64),
-            image_points,
+    rec_center = np.mean(reconstructed, axis=0, keepdims=True)
+    model_center = np.mean(model, axis=0, keepdims=True)
+    rec_zero = reconstructed - rec_center
+    model_zero = model - model_center
+    rec_var = float(np.mean(np.sum(rec_zero * rec_zero, axis=1)))
+    if rec_var <= 1e-12:
+        return None
+    covariance = (model_zero.T @ rec_zero) / float(reconstructed.shape[0])
+    u, singular_values, vt = np.linalg.svd(covariance)
+    sign = np.eye(3, dtype=np.float64)
+    if np.linalg.det(u @ vt) < 0.0:
+        sign[-1, -1] = -1.0
+    rotation = u @ sign @ vt
+    scale = float(np.sum(np.diag(sign) * singular_values) / rec_var)
+    if not np.isfinite(scale) or scale <= 0.0:
+        return None
+    translation = (model_center.reshape(3) - scale * (rotation @ rec_center.reshape(3, 1)).reshape(3)).astype(np.float64)
+    aligned = (scale * (rotation @ reconstructed.T)).T + translation.reshape(1, 3)
+    rms_error_m = float(np.sqrt(np.mean(np.sum((aligned - model) ** 2, axis=1))))
+    return scale, rotation, translation, rms_error_m
+
+
+def _triangulate_point_from_pose_seed(
+    observations: Sequence[tuple[str, np.ndarray]],
+    camera_params: Dict[str, Any],
+    camera_poses_seed: Dict[str, Tuple[np.ndarray, np.ndarray]],
+) -> np.ndarray | None:
+    if len(observations) < 2:
+        return None
+    rows: List[np.ndarray] = []
+    for camera_id, uv in observations:
+        camera = camera_params[camera_id]
+        rotation, translation = camera_poses_seed[camera_id]
+        pmat = np.hstack([rotation, translation.reshape(3, 1)])
+        norm = cv2.undistortPoints(
+            np.asarray(uv, dtype=np.float64).reshape(1, 1, 2),
             camera.intrinsic_matrix.astype(np.float64),
             camera.distortion_coeffs.astype(np.float64),
-            flags=solvepnp_flag,
+        ).reshape(2)
+        rows.append(norm[0] * pmat[2] - pmat[0])
+        rows.append(norm[1] * pmat[2] - pmat[1])
+    a = np.stack(rows, axis=0)
+    _, _, vt = np.linalg.svd(a, full_matrices=False)
+    xh = vt[-1]
+    if abs(float(xh[3])) < 1e-12:
+        return None
+    return (xh[:3] / xh[3]).astype(np.float64)
+
+
+def _joint_wand_shape_score(
+    points_by_camera: Dict[str, np.ndarray],
+    camera_params: Dict[str, Any],
+    camera_poses_seed: Dict[str, Tuple[np.ndarray, np.ndarray]],
+    object_points_m: np.ndarray,
+) -> float:
+    tri_points: List[np.ndarray] = []
+    per_camera_reproj: List[float] = []
+    positive_depth = 0
+    depth_total = 0
+    for point_idx in range(object_points_m.shape[0]):
+        tri = _triangulate_point_from_pose_seed(
+            [(camera_id, points[point_idx]) for camera_id, points in points_by_camera.items()],
+            camera_params=camera_params,
+            camera_poses_seed=camera_poses_seed,
         )
-        if not ok:
-            continue
+        if tri is None:
+            return float("inf")
+        tri_points.append(tri)
+    tri = np.asarray(tri_points, dtype=np.float64)
+    fit = _estimate_similarity_transform_local(tri, object_points_m)
+    if fit is None:
+        return float("inf")
+    scale_fit, _rotation_fit, _translation_fit, shape_error_m = fit
+    rec_edges = np.array(
+        [np.linalg.norm(tri[a] - tri[b]) for a, b in ((0, 1), (0, 2), (0, 3), (2, 3))],
+        dtype=np.float64,
+    )
+    known_edges = np.array(
+        [np.linalg.norm(object_points_m[a] - object_points_m[b]) for a, b in ((0, 1), (0, 2), (0, 3), (2, 3))],
+        dtype=np.float64,
+    )
+    valid = rec_edges > 1e-9
+    if np.count_nonzero(valid) < 3:
+        return float("inf")
+    edge_rel_err = np.abs((scale_fit * rec_edges[valid]) - known_edges[valid]) / np.maximum(known_edges[valid], 1e-9)
+    for camera_id, image_points in points_by_camera.items():
+        rotation, translation = camera_poses_seed[camera_id]
+        camera = camera_params[camera_id]
+        rvec, _ = cv2.Rodrigues(rotation.astype(np.float64))
         proj, _ = cv2.projectPoints(
-            object_points_m.astype(np.float64),
+            tri.astype(np.float64),
             rvec.reshape(3, 1),
-            tvec.reshape(3, 1),
+            translation.reshape(3, 1).astype(np.float64),
             camera.intrinsic_matrix.astype(np.float64),
             camera.distortion_coeffs.astype(np.float64),
         )
         pred = proj.reshape(-1, 2)
-        error = float(np.median(np.linalg.norm(pred - image_points, axis=1)))
-        if error < best_error:
-            best_error = error
-            best_points = image_points
-    if best_points is None:
-        return None
-    return best_points, best_error
+        per_camera_reproj.append(float(np.median(np.linalg.norm(pred - image_points.astype(np.float64), axis=1))))
+        depth = (rotation @ tri.T + translation.reshape(3, 1))[2]
+        positive_depth += int(np.count_nonzero(depth > 0.0))
+        depth_total += int(depth.shape[0])
+    depth_ratio = float(positive_depth / depth_total) if depth_total else 0.0
+    depth_penalty = max(0.0, 0.95 - depth_ratio) * 2000.0
+    return (shape_error_m * 1000.0) + (150.0 * float(np.median(edge_rel_err))) + (2.0 * float(np.median(np.asarray(per_camera_reproj, dtype=np.float64)))) + depth_penalty
+
+
+def _build_camera_point_candidates(
+    sample: MultiViewSample,
+    camera_id: str,
+) -> List[np.ndarray]:
+    candidates: List[np.ndarray] = []
+    seen: set[tuple[float, ...]] = set()
+
+    def _append(points: np.ndarray) -> None:
+        arr = np.asarray(points, dtype=np.float64)
+        if arr.shape != (4, 2):
+            return
+        key = tuple(np.round(arr.reshape(-1), 6).tolist())
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(arr)
+
+    current = sample.image_points_by_camera.get(camera_id)
+    if current is not None:
+        _append(current)
+    raw_points = None if sample.raw_points_by_camera is None else sample.raw_points_by_camera.get(camera_id)
+    if raw_points is not None and np.asarray(raw_points).shape == (4, 2):
+        raw_points = np.asarray(raw_points, dtype=np.float64)
+        for perm in itertools.permutations(range(4)):
+            _append(raw_points[list(perm)])
+    return candidates
+
+
+def _solve_pnp_candidates(
+    camera: Any,
+    image_points: np.ndarray,
+    object_points_m: np.ndarray,
+) -> List[tuple[np.ndarray, np.ndarray, np.ndarray, float]]:
+    out: List[tuple[np.ndarray, np.ndarray, np.ndarray, float]] = []
+    generic = getattr(cv2, "solvePnPGeneric", None)
+    if callable(generic):
+        try:
+            result = generic(
+                object_points_m.astype(np.float64),
+                image_points.astype(np.float64),
+                camera.intrinsic_matrix.astype(np.float64),
+                camera.distortion_coeffs.astype(np.float64),
+                flags=getattr(cv2, "SOLVEPNP_IPPE", cv2.SOLVEPNP_ITERATIVE),
+            )
+            if isinstance(result, tuple) and len(result) >= 3:
+                ok = bool(result[0])
+                rvecs = result[1] if len(result) > 1 else []
+                tvecs = result[2] if len(result) > 2 else []
+                if ok:
+                    for rvec, tvec in zip(rvecs, tvecs):
+                        rotation, _ = cv2.Rodrigues(np.asarray(rvec, dtype=np.float64).reshape(3, 1))
+                        translation = np.asarray(tvec, dtype=np.float64).reshape(3)
+                        center = (-(rotation.T @ translation.reshape(3, 1))).reshape(3)
+                        proj, _ = cv2.projectPoints(
+                            object_points_m.astype(np.float64),
+                            np.asarray(rvec, dtype=np.float64).reshape(3, 1),
+                            translation.reshape(3, 1),
+                            camera.intrinsic_matrix.astype(np.float64),
+                            camera.distortion_coeffs.astype(np.float64),
+                        )
+                        pred = proj.reshape(-1, 2)
+                        reproj = float(np.median(np.linalg.norm(pred - image_points, axis=1)))
+                        out.append((rotation, translation, center.astype(np.float64), reproj))
+        except Exception:
+            pass
+    if not out:
+        ok, rvec, tvec = cv2.solvePnP(
+            object_points_m.astype(np.float64),
+            image_points.astype(np.float64),
+            camera.intrinsic_matrix.astype(np.float64),
+            camera.distortion_coeffs.astype(np.float64),
+            flags=cv2.SOLVEPNP_ITERATIVE,
+        )
+        if ok:
+            rotation, _ = cv2.Rodrigues(rvec)
+            translation = np.asarray(tvec, dtype=np.float64).reshape(3)
+            center = (-(rotation.T @ translation.reshape(3, 1))).reshape(3)
+            proj, _ = cv2.projectPoints(
+                object_points_m.astype(np.float64),
+                np.asarray(rvec, dtype=np.float64).reshape(3, 1),
+                translation.reshape(3, 1),
+                camera.intrinsic_matrix.astype(np.float64),
+                camera.distortion_coeffs.astype(np.float64),
+            )
+            pred = proj.reshape(-1, 2)
+            reproj = float(np.median(np.linalg.norm(pred - image_points, axis=1)))
+            out.append((rotation, translation, center.astype(np.float64), reproj))
+    out.sort(key=lambda item: item[3])
+    return out
+
+
+def _best_joint_permutation_for_sample(
+    sample: MultiViewSample,
+    camera_params: Dict[str, Any],
+    camera_poses_seed: Dict[str, Tuple[np.ndarray, np.ndarray]],
+    object_points_m: np.ndarray,
+) -> Dict[str, np.ndarray]:
+    camera_ids = [camera_id for camera_id in sorted(sample.image_points_by_camera.keys()) if camera_id in camera_params]
+    if len(camera_ids) < 2:
+        return dict(sample.image_points_by_camera)
+    candidate_maps: Dict[str, List[np.ndarray]] = {}
+    for camera_id in camera_ids:
+        candidates = _build_camera_point_candidates(sample, camera_id)
+        if not candidates:
+            return dict(sample.image_points_by_camera)
+        candidate_maps[camera_id] = candidates[:12]
+
+    best_score = float("inf")
+    best_points = dict(sample.image_points_by_camera)
+    candidate_lists = [candidate_maps[camera_id] for camera_id in camera_ids]
+    max_combinations = 4096
+    total_combinations = 1
+    for candidates in candidate_lists:
+        total_combinations *= max(1, len(candidates))
+    if total_combinations > max_combinations:
+        candidate_lists = [candidates[:6] for candidates in candidate_lists]
+
+    for combo in itertools.product(*candidate_lists):
+        trial = {camera_id: points for camera_id, points in zip(camera_ids, combo)}
+        score = _joint_wand_shape_score(
+            trial,
+            camera_params=camera_params,
+            camera_poses_seed=camera_poses_seed,
+            object_points_m=object_points_m,
+        )
+        if score < best_score:
+            best_score = score
+            best_points = trial
+    out = dict(sample.image_points_by_camera)
+    out.update(best_points)
+    return out
 
 
 def _relabel_wand_samples_with_pnp(
     samples: List[MultiViewSample],
     camera_params: Dict[str, Any],
+    camera_poses_seed: Dict[str, Tuple[np.ndarray, np.ndarray]],
     object_points_m: np.ndarray,
 ) -> List[MultiViewSample]:
     relabeled: List[MultiViewSample] = []
     for sample in samples:
-        image_points_by_camera: Dict[str, np.ndarray] = {}
-        raw_points_by_camera = sample.raw_points_by_camera or {}
-        for camera_id, image_points in sample.image_points_by_camera.items():
-            camera = camera_params.get(camera_id)
-            raw_points = raw_points_by_camera.get(camera_id)
-            if camera is None or raw_points is None:
-                image_points_by_camera[camera_id] = image_points
-                continue
-            refined = _relabel_points_by_pnp(camera, raw_points.astype(np.float64), object_points_m)
-            image_points_by_camera[camera_id] = refined[0] if refined is not None else image_points
+        raw_points_by_camera = dict(sample.raw_points_by_camera) if sample.raw_points_by_camera else None
+        confidence_by_camera = dict(sample.confidence_by_camera) if sample.confidence_by_camera else None
+        image_points_by_camera = _best_joint_permutation_for_sample(
+            sample,
+            camera_params=camera_params,
+            camera_poses_seed=camera_poses_seed,
+            object_points_m=object_points_m,
+        )
         relabeled.append(
             MultiViewSample(
                 sample_id=sample.sample_id,
                 timestamps=dict(sample.timestamps),
                 image_points_by_camera=image_points_by_camera,
                 raw_points_by_camera=dict(raw_points_by_camera) if raw_points_by_camera else None,
+                confidence_by_camera=confidence_by_camera,
             )
         )
     return relabeled
@@ -333,11 +549,24 @@ def _project_rotation_to_so3(rotation: np.ndarray) -> np.ndarray:
     return proj
 
 
+def _scale_similarity_camera_poses(
+    camera_poses_similarity: Dict[str, Tuple[np.ndarray, np.ndarray]],
+    scale: float,
+) -> Dict[str, Tuple[np.ndarray, np.ndarray]]:
+    out: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
+    for camera_id, (rotation, translation) in camera_poses_similarity.items():
+        center = (-(rotation.T @ translation.reshape(3, 1))).reshape(3)
+        center_scaled = center * float(scale)
+        out[camera_id] = (rotation.astype(np.float64), (-(rotation @ center_scaled.reshape(3, 1))).reshape(3))
+    return out
+
+
 def _estimate_metric_camera_poses_from_wand(
     camera_params: Dict[str, Any],
     reference_camera_id: str,
     wand_observations_by_camera: Dict[str, List[Any]],
     pair_window_us: int,
+    camera_pose_hint: Dict[str, Tuple[np.ndarray, np.ndarray]] | None = None,
 ) -> Dict[str, Tuple[np.ndarray, np.ndarray]] | None:
     samples = _build_wand_metric_samples(wand_observations_by_camera, reference_camera_id, pair_window_us)
     if len(samples) < 4:
@@ -356,26 +585,43 @@ def _estimate_metric_camera_poses_from_wand(
                 continue
             ref_camera = camera_params[reference_camera_id]
             other_camera = camera_params[camera_id]
-            ok_ref, rvec_ref, tvec_ref = cv2.solvePnP(
-                object_points_m.astype(np.float64),
+            ref_solutions = _solve_pnp_candidates(
+                ref_camera,
                 sample.image_points_by_camera[reference_camera_id].astype(np.float64),
-                ref_camera.intrinsic_matrix.astype(np.float64),
-                ref_camera.distortion_coeffs.astype(np.float64),
-                flags=cv2.SOLVEPNP_ITERATIVE,
+                object_points_m,
             )
-            ok_other, rvec_other, tvec_other = cv2.solvePnP(
-                object_points_m.astype(np.float64),
+            other_solutions = _solve_pnp_candidates(
+                other_camera,
                 sample.image_points_by_camera[camera_id].astype(np.float64),
-                other_camera.intrinsic_matrix.astype(np.float64),
-                other_camera.distortion_coeffs.astype(np.float64),
-                flags=cv2.SOLVEPNP_ITERATIVE,
+                object_points_m,
             )
-            if not ok_ref or not ok_other:
+            if not ref_solutions or not other_solutions:
                 continue
-            r_ref, _ = cv2.Rodrigues(rvec_ref)
-            r_other, _ = cv2.Rodrigues(rvec_other)
-            r_other_ref = r_other @ r_ref.T
-            t_other_ref = tvec_other.reshape(3) - (r_other_ref @ tvec_ref.reshape(3, 1)).reshape(3)
+            best_pair: tuple[np.ndarray, np.ndarray] | None = None
+            best_pair_score = float("inf")
+            for r_ref, t_ref, _center_ref, reproj_ref in ref_solutions[:4]:
+                for r_other, t_other, _center_other, reproj_other in other_solutions[:4]:
+                    r_other_ref = r_other @ r_ref.T
+                    t_other_ref = t_other.reshape(3) - (r_other_ref @ t_ref.reshape(3, 1)).reshape(3)
+                    score = reproj_ref + reproj_other
+                    if camera_pose_hint is not None and camera_id in camera_pose_hint:
+                        r_hint, t_hint = camera_pose_hint[camera_id]
+                        rot_delta = r_other_ref @ r_hint.T
+                        trace = float(np.clip((np.trace(rot_delta) - 1.0) * 0.5, -1.0, 1.0))
+                        rot_err = float(np.arccos(trace))
+                        t_other_norm = float(np.linalg.norm(t_other_ref))
+                        t_hint_norm = float(np.linalg.norm(t_hint))
+                        dir_err = 0.0
+                        if t_other_norm > 1e-9 and t_hint_norm > 1e-9:
+                            cos_dir = float(np.clip(np.dot(t_other_ref, t_hint.reshape(3)) / (t_other_norm * t_hint_norm), -1.0, 1.0))
+                            dir_err = float(np.arccos(cos_dir))
+                        score += (50.0 * rot_err) + (25.0 * dir_err)
+                    if score < best_pair_score:
+                        best_pair_score = score
+                        best_pair = (r_other_ref, t_other_ref)
+            if best_pair is None:
+                continue
+            r_other_ref, t_other_ref = best_pair
             rot_rows.append(r_other_ref)
             trans_rows.append(t_other_ref)
         if len(rot_rows) < 4:
@@ -390,14 +636,9 @@ def _validation_score(validation: Dict[str, Any]) -> float:
     median_reproj = float(validation.get("median_reproj_error_px", 1e9) or 1e9)
     floor_residual_mm = float(validation.get("floor_residual_mm", 500.0) or 500.0)
     positive_depth_ratio = float(validation.get("positive_depth_ratio", 0.0) or 0.0)
-    baseline_target_m = validation.get("baseline_target_m")
-    baseline_range = validation.get("baseline_range_m") or [0.0, 0.0]
     depth_penalty = max(0.0, 0.98 - positive_depth_ratio) * 1000.0
-    baseline_penalty = 0.0
-    if baseline_target_m is not None and isinstance(baseline_range, list) and len(baseline_range) == 2:
-        baseline_mid = 0.5 * (float(baseline_range[0]) + float(baseline_range[1]))
-        baseline_penalty = 40.0 * abs(baseline_mid - float(baseline_target_m))
-    return median_reproj + (0.05 * min(floor_residual_mm, 500.0)) + depth_penalty + baseline_penalty
+    floor_penalty = min(floor_residual_mm, 3000.0) * 0.2
+    return median_reproj + floor_penalty + depth_penalty
 
 
 def solve_pose_capture_extrinsics(
@@ -577,6 +818,7 @@ def apply_wand_scale_floor(
     wand_metric_samples = _relabel_wand_samples_with_pnp(
         wand_metric_samples,
         camera_params=camera_params,
+        camera_poses_seed=camera_poses_similarity,
         object_points_m=object_points_m,
     )
     wand_obs_trimmed: Dict[str, List[Any]] = {}
@@ -588,7 +830,7 @@ def apply_wand_scale_floor(
                     "timestamp": sample.timestamps[camera_id],
                     "frame_index": 0,
                     "image_points": points,
-                    "confidence": 1.0,
+                    "confidence": float((sample.confidence_by_camera or {}).get(camera_id, 0.0)),
                 })()
             )
     metric_camera_poses_from_wand = _estimate_metric_camera_poses_from_wand(
@@ -596,15 +838,19 @@ def apply_wand_scale_floor(
         reference_camera_id=reference_camera_id,
         wand_observations_by_camera=wand_obs_trimmed,
         pair_window_us=pair_window_us,
+        camera_pose_hint=camera_poses_similarity,
     )
-    candidate_seeds: List[Tuple[str, Dict[str, Tuple[np.ndarray, np.ndarray]]]] = [
-        ("pose_capture_similarity", camera_poses_similarity),
-    ]
+    candidate_seeds: List[Tuple[str, Dict[str, Tuple[np.ndarray, np.ndarray]], Dict[str, Any]]] = []
     if metric_camera_poses_from_wand is not None:
-        candidate_seeds.append(("wand_pnp", metric_camera_poses_from_wand))
+        candidate_seeds.append((
+            "wand_pnp",
+            metric_camera_poses_from_wand,
+            {},
+        ))
+    candidate_seeds.append(("pose_capture_similarity", camera_poses_similarity, {}))
 
     best_candidate: Tuple[Dict[str, Tuple[np.ndarray, np.ndarray]], Dict[str, Any], Dict[str, Any], float] | None = None
-    for metric_pose_source, pose_seed in candidate_seeds:
+    for metric_pose_source, pose_seed, summary_override in candidate_seeds:
         aligned_poses, aligned_summary = apply_wand_metric_alignment(
             camera_params=camera_params,
             camera_poses_similarity=pose_seed,
@@ -612,7 +858,10 @@ def apply_wand_scale_floor(
             wand_points_mm=WAND_POINTS_MM,
             up_axis="Z",
             pair_window_us=pair_window_us,
+            assume_metric_scale=(metric_pose_source == "wand_pnp"),
         )
+        if aligned_summary.get("scale_source") == "none":
+            aligned_summary.update({key: value for key, value in summary_override.items() if value is not None})
         aligned_summary["metric_pose_source"] = metric_pose_source
         aligned_validation = validate_extrinsics(
             camera_params=camera_params,
@@ -625,9 +874,64 @@ def apply_wand_scale_floor(
         if expected_baseline_m is not None:
             aligned_validation["baseline_target_m"] = float(expected_baseline_m)
         aligned_score = _validation_score(aligned_validation)
-        if best_candidate is None or aligned_score < best_candidate[3]:
+        aligned_shape_mm = float(aligned_summary.get("shape_rms_error_mm", 0.0) or 0.0)
+        if (
+            int(aligned_summary.get("wand_metric_frames", 0) or 0) > 0
+            and aligned_shape_mm <= 100.0
+            and (best_candidate is None or aligned_score < best_candidate[3])
+        ):
             best_candidate = (aligned_poses, dict(aligned_summary), aligned_validation, aligned_score)
 
+        if int(aligned_summary.get("wand_metric_frames", 0) or 0) <= 0:
+            continue
+        if metric_pose_source == "pose_capture_similarity":
+            scale_seed = float(aligned_summary.get("scale_m_per_unit", 1.0) or 1.0)
+            if scale_seed > 0.0:
+                scaled_seed_poses = _scale_similarity_camera_poses(pose_seed, scale_seed)
+                wand_poses_scale_init = {
+                    sample.sample_id: _init_wand_pose_for_sample(sample, camera_params, scaled_seed_poses, object_points_m)
+                    for sample in wand_metric_samples
+                }
+                scale_ba = run_scale_bundle_adjustment(
+                    camera_params=camera_params,
+                    reference_camera_id=reference_camera_id,
+                    samples=wand_metric_samples,
+                    object_points_m=object_points_m,
+                    camera_poses_similarity=pose_seed,
+                    scale_init=scale_seed,
+                    wand_poses_init=wand_poses_scale_init,
+                )
+                scale_ba_poses, scale_ba_summary = apply_wand_metric_alignment(
+                    camera_params=camera_params,
+                    camera_poses_similarity=scale_ba.camera_poses,
+                    wand_observations_by_camera=wand_obs_trimmed,
+                    wand_points_mm=WAND_POINTS_MM,
+                    up_axis="Z",
+                    pair_window_us=pair_window_us,
+                    assume_metric_scale=True,
+                )
+                if int(scale_ba_summary.get("wand_metric_frames", 0) or 0) > 0:
+                    scale_ba_summary["metric_pose_source"] = "pose_capture_scale_ba"
+                    scale_ba_summary["scale_ba_iterations"] = int(scale_ba.optimizer_iterations)
+                    scale_ba_summary["scale_ba_cost"] = float(scale_ba.optimizer_cost)
+                    scale_ba_summary["scale_ba_median_reproj_error_px"] = float(scale_ba.final_median_reproj_error_px)
+                    scale_ba_validation = validate_extrinsics(
+                        camera_params=camera_params,
+                        camera_poses=scale_ba_poses,
+                        wand_observations_by_camera=wand_obs_trimmed,
+                        wand_points_mm=WAND_POINTS_MM,
+                        pair_window_us=pair_window_us,
+                        up_axis="Z",
+                    )
+                    if expected_baseline_m is not None:
+                        scale_ba_validation["baseline_target_m"] = float(expected_baseline_m)
+                    scale_ba_score = _validation_score(scale_ba_validation)
+                    if (
+                        float(scale_ba_summary.get("shape_rms_error_mm", 0.0) or 0.0) <= 100.0
+                        and float(scale_ba.final_median_reproj_error_px) <= 100.0
+                        and (best_candidate is None or scale_ba_score < best_candidate[3])
+                    ):
+                        best_candidate = (scale_ba_poses, scale_ba_summary, scale_ba_validation, scale_ba_score)
         if len(wand_metric_samples) < 4:
             continue
         wand_poses_init = {
@@ -670,7 +974,8 @@ def apply_wand_scale_floor(
         if expected_baseline_m is not None:
             refined_validation["baseline_target_m"] = float(expected_baseline_m)
         refined_score = _validation_score(refined_validation)
-        if best_candidate is None or refined_score < best_candidate[3]:
+        refined_shape_mm = float(refined_summary.get("shape_rms_error_mm", 0.0) or 0.0)
+        if refined_shape_mm <= 100.0 and (best_candidate is None or refined_score < best_candidate[3]):
             best_candidate = (wand_ba.camera_poses, refined_summary, refined_validation, refined_score)
 
     if best_candidate is None:

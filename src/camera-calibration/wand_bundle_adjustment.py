@@ -91,6 +91,48 @@ def _unflatten_pose_map(
     return out_camera_poses, out_wand_poses
 
 
+def _flatten_wand_pose_map(
+    sample_ids: Sequence[int],
+    wand_poses: Dict[int, Tuple[np.ndarray, np.ndarray]],
+    scale: float,
+) -> np.ndarray:
+    params: List[float] = [float(np.log(max(scale, 1e-9)))]
+    for sample_id in sample_ids:
+        R, t = wand_poses[sample_id]
+        rotvec, _ = cv2.Rodrigues(R)
+        params.extend(rotvec.reshape(3).tolist())
+        params.extend(t.reshape(3).tolist())
+    return np.array(params, dtype=np.float64)
+
+
+def _unflatten_wand_pose_map(
+    params: np.ndarray,
+    sample_ids: Sequence[int],
+) -> Tuple[float, Dict[int, Tuple[np.ndarray, np.ndarray]]]:
+    scale = float(np.exp(params[0]))
+    out_wand_poses: Dict[int, Tuple[np.ndarray, np.ndarray]] = {}
+    idx = 1
+    for sample_id in sample_ids:
+        rotvec = params[idx : idx + 3]
+        trans = params[idx + 3 : idx + 6]
+        idx += 6
+        R, _ = cv2.Rodrigues(rotvec.reshape(3, 1))
+        out_wand_poses[sample_id] = (R, trans.reshape(3))
+    return scale, out_wand_poses
+
+
+def _scale_camera_poses(
+    camera_poses_similarity: Dict[str, Tuple[np.ndarray, np.ndarray]],
+    scale: float,
+) -> Dict[str, Tuple[np.ndarray, np.ndarray]]:
+    out: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
+    for camera_id, (R, t) in camera_poses_similarity.items():
+        center = (-(R.T @ t.reshape(3, 1))).reshape(3)
+        center_scaled = center * float(scale)
+        out[camera_id] = (R.astype(np.float64), (-(R @ center_scaled.reshape(3, 1))).reshape(3))
+    return out
+
+
 def _compute_residuals(
     camera_params: Dict[str, Any],
     samples: Sequence[MultiViewSample],
@@ -174,6 +216,65 @@ def run_joint_bundle_adjustment(
     final_median = float(np.median(final_abs)) if final_abs.size else 0.0
     final_p90 = float(np.percentile(final_abs, 90)) if final_abs.size else 0.0
 
+    return BundleAdjustmentResult(
+        camera_poses=camera_poses,
+        wand_poses=wand_poses,
+        initial_median_reproj_error_px=initial_median,
+        final_median_reproj_error_px=final_median,
+        final_p90_reproj_error_px=final_p90,
+        optimizer_iterations=int(result.nfev),
+        optimizer_cost=float(result.cost),
+    )
+
+
+def run_scale_bundle_adjustment(
+    camera_params: Dict[str, Any],
+    reference_camera_id: str,
+    samples: Sequence[MultiViewSample],
+    object_points_m: np.ndarray,
+    camera_poses_similarity: Dict[str, Tuple[np.ndarray, np.ndarray]],
+    scale_init: float,
+    wand_poses_init: Dict[int, Tuple[np.ndarray, np.ndarray]],
+) -> BundleAdjustmentResult:
+    sample_ids = [sample.sample_id for sample in samples]
+    init_wand_poses = {sample_id: wand_poses_init[sample_id] for sample_id in sample_ids}
+    init_camera_poses = _scale_camera_poses(camera_poses_similarity, scale_init)
+    initial_residuals = _compute_residuals(
+        camera_params,
+        samples,
+        init_camera_poses,
+        init_wand_poses,
+        object_points_m,
+    )
+    initial_abs = np.abs(initial_residuals)
+    initial_median = float(np.median(initial_abs)) if initial_abs.size else 0.0
+
+    x0 = _flatten_wand_pose_map(sample_ids, init_wand_poses, scale_init)
+    lower = np.full_like(x0, -np.inf, dtype=np.float64)
+    upper = np.full_like(x0, np.inf, dtype=np.float64)
+    lower[0] = float(np.log(max(scale_init / 4.0, 1e-9)))
+    upper[0] = float(np.log(max(scale_init * 4.0, 1e-9)))
+
+    def residual_fn(x: np.ndarray) -> np.ndarray:
+        scale, wand_poses = _unflatten_wand_pose_map(x, sample_ids)
+        camera_poses = _scale_camera_poses(camera_poses_similarity, scale)
+        return _compute_residuals(camera_params, samples, camera_poses, wand_poses, object_points_m)
+
+    result = least_squares(
+        residual_fn,
+        x0,
+        bounds=(lower, upper),
+        method="trf",
+        loss="cauchy",
+        f_scale=2.0,
+        max_nfev=200,
+    )
+    scale_out, wand_poses = _unflatten_wand_pose_map(result.x, sample_ids)
+    camera_poses = _scale_camera_poses(camera_poses_similarity, scale_out)
+    final_residuals = _compute_residuals(camera_params, samples, camera_poses, wand_poses, object_points_m)
+    final_abs = np.abs(final_residuals)
+    final_median = float(np.median(final_abs)) if final_abs.size else 0.0
+    final_p90 = float(np.percentile(final_abs, 90)) if final_abs.size else 0.0
     return BundleAdjustmentResult(
         camera_poses=camera_poses,
         wand_poses=wand_poses,

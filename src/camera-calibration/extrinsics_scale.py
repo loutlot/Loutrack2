@@ -146,6 +146,7 @@ def apply_wand_metric_alignment(
     wand_points_mm: Sequence[Sequence[float]],
     up_axis: str = "Z",
     pair_window_us: int = 8000,
+    assume_metric_scale: bool = False,
 ) -> Tuple[Dict[str, Tuple[np.ndarray, np.ndarray]], Dict[str, Any]]:
     wand_points_m = np.asarray(wand_points_mm, dtype=np.float64) / 1000.0
     known_edges = np.array(
@@ -198,23 +199,31 @@ def apply_wand_metric_alignment(
         similarity_fit = _estimate_similarity_transform(tri, wand_points_m)
         if similarity_fit is None:
             continue
-        scale_fit, _rotation_fit, _translation_fit, shape_error_m = similarity_fit
-        edge_scale = float(np.median(known_edges[valid] / rec_edges[valid]))
-        rel_scale_delta = abs(scale_fit - edge_scale) / max(scale_fit, edge_scale, 1e-9)
-        if rel_scale_delta > 0.35:
-            continue
-        scale = float(np.median(np.array([scale_fit, edge_scale], dtype=np.float64)))
-        if not np.isfinite(scale) or scale <= 0.0:
-            continue
-        scale_candidates.append(scale)
-        shape_errors_mm.append(shape_error_m * 1000.0)
-
-        tri_metric = tri * scale
+        scale_fit, rotation_fit, translation_fit, shape_error_m = similarity_fit
+        if assume_metric_scale:
+            edge_rel_err = np.abs(rec_edges[valid] - known_edges[valid]) / np.maximum(known_edges[valid], 1e-9)
+            if np.median(edge_rel_err) > 0.35:
+                continue
+            scale = 1.0
+            tri_metric = tri
+            aligned = (rotation_fit @ tri_metric.T).T + translation_fit.reshape(1, 3)
+            shape_errors_mm.append(float(np.sqrt(np.mean(np.sum((aligned - wand_points_m) ** 2, axis=1)))) * 1000.0)
+        else:
+            edge_scale = float(np.median(known_edges[valid] / rec_edges[valid]))
+            rel_scale_delta = abs(scale_fit - edge_scale) / max(scale_fit, edge_scale, 1e-9)
+            if rel_scale_delta > 0.35:
+                continue
+            scale = float(np.median(np.array([scale_fit, edge_scale], dtype=np.float64)))
+            if not np.isfinite(scale) or scale <= 0.0:
+                continue
+            scale_candidates.append(scale)
+            shape_errors_mm.append(shape_error_m * 1000.0)
+            tri_metric = tri * scale
         floor_points.append(tri_metric)
         elbow_points.append(tri_metric[0])
         axis_vectors.append(tri_metric[3] - tri_metric[0])
 
-    if not scale_candidates or not floor_points:
+    if (not assume_metric_scale and not scale_candidates) or not floor_points:
         return camera_poses_similarity, {
             "scale_source": "none",
             "floor_source": "none",
@@ -222,15 +231,17 @@ def apply_wand_metric_alignment(
             "wand_metric_frames": 0,
         }
 
-    scale_array = np.asarray(scale_candidates, dtype=np.float64)
-    if scale_array.size >= 3:
-        scale_med = float(np.median(scale_array))
-        scale_mad = float(np.median(np.abs(scale_array - scale_med)))
-        if scale_mad > 1e-9:
-            keep = np.abs(scale_array - scale_med) <= (2.5 * scale_mad)
-            if np.count_nonzero(keep) >= 1:
-                scale_array = scale_array[keep]
-    scale = float(np.median(scale_array))
+    scale = 1.0
+    if not assume_metric_scale:
+        scale_array = np.asarray(scale_candidates, dtype=np.float64)
+        if scale_array.size >= 3:
+            scale_med = float(np.median(scale_array))
+            scale_mad = float(np.median(np.abs(scale_array - scale_med)))
+            if scale_mad > 1e-9:
+                keep = np.abs(scale_array - scale_med) <= (2.5 * scale_mad)
+                if np.count_nonzero(keep) >= 1:
+                    scale_array = scale_array[keep]
+        scale = float(np.median(scale_array))
     all_floor = np.concatenate(floor_points, axis=0)
     centroid = np.mean(all_floor, axis=0)
     centered = all_floor - centroid
