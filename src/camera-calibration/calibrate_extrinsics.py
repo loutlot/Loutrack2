@@ -27,7 +27,7 @@ from extrinsics_capture import (
 from extrinsics_initializer import build_initial_camera_poses, estimate_pairwise_initialization
 from extrinsics_samples import build_pose_multiview_samples
 from extrinsics_scale import apply_wand_metric_alignment
-from extrinsics_validate import validate_extrinsics
+from extrinsics_validate import validate_pose_capture_extrinsics, validate_wand_metric_extrinsics
 from host.geo import CalibrationLoader
 from wand_bundle_adjustment import run_joint_bundle_adjustment, run_scale_bundle_adjustment
 from wand_model import WAND_POINTS_MM, wand_payload
@@ -62,6 +62,7 @@ def _to_cameras_output(
         rotation, translation = camera_poses[camera_id]
         center = centers[camera_id]
         baseline = float(np.linalg.norm(center - ref_center)) if camera_id != reference_camera_id else 0.0
+        median_reproj = per_camera_median_reproj_px.get(camera_id)
         rows.append(
             {
                 "camera_id": camera_id,
@@ -71,9 +72,9 @@ def _to_cameras_output(
                     "pair_count": 0 if camera_id == reference_camera_id else int(sample_count),
                     "point_count": 0 if camera_id == reference_camera_id else int(sample_count),
                     "inlier_ratio": 1.0,
-                    "median_reproj_error_px": float(per_camera_median_reproj_px.get(camera_id, 0.0)),
+                    "median_reproj_error_px": None if median_reproj is None else float(median_reproj),
                     "baseline_m": baseline,
-                    "scale_m_per_unit": 1.0,
+                    "scale_m_per_unit": None,
                 },
             }
         )
@@ -132,22 +133,69 @@ def _camera_poses_from_payload(payload: Dict[str, Any]) -> Dict[str, Tuple[np.nd
     return poses
 
 
-def _downsample_samples_uniform(samples: List[Any], max_samples: int) -> List[Any]:
+def select_pose_ba_samples(samples: List[Any], max_samples: int, pair_window_us: int) -> tuple[List[Any], Dict[str, Any]]:
     if max_samples <= 0 or len(samples) <= max_samples:
-        return list(samples)
+        return list(samples), {
+            "strategy": "all",
+            "input_count": len(samples),
+            "selected_count": len(samples),
+        }
     if max_samples == 1:
-        return [samples[len(samples) // 2]]
-    indices = np.linspace(0, len(samples) - 1, num=max_samples)
-    picked = []
-    used: set[int] = set()
-    for idx_float in indices:
-        idx = int(round(float(idx_float)))
-        idx = max(0, min(len(samples) - 1, idx))
-        if idx in used:
+        mid = len(samples) // 2
+        return [samples[mid]], {
+            "strategy": "middle_single",
+            "input_count": len(samples),
+            "selected_count": 1,
+            "selected_sample_ids": [int(getattr(samples[mid], "sample_id", mid))],
+        }
+
+    ordered = list(samples)
+    ordered.sort(key=lambda sample: min(sample.timestamps.values()))
+    coverage_count = max(1, int(round(max_samples * 0.2)))
+    info_count = max(0, max_samples - coverage_count)
+    selected: List[Any] = []
+    selected_ids: set[int] = set()
+
+    coverage_indices = np.linspace(0, len(ordered) - 1, num=min(coverage_count, len(ordered)))
+    for idx_float in coverage_indices:
+        idx = max(0, min(len(ordered) - 1, int(round(float(idx_float)))))
+        sample = ordered[idx]
+        sample_id = int(getattr(sample, "sample_id", idx))
+        if sample_id in selected_ids:
             continue
-        used.add(idx)
-        picked.append(samples[idx])
-    return picked
+        selected.append(sample)
+        selected_ids.add(sample_id)
+
+    def info_score(sample: Any) -> float:
+        quality = getattr(sample, "quality", {})
+        parallax = float(quality.get("parallax_proxy", 0.0) or 0.0)
+        visible = float(quality.get("visible_camera_count", 0.0) or 0.0)
+        span = float(quality.get("span_us", 0.0) or 0.0)
+        return parallax * visible / (1.0 + (span / max(float(pair_window_us), 1.0)))
+
+    suppression_us = max(1, pair_window_us // 2)
+    selected_times = [min(sample.timestamps.values()) for sample in selected]
+    for sample in sorted(ordered, key=info_score, reverse=True):
+        if len(selected) >= max_samples or info_count <= 0:
+            break
+        sample_id = int(getattr(sample, "sample_id", 0))
+        if sample_id in selected_ids:
+            continue
+        sample_time = min(sample.timestamps.values())
+        if any(abs(int(sample_time) - int(existing)) < suppression_us for existing in selected_times):
+            continue
+        selected.append(sample)
+        selected_ids.add(sample_id)
+        selected_times.append(sample_time)
+        info_count -= 1
+
+    selected.sort(key=lambda sample: min(sample.timestamps.values()))
+    return selected[:max_samples], {
+        "strategy": "coverage_plus_information",
+        "input_count": len(samples),
+        "selected_count": len(selected[:max_samples]),
+        "selected_sample_ids": [int(getattr(sample, "sample_id", 0)) for sample in selected[:max_samples]],
+    }
 
 
 def _pick_middle_samples(samples: List[Any], max_samples: int) -> List[Any]:
@@ -670,6 +718,7 @@ def solve_pose_capture_extrinsics(
         observations_by_camera=observations,
         reference_camera_id=ref_camera_id,
         pair_window_us=pair_window_us,
+        camera_params=camera_params,
     )
     if len(samples) < min_pairs:
         raise ValueError(f"Not enough pose samples: {len(samples)}")
@@ -679,7 +728,7 @@ def solve_pose_capture_extrinsics(
         samples=samples,
         min_pairs=min_pairs,
     )
-    poses_init, graph_edges = build_initial_camera_poses(
+    poses_init, graph_edges, excluded_camera_reasons = build_initial_camera_poses(
         reference_camera_id=ref_camera_id,
         camera_ids=shared,
         pair_rows=pair_rows,
@@ -694,13 +743,15 @@ def solve_pose_capture_extrinsics(
         for sample in samples
         if len([camera_id for camera_id in sample.image_points_by_camera.keys() if camera_id in camera_params]) >= 2
     ]
-    accepted_sample_count = len(samples)
-    samples = _downsample_samples_uniform(samples, max_ba_samples)
+    accepted_samples = list(samples)
+    accepted_sample_count = len(accepted_samples)
+    ba_samples, sample_selection = select_pose_ba_samples(accepted_samples, max_ba_samples, pair_window_us)
     ba = run_pose_bundle_adjustment(
         camera_params=camera_params,
         reference_camera_id=ref_camera_id,
-        samples=samples,
+        samples=ba_samples,
         camera_poses_init=poses_init,
+        pair_window_us=pair_window_us,
         loss="huber",
     )
     pose_summary = summarize_pose_capture(observations)
@@ -709,14 +760,23 @@ def solve_pose_capture_extrinsics(
         "camera_ids": solved_camera_ids,
         "camera_poses": ba.camera_poses,
         "camera_graph_edges": graph_edges,
-        "sample_count": len(samples),
+        "sample_count": len(ba_samples),
         "accepted_sample_count": accepted_sample_count,
         "optimizer": {
             "iterations": ba.iterations,
             "cost": ba.cost,
             "initial_cost": ba.initial_cost,
+            "seed_sample_count": ba.seed_sample_count,
+            "weighted_sample_count": ba.weighted_sample_count,
+            "dropped_sample_count": ba.dropped_sample_count,
+            "median_seed_triangulation_angle_deg": ba.median_seed_triangulation_angle_deg,
         },
         "capture_summary": pose_summary,
+        "excluded_camera_ids": sorted(excluded_camera_reasons.keys()),
+        "excluded_camera_reasons": excluded_camera_reasons,
+        "sample_selection": sample_selection,
+        "samples": ba_samples,
+        "accepted_samples": accepted_samples,
     }
 
 
@@ -744,13 +804,10 @@ def solve_extrinsics(
         camera_id: CalibrationLoader.to_camera_params(calibrations[camera_id])
         for camera_id in pose_result["camera_ids"]
     }
-    validation = validate_extrinsics(
+    pose_validation = validate_pose_capture_extrinsics(
         camera_params=camera_params,
         camera_poses=pose_result["camera_poses"],
-        wand_observations_by_camera={},
-        wand_points_mm=WAND_POINTS_MM,
-        pair_window_us=pair_window_us,
-        up_axis="Z",
+        samples=pose_result["accepted_samples"],
     )
     session_meta = {
         "session_id": session_id,
@@ -763,12 +820,16 @@ def solve_extrinsics(
         "sample_count": int(pose_result["sample_count"]),
         "accepted_sample_count": int(pose_result["accepted_sample_count"]),
         "camera_graph_edges": pose_result["camera_graph_edges"],
+        "excluded_camera_ids": pose_result["excluded_camera_ids"],
+        "excluded_camera_reasons": pose_result["excluded_camera_reasons"],
         "optimizer": pose_result["optimizer"],
+        "sample_selection": pose_result["sample_selection"],
         "scale_source": "none",
-        "floor_source": "none",
-        "scale_m_per_unit": 1.0,
-        "wand_metric_frames": 0,
-        "validation": validation,
+        "floor_source": None,
+        "scale_m_per_unit": None,
+        "wand_metric_frames": None,
+        "pose_validation": pose_validation,
+        "wand_metric_validation": None,
         "capture_summary": pose_result["capture_summary"],
     }
     return _serialize_result(
@@ -777,7 +838,7 @@ def solve_extrinsics(
         camera_ids=pose_result["camera_ids"],
         camera_poses=pose_result["camera_poses"],
         sample_count=int(pose_result["sample_count"]),
-        per_camera_median_reproj_px=dict(validation.get("per_camera_median_reproj_px", {})),
+        per_camera_median_reproj_px=dict(pose_validation.get("per_camera_median_reproj_px", {})),
         session_meta=session_meta,
     )
 
@@ -863,7 +924,7 @@ def apply_wand_scale_floor(
         if aligned_summary.get("scale_source") == "none":
             aligned_summary.update({key: value for key, value in summary_override.items() if value is not None})
         aligned_summary["metric_pose_source"] = metric_pose_source
-        aligned_validation = validate_extrinsics(
+        aligned_validation = validate_wand_metric_extrinsics(
             camera_params=camera_params,
             camera_poses=aligned_poses,
             wand_observations_by_camera=wand_obs_trimmed,
@@ -915,7 +976,7 @@ def apply_wand_scale_floor(
                     scale_ba_summary["scale_ba_iterations"] = int(scale_ba.optimizer_iterations)
                     scale_ba_summary["scale_ba_cost"] = float(scale_ba.optimizer_cost)
                     scale_ba_summary["scale_ba_median_reproj_error_px"] = float(scale_ba.final_median_reproj_error_px)
-                    scale_ba_validation = validate_extrinsics(
+                    scale_ba_validation = validate_wand_metric_extrinsics(
                         camera_params=camera_params,
                         camera_poses=scale_ba_poses,
                         wand_observations_by_camera=wand_obs_trimmed,
@@ -963,7 +1024,7 @@ def apply_wand_scale_floor(
         refined_summary["wand_refine_cost"] = float(wand_ba.optimizer_cost)
         refined_summary["wand_refine_median_reproj_error_px"] = float(wand_ba.final_median_reproj_error_px)
         refined_summary["wand_refine_p90_reproj_error_px"] = float(wand_ba.final_p90_reproj_error_px)
-        refined_validation = validate_extrinsics(
+        refined_validation = validate_wand_metric_extrinsics(
             camera_params=camera_params,
             camera_poses=wand_ba.camera_poses,
             wand_observations_by_camera=wand_obs_trimmed,
@@ -980,14 +1041,19 @@ def apply_wand_scale_floor(
 
     if best_candidate is None:
         raise ValueError("Failed to produce a valid wand metric candidate")
-    camera_poses_metric, metric_summary, validation, _ = best_candidate
+    camera_poses_metric, metric_summary, wand_metric_validation, _ = best_candidate
     previous_meta = payload.get("session_meta", {})
     if not isinstance(previous_meta, dict):
         previous_meta = {}
+    cleaned_previous_meta = {
+        key: value
+        for key, value in previous_meta.items()
+        if key not in {"validation", "pose_validation", "wand_metric_validation"}
+    }
     output_target = Path(output_path) if output_path is not None else Path(extrinsics_path)
     session_meta = {
-        **previous_meta,
-        "session_id": session_id if session_id is not None else previous_meta.get("session_id"),
+        **cleaned_previous_meta,
+        "session_id": session_id if session_id is not None else cleaned_previous_meta.get("session_id"),
         "wand_metric_log_path": str(Path(wand_metric_log_path)),
         "pair_window_us": pair_window_us,
         "max_wand_metric_samples": max_wand_metric_samples,
@@ -995,15 +1061,16 @@ def apply_wand_scale_floor(
         **metric_summary,
         "scale_m_per_unit": float(metric_summary.get("scale_m_per_unit", 1.0)),
         "wand_metric_frames": int(metric_summary.get("wand_metric_frames", 0)),
-        "validation": validation,
+        "pose_validation": previous_meta.get("pose_validation"),
+        "wand_metric_validation": wand_metric_validation,
     }
     return _serialize_result(
         output_path=output_target,
         reference_camera_id=reference_camera_id,
         camera_ids=camera_ids,
         camera_poses=camera_poses_metric,
-        sample_count=int(previous_meta.get("sample_count", 0) or 0),
-        per_camera_median_reproj_px=dict(validation.get("per_camera_median_reproj_px", {})),
+        sample_count=int(cleaned_previous_meta.get("sample_count", 0) or 0),
+        per_camera_median_reproj_px=dict(wand_metric_validation.get("per_camera_median_reproj_px", {})),
         session_meta=session_meta,
         wand_payload=_current_wand_payload(),
     )

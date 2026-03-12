@@ -1974,6 +1974,26 @@ class WandGuiState:
             ),
         }
 
+    @staticmethod
+    def _summarize_validation(validation: Any) -> Dict[str, Any]:
+        if not isinstance(validation, dict):
+            return {}
+        summary: Dict[str, Any] = {}
+        for key in (
+            "median_reproj_error_px",
+            "p90_reproj_error_px",
+            "positive_depth_ratio",
+            "triangulation_angle_deg_p50",
+            "triangulation_angle_deg_p90",
+            "floor_residual_mm",
+            "world_up_consistency",
+            "baseline_range_units",
+            "baseline_range_m",
+        ):
+            if key in validation:
+                summary[key] = validation.get(key)
+        return summary
+
     def _restore_latest_extrinsics(self, path: Path) -> None:
         if not path.exists() or not path.is_file():
             return
@@ -1984,14 +2004,18 @@ class WandGuiState:
         if not isinstance(payload, dict):
             return
         self.latest_extrinsics_path = path
-        self.latest_extrinsics_quality = self._summarize_extrinsics_quality(payload.get("cameras"))
         session_meta = payload.get("session_meta", {})
         if isinstance(session_meta, dict):
             scale_source = str(session_meta.get("scale_source", "none") or "none")
             floor_source = str(session_meta.get("floor_source", "none") or "none")
             self.latest_extrinsics_metric_applied = scale_source != "none" and floor_source != "none"
+            if self.latest_extrinsics_metric_applied:
+                self.latest_extrinsics_quality = self._summarize_validation(session_meta.get("wand_metric_validation"))
+            else:
+                self.latest_extrinsics_quality = self._summarize_validation(session_meta.get("pose_validation"))
         else:
             self.latest_extrinsics_metric_applied = False
+            self.latest_extrinsics_quality = self._summarize_extrinsics_quality(payload.get("cameras"))
 
     @staticmethod
     def _resolve_project_path(raw_path: str, fallback: Path) -> Path:
@@ -2184,7 +2208,10 @@ class WandGuiState:
 
         camera_rows = raw_result.get("cameras")
         camera_count = len(camera_rows) if isinstance(camera_rows, list) else 0
-        quality_summary = self._summarize_extrinsics_quality(camera_rows)
+        session_meta = raw_result.get("session_meta", {})
+        if not isinstance(session_meta, dict):
+            session_meta = {}
+        quality_summary = self._summarize_validation(session_meta.get("pose_validation"))
 
         summary = {
             "ok": True,
@@ -2193,6 +2220,7 @@ class WandGuiState:
             "output_path": str(resolved_output),
             "quality": quality_summary,
             "metric_floor_applied": False,
+            "wand_validation_applied": False,
         }
         self.latest_extrinsics_path = resolved_output
         self.latest_extrinsics_quality = quality_summary
@@ -2240,16 +2268,17 @@ class WandGuiState:
 
         camera_rows = raw_result.get("cameras")
         camera_count = len(camera_rows) if isinstance(camera_rows, list) else 0
-        quality_summary = self._summarize_extrinsics_quality(camera_rows)
         session_meta = raw_result.get("session_meta", {})
         if not isinstance(session_meta, dict):
             session_meta = {}
+        quality_summary = self._summarize_validation(session_meta.get("wand_metric_validation"))
         summary = {
             "ok": True,
             "reference_camera_id": raw_result.get("reference_camera_id"),
             "camera_count": camera_count,
             "output_path": str(resolved_output),
             "quality": quality_summary,
+            "wand_metric_validation": self._summarize_validation(session_meta.get("wand_metric_validation")),
             "scale_source": session_meta.get("scale_source"),
             "floor_source": session_meta.get("floor_source"),
             "wand_metric_frames": int(session_meta.get("wand_metric_frames", 0) or 0),

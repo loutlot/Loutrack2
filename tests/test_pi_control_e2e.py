@@ -295,7 +295,7 @@ def test_pi_mask_and_wand_mode_flow(pi_capture_server: PiCaptureServerInfo) -> N
         assert float(mask_params["seconds"]) == 0.1
         assert int(mask_params["frames"]) >= 1
 
-        resp = control.start(ip, tcp_port, camera_id=camera_id, mode="wand_capture", timeout=1.0)
+        resp = control.start(ip, tcp_port, camera_id=camera_id, mode="wand_metric_capture", timeout=1.0)
         assert resp.get("ack") is True
 
         deadline = time.monotonic() + 1.0

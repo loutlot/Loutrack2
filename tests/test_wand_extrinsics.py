@@ -132,12 +132,56 @@ def test_pose_capture_solver_and_geo_loader(tmp_path: Path) -> None:
     assert output_path.exists()
     assert result["session_meta"]["method"] == "pose_capture"
     assert result["session_meta"]["sample_count"] >= 8
+    assert result["session_meta"]["pose_validation"]["median_reproj_error_px"] is not None
+    assert result["session_meta"]["wand_metric_validation"] is None
     assert len(result["cameras"]) >= 2
 
     geometry = GeometryPipeline()
     loaded_count = geometry.load_calibration(str(intrinsics_dir))
     assert loaded_count >= 2
     assert "pi-cam-02" in geometry.camera_params
+
+
+def test_pose_validation_uses_all_accepted_samples_not_only_ba_subset(tmp_path: Path, monkeypatch) -> None:
+    intrinsics_dir = tmp_path / "calibration"
+    intrinsics_dir.mkdir()
+    _write_intrinsics(intrinsics_dir / "calibration_intrinsics_v1_pi-cam-01.json", "pi-cam-01")
+    _write_intrinsics(intrinsics_dir / "calibration_intrinsics_v1_pi-cam-02.json", "pi-cam-02")
+
+    k = np.array([[900.0, 0.0, 640.0], [0.0, 900.0, 480.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+    rvec_cam2, _ = cv2.Rodrigues(np.array([0.0, np.deg2rad(12.0), 0.0], dtype=np.float64))
+    tvec_cam2 = np.array([0.32, 0.01, 0.03], dtype=np.float64)
+
+    pose_log = tmp_path / "extrinsics_pose_capture_many.jsonl"
+    with open(pose_log, "w", encoding="utf-8") as handle:
+        handle.write(json.dumps({"_type": "header", "schema_version": "1.0"}) + "\n")
+        for frame_index in range(30):
+            point_w = np.array(
+                [-0.24 + frame_index * 0.015, -0.06 + frame_index * 0.007, 1.5 + (frame_index % 4) * 0.09],
+                dtype=np.float64,
+            )
+            uv1 = _project_point(point_w, np.zeros((3, 1), dtype=np.float64), np.zeros(3, dtype=np.float64), k)
+            uv2 = _project_point(point_w, rvec_cam2, tvec_cam2, k)
+            _write_pose_frame(handle, "pi-cam-01", frame_index, 1_700_000_300_000_000 + frame_index * 16_000, uv1)
+            _write_pose_frame(handle, "pi-cam-02", frame_index, 1_700_000_300_000_000 + frame_index * 16_000 + 700, uv2)
+
+    original_validate = _mod.validate_pose_capture_extrinsics
+    seen_sample_counts: list[int] = []
+
+    def _recording_validate(*args, **kwargs):
+        seen_sample_counts.append(len(kwargs["samples"]))
+        return original_validate(*args, **kwargs)
+
+    monkeypatch.setattr(_mod, "validate_pose_capture_extrinsics", _recording_validate)
+    result = _mod.solve_extrinsics(
+        intrinsics_path=intrinsics_dir,
+        pose_log_path=pose_log,
+        output_path=intrinsics_dir / "calibration_extrinsics_v1.json",
+        min_pairs=8,
+        max_ba_samples=4,
+    )
+    assert result["session_meta"]["accepted_sample_count"] > result["session_meta"]["sample_count"]
+    assert seen_sample_counts == [result["session_meta"]["accepted_sample_count"]]
 
 
 def test_wand_metric_alignment_metadata(tmp_path: Path) -> None:
@@ -180,6 +224,9 @@ def test_wand_metric_alignment_metadata(tmp_path: Path) -> None:
         min_pairs=8,
     )
     assert result["session_meta"]["scale_source"] == "none"
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    payload["session_meta"]["validation"] = {"legacy": True}
+    output_path.write_text(json.dumps(payload), encoding="utf-8")
 
     metric_result = _mod.apply_wand_scale_floor(
         intrinsics_path=intrinsics_dir,
@@ -191,4 +238,6 @@ def test_wand_metric_alignment_metadata(tmp_path: Path) -> None:
     assert metric_result["session_meta"]["floor_source"] in ("wand_floor_metric", "none")
     if metric_result["session_meta"]["scale_source"] == "wand_floor_metric":
         assert metric_result["session_meta"].get("origin_marker") == "elbow"
-    assert "validation" in metric_result["session_meta"]
+    assert metric_result["session_meta"]["pose_validation"]["median_reproj_error_px"] is not None
+    assert "wand_metric_validation" in metric_result["session_meta"]
+    assert "validation" not in metric_result["session_meta"]

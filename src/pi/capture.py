@@ -310,34 +310,12 @@ class UDPFrameEmitter:
         if not blobs:
             self._last_pose_blob_xy = None
             return None, 0.0
-        height, width = frame.shape[:2]
-        center_xy = np.array([width * 0.5, height * 0.5], dtype=np.float64)
-        diag = max(float(np.hypot(width, height)), 1.0)
-        prev_xy = None if self._last_pose_blob_xy is None else np.array(self._last_pose_blob_xy, dtype=np.float64)
-        best_blob: dict[str, object] | None = None
-        best_score = float("-inf")
-        best_center_dist = 1.0
-        best_temporal_dist = 1.0
-        for blob in blobs:
-            xy = np.array([float(blob.get("x", 0.0)), float(blob.get("y", 0.0))], dtype=np.float64)
-            area = max(float(blob.get("area", 0.0)), 0.0)
-            center_dist = float(np.linalg.norm(xy - center_xy) / diag)
-            temporal_dist = center_dist
-            if prev_xy is not None:
-                temporal_dist = float(np.linalg.norm(xy - prev_xy) / diag)
-            score = area - (center_dist * 40.0) - (temporal_dist * 80.0)
-            if score > best_score:
-                best_score = score
-                best_blob = blob
-                best_center_dist = center_dist
-                best_temporal_dist = temporal_dist
+        best_blob = max(blobs, key=lambda blob: float(blob.get("area", 0.0)))
         if best_blob is None:
             self._last_pose_blob_xy = None
             return None, 0.0
         self._last_pose_blob_xy = (float(best_blob.get("x", 0.0)), float(best_blob.get("y", 0.0)))
         quality = 1.0 / float(max(1, len(blobs)))
-        quality *= max(0.0, 1.0 - min(best_center_dist, 1.0))
-        quality *= max(0.2, 1.0 - min(best_temporal_dist, 1.0))
         if float(best_blob.get("area", 0.0)) <= 0.0:
             quality *= 0.25
         return best_blob, float(max(0.0, min(1.0, quality)))
@@ -1767,8 +1745,6 @@ class ControlServer:
         mode: str,
         params: dict[str, object],
     ) -> dict[str, object]:
-        if mode == "wand_capture":
-            mode = "wand_metric_capture"
         if mode not in ("capture", "pose_capture", "wand_metric_capture"):
             return self._error_response(
                 request_id=request_id,

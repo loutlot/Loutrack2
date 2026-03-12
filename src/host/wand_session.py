@@ -183,8 +183,6 @@ class WandSession:
                 raise RuntimeError("mask_start failed on one or more cameras")
 
         start_mode = config.capture_kind if config.capture_kind else "pose_capture"
-        if start_mode == "wand_capture":
-            start_mode = "wand_metric_capture"
         start_resp = self._broadcast(targets, "start", mode=start_mode)
         record("start", start_resp)
         if not self._all_acked(start_resp):

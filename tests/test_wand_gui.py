@@ -137,6 +137,7 @@ def test_generate_extrinsics_and_apply_wand_scale_floor_use_split_paths(tmp_path
     pose_log.write_text("{}", encoding="utf-8")
     wand_metric_log = tmp_path / "extrinsics_wand_metric.jsonl"
     wand_metric_log.write_text("{}", encoding="utf-8")
+    output_path = tmp_path / "calibration_extrinsics_v1.json"
     generated_called: Dict[str, Any] = {}
     applied_called: Dict[str, Any] = {}
 
@@ -148,13 +149,27 @@ def test_generate_extrinsics_and_apply_wand_scale_floor_use_split_paths(tmp_path
             json.dumps(
                 {
                     "reference_camera_id": "pi-cam-01",
-                    "session_meta": {"scale_source": "none", "floor_source": "none"},
+                    "session_meta": {
+                        "scale_source": "none",
+                        "floor_source": None,
+                        "pose_validation": {"median_reproj_error_px": 1.2, "positive_depth_ratio": 0.99},
+                        "wand_metric_validation": None,
+                    },
                     "cameras": [],
                 }
             ),
             encoding="utf-8",
         )
-        return {"reference_camera_id": "pi-cam-01", "cameras": []}
+        return {
+            "reference_camera_id": "pi-cam-01",
+            "session_meta": {
+                "scale_source": "none",
+                "floor_source": None,
+                "pose_validation": {"median_reproj_error_px": 1.2, "positive_depth_ratio": 0.99},
+                "wand_metric_validation": None,
+            },
+            "cameras": [],
+        }
 
     def _apply_metric(**kwargs):
         applied_called.update(kwargs)
@@ -164,7 +179,11 @@ def test_generate_extrinsics_and_apply_wand_scale_floor_use_split_paths(tmp_path
             json.dumps(
                 {
                     "reference_camera_id": "pi-cam-01",
-                    "session_meta": {"scale_source": "wand_floor_metric", "floor_source": "wand_floor_metric"},
+                    "session_meta": {
+                        "scale_source": "wand_floor_metric",
+                        "floor_source": "wand_floor_metric",
+                        "wand_metric_validation": {"median_reproj_error_px": 0.8, "floor_residual_mm": 2.0},
+                    },
                     "cameras": [],
                 }
             ),
@@ -172,7 +191,11 @@ def test_generate_extrinsics_and_apply_wand_scale_floor_use_split_paths(tmp_path
         )
         return {
             "reference_camera_id": "pi-cam-01",
-            "session_meta": {"scale_source": "wand_floor_metric", "floor_source": "wand_floor_metric"},
+            "session_meta": {
+                "scale_source": "wand_floor_metric",
+                "floor_source": "wand_floor_metric",
+                "wand_metric_validation": {"median_reproj_error_px": 0.8, "floor_residual_mm": 2.0},
+            },
             "cameras": [],
         }
 
@@ -182,10 +205,12 @@ def test_generate_extrinsics_and_apply_wand_scale_floor_use_split_paths(tmp_path
         {
             "intrinsics_path": "calibration",
             "pose_log_path": str(pose_log),
-            "output_path": "calibration/calibration_extrinsics_v1.json",
+            "output_path": str(output_path),
         }
     )
     assert generated["generate_extrinsics"]["ok"] is True
+    assert generated["generate_extrinsics"]["quality"]["median_reproj_error_px"] == 1.2
+    assert generated["generate_extrinsics"]["metric_floor_applied"] is False
     assert "pose_log_path" in generated_called
     assert "wand_metric_log_path" not in generated_called
 
@@ -193,12 +218,14 @@ def test_generate_extrinsics_and_apply_wand_scale_floor_use_split_paths(tmp_path
         {
             "intrinsics_path": "calibration",
             "wand_metric_log_path": str(wand_metric_log),
-            "output_path": "calibration/calibration_extrinsics_v1.json",
+            "output_path": str(output_path),
             "max_wand_metric_samples": 16,
             "expected_baseline_m": 2.5,
         }
     )
     assert applied["apply_wand_scale_floor"]["ok"] is True
+    assert applied["apply_wand_scale_floor"]["quality"]["median_reproj_error_px"] == 0.8
+    assert applied["apply_wand_scale_floor"]["wand_metric_validation"]["median_reproj_error_px"] == 0.8
     assert "extrinsics_path" in applied_called
     assert "wand_metric_log_path" in applied_called
     assert applied_called["max_wand_metric_samples"] == 16

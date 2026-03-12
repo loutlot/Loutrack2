@@ -1,15 +1,132 @@
 from __future__ import annotations
 
+from itertools import combinations
 from typing import Any, Dict, List, Sequence, Tuple
 
 import cv2
 import numpy as np
 
 from extrinsics_capture import WandMetricObservation
+from extrinsics_samples import PoseCaptureSample
 
 
 def _camera_center(rotation: np.ndarray, translation: np.ndarray) -> np.ndarray:
     return (-(rotation.T @ translation.reshape(3, 1))).reshape(3)
+
+
+def _baseline_range(camera_poses: Dict[str, Tuple[np.ndarray, np.ndarray]]) -> list[float]:
+    centers = np.array([_camera_center(r, t) for r, t in camera_poses.values()], dtype=np.float64)
+    if centers.shape[0] < 2:
+        return [0.0, 0.0]
+    baseline_vals = [
+        float(np.linalg.norm(centers[i] - centers[j]))
+        for i in range(len(centers))
+        for j in range(i + 1, len(centers))
+    ]
+    return [float(min(baseline_vals)), float(max(baseline_vals))]
+
+
+def _triangulate_pose_sample(
+    camera_params: Dict[str, Any],
+    camera_poses: Dict[str, Tuple[np.ndarray, np.ndarray]],
+    observations: Sequence[Tuple[str, np.ndarray]],
+) -> np.ndarray | None:
+    if len(observations) < 2:
+        return None
+    rows: List[np.ndarray] = []
+    for camera_id, uv in observations:
+        camera = camera_params[camera_id]
+        rotation, translation = camera_poses[camera_id]
+        pmat = np.hstack([rotation, translation.reshape(3, 1)])
+        norm = cv2.undistortPoints(
+            uv.reshape(1, 1, 2).astype(np.float64),
+            camera.intrinsic_matrix.astype(np.float64),
+            camera.distortion_coeffs.astype(np.float64),
+        ).reshape(2)
+        rows.append(norm[0] * pmat[2] - pmat[0])
+        rows.append(norm[1] * pmat[2] - pmat[1])
+    a = np.stack(rows, axis=0)
+    _, _, vt = np.linalg.svd(a, full_matrices=False)
+    xh = vt[-1]
+    if abs(float(xh[3])) < 1e-12:
+        return None
+    return (xh[:3] / xh[3]).astype(np.float64)
+
+
+def _triangulation_angles(point: np.ndarray, camera_poses: Dict[str, Tuple[np.ndarray, np.ndarray]], camera_ids: Sequence[str]) -> np.ndarray:
+    centers = {camera_id: _camera_center(*camera_poses[camera_id]) for camera_id in camera_ids}
+    angles: List[float] = []
+    for camera_a, camera_b in combinations(sorted(camera_ids), 2):
+        ray_a = point - centers[camera_a]
+        ray_b = point - centers[camera_b]
+        norm_a = float(np.linalg.norm(ray_a))
+        norm_b = float(np.linalg.norm(ray_b))
+        if norm_a <= 1e-12 or norm_b <= 1e-12:
+            continue
+        cos_angle = float(np.clip(np.dot(ray_a, ray_b) / (norm_a * norm_b), -1.0, 1.0))
+        angles.append(float(np.degrees(np.arccos(cos_angle))))
+    return np.asarray(angles, dtype=np.float64)
+
+
+def validate_pose_capture_extrinsics(
+    camera_params: Dict[str, Any],
+    camera_poses: Dict[str, Tuple[np.ndarray, np.ndarray]],
+    samples: Sequence[PoseCaptureSample],
+) -> Dict[str, Any]:
+    reproj_errors: Dict[str, List[float]] = {camera_id: [] for camera_id in camera_poses.keys()}
+    positive_depth = 0
+    depth_total = 0
+    triangulation_angles: List[float] = []
+    spans_us: List[float] = []
+
+    for sample in samples:
+        camera_ids = [camera_id for camera_id in sample.image_points_by_camera.keys() if camera_id in camera_poses]
+        if len(camera_ids) < 2:
+            continue
+        point = _triangulate_pose_sample(
+            camera_params,
+            camera_poses,
+            [(camera_id, sample.image_points_by_camera[camera_id]) for camera_id in camera_ids],
+        )
+        if point is None:
+            continue
+        spans_us.append(float(sample.quality.get("span_us", 0.0) or 0.0))
+        triangulation_angles.extend(_triangulation_angles(point, camera_poses, camera_ids).tolist())
+        for camera_id in camera_ids:
+            camera = camera_params[camera_id]
+            rotation, translation = camera_poses[camera_id]
+            rvec, _ = cv2.Rodrigues(rotation)
+            proj, _ = cv2.projectPoints(
+                point.reshape(1, 3).astype(np.float64),
+                rvec.reshape(3, 1),
+                translation.reshape(3, 1).astype(np.float64),
+                camera.intrinsic_matrix.astype(np.float64),
+                camera.distortion_coeffs.astype(np.float64),
+            )
+            pred = proj.reshape(2)
+            err = float(np.linalg.norm(pred - sample.image_points_by_camera[camera_id]))
+            reproj_errors[camera_id].append(err)
+            depth = float((rotation @ point.reshape(3, 1) + translation.reshape(3, 1))[2, 0])
+            positive_depth += int(depth > 0.0)
+            depth_total += 1
+
+    all_err = np.array([err for rows in reproj_errors.values() for err in rows], dtype=np.float64)
+    angle_array = np.asarray(triangulation_angles, dtype=np.float64)
+    span_array = np.asarray(spans_us, dtype=np.float64)
+    return {
+        "median_reproj_error_px": float(np.median(all_err)) if all_err.size else None,
+        "p90_reproj_error_px": float(np.percentile(all_err, 90)) if all_err.size else None,
+        "positive_depth_ratio": float(positive_depth / depth_total) if depth_total else None,
+        "baseline_range_units": _baseline_range(camera_poses),
+        "triangulation_angle_deg_p50": float(np.median(angle_array)) if angle_array.size else None,
+        "triangulation_angle_deg_p90": float(np.percentile(angle_array, 90)) if angle_array.size else None,
+        "sample_span_us_p50": float(np.median(span_array)) if span_array.size else None,
+        "sample_span_us_p90": float(np.percentile(span_array, 90)) if span_array.size else None,
+        "per_camera_median_reproj_px": {
+            camera_id: float(np.median(np.asarray(errors, dtype=np.float64))) if errors else None
+            for camera_id, errors in reproj_errors.items()
+        },
+    }
 
 
 def _build_wand_metric_multiview(
@@ -58,34 +175,7 @@ def _build_wand_metric_multiview(
     return out
 
 
-def _triangulate_point_ls(
-    camera_params: Dict[str, Any],
-    camera_poses: Dict[str, Tuple[np.ndarray, np.ndarray]],
-    observations: Sequence[Tuple[str, np.ndarray]],
-) -> np.ndarray | None:
-    if len(observations) < 2:
-        return None
-    rows: List[np.ndarray] = []
-    for camera_id, uv in observations:
-        camera = camera_params[camera_id]
-        rotation, translation = camera_poses[camera_id]
-        pmat = np.hstack([rotation, translation.reshape(3, 1)])
-        norm = cv2.undistortPoints(
-            uv.reshape(1, 1, 2).astype(np.float64),
-            camera.intrinsic_matrix.astype(np.float64),
-            camera.distortion_coeffs.astype(np.float64),
-        ).reshape(2)
-        rows.append(norm[0] * pmat[2] - pmat[0])
-        rows.append(norm[1] * pmat[2] - pmat[1])
-    a = np.stack(rows, axis=0)
-    _, _, vt = np.linalg.svd(a, full_matrices=False)
-    xh = vt[-1]
-    if abs(float(xh[3])) < 1e-12:
-        return None
-    return (xh[:3] / xh[3]).astype(np.float64)
-
-
-def validate_extrinsics(
+def validate_wand_metric_extrinsics(
     camera_params: Dict[str, Any],
     camera_poses: Dict[str, Tuple[np.ndarray, np.ndarray]],
     wand_observations_by_camera: Dict[str, Sequence[WandMetricObservation]],
@@ -113,7 +203,7 @@ def validate_extrinsics(
             tri_points: List[np.ndarray] = []
             for point_idx in range(point_count):
                 observations = [(camera_id, points[point_idx]) for camera_id, points in sample.items()]
-                tri = _triangulate_point_ls(camera_params, camera_poses, observations)
+                tri = _triangulate_pose_sample(camera_params, camera_poses, observations)
                 if tri is None:
                     break
                 tri_points.append(tri)
@@ -150,28 +240,15 @@ def validate_extrinsics(
                 all_depth_total += int(depth.shape[0])
 
     all_err = np.array([e for rows in reproj_errors.values() for e in rows], dtype=np.float64)
-    centers = np.array([_camera_center(r, t) for r, t in camera_poses.values()], dtype=np.float64)
-    if centers.shape[0] >= 2:
-        baseline_vals = [
-            float(np.linalg.norm(centers[i] - centers[j]))
-            for i in range(len(centers))
-            for j in range(i + 1, len(centers))
-        ]
-        baseline_min = min(baseline_vals)
-        baseline_max = max(baseline_vals)
-    else:
-        baseline_min = 0.0
-        baseline_max = 0.0
-
     return {
-        "median_reproj_error_px": float(np.median(all_err)) if all_err.size else 0.0,
-        "p90_reproj_error_px": float(np.percentile(all_err, 90)) if all_err.size else 0.0,
-        "positive_depth_ratio": float(all_depth_positive / all_depth_total) if all_depth_total else 1.0,
-        "baseline_range_m": [float(baseline_min), float(baseline_max)],
+        "median_reproj_error_px": float(np.median(all_err)) if all_err.size else None,
+        "p90_reproj_error_px": float(np.percentile(all_err, 90)) if all_err.size else None,
+        "positive_depth_ratio": float(all_depth_positive / all_depth_total) if all_depth_total else None,
+        "baseline_range_m": _baseline_range(camera_poses),
         "per_camera_median_reproj_px": {
-            camera_id: float(np.median(np.asarray(errors, dtype=np.float64))) if errors else 0.0
+            camera_id: float(np.median(np.asarray(errors, dtype=np.float64))) if errors else None
             for camera_id, errors in reproj_errors.items()
         },
-        "floor_residual_mm": float(np.median(np.asarray(floor_residuals_mm, dtype=np.float64))) if floor_residuals_mm else 0.0,
-        "world_up_consistency": float(np.mean(np.asarray(up_consistency_scores, dtype=np.float64))) if up_consistency_scores else 0.0,
+        "floor_residual_mm": float(np.median(np.asarray(floor_residuals_mm, dtype=np.float64))) if floor_residuals_mm else None,
+        "world_up_consistency": float(np.mean(np.asarray(up_consistency_scores, dtype=np.float64))) if up_consistency_scores else None,
     }

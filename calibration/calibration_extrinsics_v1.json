@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "reference_camera_id": "pi-cam-01",
-  "created_at": "2026-03-12T03:03:28.035188+00:00",
+  "created_at": "2026-03-12T10:27:50.300631+00:00",
   "wand": {
     "name": "wand_l_b5_v1",
     "marker_diameter_mm": 14.0,
@@ -31,47 +31,125 @@
   "session_meta": {
     "session_id": null,
     "method": "pose_capture",
-    "pose_capture_log_path": "logs/extrinsics_pose_capture copy.jsonl",
-    "wand_metric_log_path": "logs/extrinsics_wand_metric copy.jsonl",
+    "pose_capture_log_path": "/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/logs/extrinsics_pose_capture.jsonl",
+    "wand_metric_log_path": "/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/logs/extrinsics_wand_metric.jsonl",
     "pair_window_us": 8000,
     "min_pairs": 8,
-    "max_ba_samples": 20,
-    "sample_count": 20,
-    "accepted_sample_count": 1711,
+    "max_ba_samples": 80,
+    "sample_count": 80,
+    "accepted_sample_count": 1712,
     "camera_graph_edges": [
       {
         "camera_a": "pi-cam-01",
         "camera_b": "pi-cam-02",
-        "usable_points": 1711.0,
-        "inlier_ratio": 1.0,
-        "angle_score": 1.0,
-        "score": 1711.0
+        "usable_points": 459.0,
+        "inlier_ratio": 0.26810747663551404,
+        "triangulation_angle_deg_p50": 92.90164193564166,
+        "score": 11432.599780749371
       }
     ],
+    "excluded_camera_ids": [],
+    "excluded_camera_reasons": {},
     "optimizer": {
-      "iterations": 94,
-      "cost": 703.2868992040266,
-      "initial_cost": 23644.760929997272
+      "iterations": 200,
+      "cost": 16805.870328520024,
+      "initial_cost": 3841284.896584062,
+      "seed_sample_count": 80,
+      "weighted_sample_count": 134.66266971550382,
+      "dropped_sample_count": 0,
+      "median_seed_triangulation_angle_deg": 119.92935765621282
+    },
+    "sample_selection": {
+      "strategy": "coverage_plus_information",
+      "input_count": 1712,
+      "selected_count": 80,
+      "selected_sample_ids": [
+        0,
+        101,
+        105,
+        107,
+        111,
+        112,
+        113,
+        114,
+        117,
+        118,
+        119,
+        123,
+        125,
+        215,
+        218,
+        219,
+        220,
+        221,
+        225,
+        226,
+        227,
+        228,
+        229,
+        231,
+        232,
+        233,
+        239,
+        342,
+        456,
+        570,
+        684,
+        733,
+        734,
+        735,
+        737,
+        738,
+        740,
+        741,
+        742,
+        744,
+        745,
+        746,
+        748,
+        749,
+        750,
+        752,
+        754,
+        755,
+        756,
+        759,
+        798,
+        913,
+        967,
+        968,
+        969,
+        970,
+        972,
+        973,
+        974,
+        975,
+        976,
+        977,
+        978,
+        979,
+        981,
+        982,
+        1027,
+        1141,
+        1255,
+        1369,
+        1483,
+        1498,
+        1501,
+        1508,
+        1509,
+        1510,
+        1514,
+        1515,
+        1597,
+        1711
+      ]
     },
     "scale_source": "wand_floor_metric",
     "floor_source": "wand_floor_metric",
-    "scale_m_per_unit": 7.939052301193655,
+    "scale_m_per_unit": 7.08454178921686,
     "wand_metric_frames": 16,
-    "validation": {
-      "median_reproj_error_px": 27.615260414827297,
-      "p90_reproj_error_px": 43.300017261123244,
-      "positive_depth_ratio": 1.0,
-      "baseline_range_m": [
-        8.285220824011663,
-        8.285220824011663
-      ],
-      "per_camera_median_reproj_px": {
-        "pi-cam-01": 31.001645782899654,
-        "pi-cam-02": 21.96719348519936
-      },
-      "floor_residual_mm": 0.25445397748866716,
-      "world_up_consistency": 0.9999989694593892
-    },
     "capture_summary": {
       "camera_count": 2,
       "observation_count": 3505,
@@ -81,16 +159,16 @@
     },
     "max_wand_metric_samples": 16,
     "expected_baseline_m": null,
-    "shape_rms_error_mm": 10.890054916160064,
+    "shape_rms_error_mm": 11.800734133844095,
     "floor_normal_similarity": [
-      0.6338099893588286,
-      0.4721026955457611,
-      0.612702164389345
+      0.6370239807468067,
+      0.5270082300902729,
+      0.5625502407524239
     ],
     "origin_world": [
-      0.8143696369000792,
-      6.207970862985813,
-      4.743557070486128
+      0.44295381511744336,
+      6.051238118295725,
+      4.085564408212761
     ],
     "origin_marker": "elbow",
     "aligned_axis_world": [
@@ -99,73 +177,109 @@
       0.0
     ],
     "up_axis": "Z",
-    "metric_pose_source": "pose_capture_similarity"
+    "metric_pose_source": "pose_capture_similarity",
+    "wand_refine_iterations": 200,
+    "wand_refine_cost": 4398.86878844602,
+    "wand_refine_median_reproj_error_px": 77.53336617568232,
+    "wand_refine_p90_reproj_error_px": 1482.672499348928,
+    "pose_validation": {
+      "median_reproj_error_px": 18.903643477984737,
+      "p90_reproj_error_px": 71.29430271747052,
+      "positive_depth_ratio": 1.0,
+      "baseline_range_units": [
+        1.1114338344664718,
+        1.1114338344664718
+      ],
+      "triangulation_angle_deg_p50": 106.45545561534391,
+      "triangulation_angle_deg_p90": 126.57985446189304,
+      "sample_span_us_p50": 1921.5,
+      "sample_span_us_p90": 3261.0,
+      "per_camera_median_reproj_px": {
+        "pi-cam-01": 21.374436268519627,
+        "pi-cam-02": 15.690074878506657
+      }
+    },
+    "wand_metric_validation": {
+      "median_reproj_error_px": 28.16300892164075,
+      "p90_reproj_error_px": 58.98892319943304,
+      "positive_depth_ratio": 1.0,
+      "baseline_range_m": [
+        9.914679590876917,
+        9.914679590876917
+      ],
+      "per_camera_median_reproj_px": {
+        "pi-cam-01": 35.791260814190714,
+        "pi-cam-02": 22.16452195249185
+      },
+      "floor_residual_mm": 115.67252648326632,
+      "world_up_consistency": 0.939684925974551
+    }
   },
   "cameras": [
     {
       "camera_id": "pi-cam-01",
       "rotation_matrix": [
         [
-          -0.6123596183219193,
-          -0.47254692384735175,
-          0.6338099893588286
+          -0.622263460119028,
+          -0.45496003577697564,
+          0.6370239807468066
         ],
         [
-          0.7901968691103168,
-          -0.3907786495020923,
-          0.4721026955457611
+          0.7822986788617263,
+          -0.3320709298754042,
+          0.5270082300902728
         ],
         [
-          0.024588735162386282,
-          0.7899312956553411,
-          0.612702164389345
+          -0.028230537577107466,
+          0.8262809833086425,
+          0.5625502407524239
         ]
       ],
       "translation_m": [
-        -0.4257307582952192,
-        0.4570159468426689,
-        7.830282470506245
+        -0.42610298154556236,
+        0.49020798321520465,
+        7.285853399747158
       ],
       "quality": {
         "pair_count": 0,
         "point_count": 0,
         "inlier_ratio": 1.0,
-        "median_reproj_error_px": 31.001645782899654,
+        "median_reproj_error_px": 35.791260814190714,
         "baseline_m": 0.0,
-        "scale_m_per_unit": 1.0
+        "scale_m_per_unit": null
       }
     },
     {
       "camera_id": "pi-cam-02",
       "rotation_matrix": [
         [
-          0.08473764332091129,
-          -0.8768060722089455,
-          -0.47331875469068385
+          0.1480921612179259,
+          -0.19436524637980385,
+          -0.9696859609097791
         ],
         [
-          0.9369380562823318,
-          -0.09153105805541276,
-          0.337296818990549
+          0.9051993864169798,
+          -0.3682964600701258,
+          0.21206552838718834
         ],
         [
-          -0.3390672654419834,
-          -0.4720520915627623,
-          0.81375685088171
+          -0.398350075456409,
+          -0.9091643792513717,
+          0.12139748302308684
         ]
       ],
       "translation_m": [
-        0.331621695201614,
-        0.44147653172826784,
-        2.5494909640829375
+        0.2574590303357792,
+        0.6236817270166826,
+        3.0266583466542474
       ],
       "quality": {
-        "pair_count": 20,
-        "point_count": 20,
+        "pair_count": 80,
+        "point_count": 80,
         "inlier_ratio": 1.0,
-        "median_reproj_error_px": 21.96719348519936,
-        "baseline_m": 8.285220824011663,
-        "scale_m_per_unit": 1.0
+        "median_reproj_error_px": 22.16452195249185,
+        "baseline_m": 9.914679590876917,
+        "scale_m_per_unit": null
       }
     }
   ]

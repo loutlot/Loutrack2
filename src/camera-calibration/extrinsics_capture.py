@@ -42,15 +42,7 @@ def _extract_frame_payload(entry: Dict[str, Any]) -> Dict[str, Any] | None:
 def _pick_best_blob(blobs: Sequence[Dict[str, Any]]) -> tuple[Dict[str, Any] | None, float]:
     if not blobs:
         return None, 0.0
-    ranked = sorted(
-        blobs,
-        key=lambda item: (
-            float(item.get("area", 0.0)),
-            -abs(float(item.get("x", 0.0))),
-            -abs(float(item.get("y", 0.0))),
-        ),
-        reverse=True,
-    )
+    ranked = sorted(blobs, key=lambda item: float(item.get("area", 0.0)), reverse=True)
     best = ranked[0]
     blob_count = max(1, len(blobs))
     quality = 1.0 / float(blob_count)

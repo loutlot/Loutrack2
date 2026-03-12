@@ -36,30 +36,41 @@ class _Camera:
     distortion_coeffs: np.ndarray
 
 
-def test_pose_bundle_adjustment_runs_on_synthetic_data() -> None:
+def test_pose_bundle_adjustment_runs_on_multiview_synthetic_data() -> None:
     k = np.array([[800.0, 0.0, 320.0], [0.0, 800.0, 240.0], [0.0, 0.0, 1.0]], dtype=np.float64)
     cam_params = {
         "cam-a": _Camera(k, np.zeros(5, dtype=np.float64)),
         "cam-b": _Camera(k, np.zeros(5, dtype=np.float64)),
+        "cam-c": _Camera(k, np.zeros(5, dtype=np.float64)),
     }
-    rot_b, _ = cv2.Rodrigues(np.array([0.0, 0.15, 0.0], dtype=np.float64))
-    t_b = np.array([0.3, 0.0, 0.0], dtype=np.float64)
+    rot_b, _ = cv2.Rodrigues(np.array([0.0, 0.12, 0.0], dtype=np.float64))
+    rot_c, _ = cv2.Rodrigues(np.array([0.0, -0.08, 0.0], dtype=np.float64))
+    t_b = np.array([0.35, 0.0, 0.0], dtype=np.float64)
+    t_c = np.array([-0.25, 0.02, 0.01], dtype=np.float64)
 
     samples = []
-    for idx in range(8):
-        point = np.array([-0.1 + idx * 0.03, 0.02 * idx, 2.0], dtype=np.float64)
+    for idx in range(10):
+        point = np.array([-0.1 + idx * 0.03, 0.02 * idx, 2.1 + (idx % 3) * 0.05], dtype=np.float64)
         p1, _ = cv2.projectPoints(point.reshape(1, 3), np.zeros((3, 1)), np.zeros((3,)), k, np.zeros(5))
         rvec_b, _ = cv2.Rodrigues(rot_b)
         p2, _ = cv2.projectPoints(point.reshape(1, 3), rvec_b, t_b, k, np.zeros(5))
+        rvec_c, _ = cv2.Rodrigues(rot_c)
+        p3, _ = cv2.projectPoints(point.reshape(1, 3), rvec_c, t_c, k, np.zeros(5))
         samples.append(
             samples_mod.PoseCaptureSample(
                 sample_id=idx,
-                timestamps={"cam-a": 1000 + idx, "cam-b": 1000 + idx},
+                timestamps={"cam-a": 1000 + idx, "cam-b": 1000 + idx, "cam-c": 1000 + idx},
                 image_points_by_camera={
                     "cam-a": p1.reshape(2),
                     "cam-b": p2.reshape(2),
+                    "cam-c": p3.reshape(2),
                 },
-                quality={"visible_camera_count": 2.0, "span_us": 0.0, "mean_observation_quality": 1.0},
+                quality={
+                    "visible_camera_count": 3.0,
+                    "span_us": 0.0,
+                    "mean_observation_quality": 1.0,
+                    "parallax_proxy": 0.06,
+                },
             )
         )
 
@@ -70,7 +81,12 @@ def test_pose_bundle_adjustment_runs_on_synthetic_data() -> None:
         camera_poses_init={
             "cam-a": (np.eye(3, dtype=np.float64), np.zeros(3, dtype=np.float64)),
             "cam-b": (rot_b, t_b),
+            "cam-c": (rot_c, t_c),
         },
+        pair_window_us=8000,
     )
     assert result.iterations > 0
-    assert "cam-b" in result.camera_poses
+    assert result.seed_sample_count == len(samples)
+    assert result.dropped_sample_count == 0
+    assert result.weighted_sample_count > 0.0
+    assert result.median_seed_triangulation_angle_deg > 0.0

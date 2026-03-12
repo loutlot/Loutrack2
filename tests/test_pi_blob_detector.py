@@ -127,7 +127,7 @@ def test_mask_start_reuses_preview_backend_when_available(monkeypatch: pytest.Mo
     assert response["ack"] is True
 
 
-def test_start_wand_capture_reuses_preview_backend_and_disables_emitter_preview(
+def test_start_wand_metric_capture_reuses_preview_backend_and_disables_emitter_preview(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=True))
@@ -160,10 +160,12 @@ def test_start_wand_capture_reuses_preview_backend_and_disables_emitter_preview(
             max_frames=None,
             mask=None,
             debug_preview=None,
+            capture_mode="capture",
         ) -> None:
             captured["camera_id"] = camera_id
             captured["backend"] = backend
             captured["debug_preview"] = debug_preview
+            captured["capture_mode"] = capture_mode
             captured["started"] = False
 
         def set_mask(self, mask: np.ndarray | None) -> None:
@@ -177,11 +179,12 @@ def test_start_wand_capture_reuses_preview_backend_and_disables_emitter_preview(
 
     monkeypatch.setattr("src.pi.capture.UDPFrameEmitter", FakeEmitter)
 
-    response = server._handle_start("req-1", "pi-cam-01", "wand_capture", {})
+    response = server._handle_start("req-1", "pi-cam-01", "wand_metric_capture", {})
 
     assert response["ack"] is True
     assert captured["backend"] is preview_backend
     assert captured["debug_preview"] is None
+    assert captured["capture_mode"] == "wand_metric_capture"
     assert captured["mask"] is server._static_mask
     assert captured["started"] is True
 
