@@ -101,7 +101,8 @@ def _sample_weight(sample: PoseCaptureSample, pair_window_us: int) -> float:
     quality_weight = float(np.clip(mean_quality, 0.2, 1.0))
     span_weight = 1.0 / (1.0 + (span_us / max(float(pair_window_us), 1.0)))
     parallax_weight = float(np.clip(parallax_proxy / TARGET_PARALLAX, 0.5, 2.0))
-    return float(visible_camera_count_weight * quality_weight * span_weight * parallax_weight)
+    gate_weight = float(np.clip(sample.quality.get("gate_weight", 1.0) or 1.0, 0.25, 1.0))
+    return float(visible_camera_count_weight * quality_weight * span_weight * parallax_weight * gate_weight)
 
 
 def _triangulate_seed_points(

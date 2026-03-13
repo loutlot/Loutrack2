@@ -147,7 +147,7 @@ def apply_wand_metric_alignment(
     up_axis: str = "Z",
     pair_window_us: int = 8000,
     assume_metric_scale: bool = False,
-) -> Tuple[Dict[str, Tuple[np.ndarray, np.ndarray]], Dict[str, Any]]:
+) -> Tuple[Dict[str, Tuple[np.ndarray, np.ndarray]], np.ndarray, Dict[str, Any]]:
     wand_points_m = np.asarray(wand_points_mm, dtype=np.float64) / 1000.0
     known_edges = np.array(
         [np.linalg.norm(wand_points_m[a] - wand_points_m[b]) for a, b in WAND_EDGE_PAIRS],
@@ -158,7 +158,7 @@ def apply_wand_metric_alignment(
         if camera_id in camera_poses_similarity and camera_id in camera_params and rows:
             active_rows[camera_id] = rows
     if len(active_rows) < 2:
-        return camera_poses_similarity, {
+        return camera_poses_similarity, np.eye(4, dtype=np.float64), {
             "scale_source": "none",
             "floor_source": "none",
             "scale_m_per_unit": 1.0,
@@ -224,7 +224,7 @@ def apply_wand_metric_alignment(
         axis_vectors.append(tri_metric[3] - tri_metric[0])
 
     if (not assume_metric_scale and not scale_candidates) or not floor_points:
-        return camera_poses_similarity, {
+        return camera_poses_similarity, np.eye(4, dtype=np.float64), {
             "scale_source": "none",
             "floor_source": "none",
             "scale_m_per_unit": 1.0,
@@ -277,15 +277,19 @@ def apply_wand_metric_alignment(
     elbows_world = np.asarray([(rotation_world @ point.reshape(3, 1)).reshape(3) for point in elbow_points], dtype=np.float64)
     origin = np.median(elbows_world, axis=0)
 
-    poses_metric: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
+    poses_metric_canonical: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
     for camera_id, (rotation, translation) in camera_poses_similarity.items():
         center = _camera_center(rotation, translation)
-        center_metric = (rotation_world @ (center * scale).reshape(3, 1)).reshape(3) - origin
-        rotation_metric = rotation @ rotation_world.T
+        center_metric = center * scale
+        rotation_metric = rotation.astype(np.float64)
         translation_metric = -(rotation_metric @ center_metric.reshape(3, 1)).reshape(3)
-        poses_metric[camera_id] = (rotation_metric, translation_metric)
+        poses_metric_canonical[camera_id] = (rotation_metric, translation_metric)
 
-    return poses_metric, {
+    to_world_coords_matrix = np.eye(4, dtype=np.float64)
+    to_world_coords_matrix[:3, :3] = rotation_world
+    to_world_coords_matrix[:3, 3] = -origin
+
+    return poses_metric_canonical, to_world_coords_matrix, {
         "scale_source": "wand_floor_metric",
         "floor_source": "wand_floor_metric",
         "scale_m_per_unit": scale,

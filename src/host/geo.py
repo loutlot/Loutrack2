@@ -148,15 +148,15 @@ class CalibrationLoader:
         )
 
     @staticmethod
-    def load_extrinsics(filepath: str) -> Dict[str, Dict[str, Any]]:
+    def load_extrinsics(filepath: str, include_meta: bool = False) -> Dict[str, Dict[str, Any]]:
         path = Path(filepath)
         extrinsics_path: Optional[Path] = None
 
         if path.is_dir():
-            matches = sorted(path.glob("calibration_extrinsics_v1*.json"))
+            matches = sorted(path.glob("extrinsics_pose_v2*.json"))
             if matches:
                 extrinsics_path = matches[0]
-        elif path.name.startswith("calibration_extrinsics_v1"):
+        elif path.name.startswith("extrinsics_pose_v2"):
             extrinsics_path = path
 
         if extrinsics_path is None or not extrinsics_path.exists():
@@ -165,24 +165,30 @@ class CalibrationLoader:
         with open(extrinsics_path, "r", encoding="utf-8") as handle:
             data = json.load(handle)
 
-        cameras = data.get("cameras", [])
+        pose_section = data.get("pose", {})
+        cameras = pose_section.get("camera_poses", []) if isinstance(pose_section, dict) else []
         result: Dict[str, Dict[str, Any]] = {}
         for camera in cameras:
             camera_id = camera.get("camera_id")
             if camera_id:
                 result[camera_id] = camera
+        if include_meta:
+            result["__meta__"] = data if isinstance(data, dict) else {}
         return result
 
     @staticmethod
     def apply_extrinsics(
         camera_params: Dict[str, CameraParams],
         extrinsics: Dict[str, Dict[str, Any]],
+        apply_world_transform: bool = True,
     ) -> None:
         for camera_id, extrinsic in extrinsics.items():
+            if str(camera_id).startswith("__"):
+                continue
             if camera_id not in camera_params:
                 continue
-            rotation = np.array(extrinsic.get("rotation_matrix", np.eye(3)), dtype=np.float64)
-            translation = np.array(extrinsic.get("translation_m", [0.0, 0.0, 0.0]), dtype=np.float64)
+            rotation = np.array(extrinsic.get("R", np.eye(3)), dtype=np.float64)
+            translation = np.array(extrinsic.get("t", [0.0, 0.0, 0.0]), dtype=np.float64)
             camera_params[camera_id].rotation = rotation.reshape(3, 3)
             camera_params[camera_id].translation = translation.reshape(3)
     
@@ -446,7 +452,7 @@ class GeometryPipeline:
             else:
                 self.camera_params[cam_id] = CalibrationLoader.to_camera_params(calib)
 
-        extrinsics = CalibrationLoader.load_extrinsics(filepath)
+        extrinsics = CalibrationLoader.load_extrinsics(filepath, include_meta=True)
         if extrinsics:
             CalibrationLoader.apply_extrinsics(self.camera_params, extrinsics)
         

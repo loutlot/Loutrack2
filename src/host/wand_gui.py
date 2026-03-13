@@ -31,8 +31,7 @@ else:
 
 DEFAULT_SETTINGS_PATH = Path("logs") / "wand_gui_settings.json"
 DEFAULT_POSE_LOG_PATH = Path("logs") / "extrinsics_pose_capture.jsonl"
-DEFAULT_WAND_METRIC_LOG_PATH = Path("logs") / "extrinsics_wand_metric.jsonl"
-DEFAULT_EXTRINSICS_OUTPUT_PATH = Path("calibration") / "calibration_extrinsics_v1.json"
+DEFAULT_EXTRINSICS_OUTPUT_PATH = Path("calibration") / "extrinsics_pose_v2.json"
 DEFAULT_CAPTURE_LOG_DIR = Path("logs")
 STATIC_DIR_CANDIDATES = (
     PROJECT_ROOT / "static",
@@ -701,16 +700,14 @@ HTML_PAGE = """<!doctype html>
           <div class="step-head">
             <div class="step-title">
               <div class="eyebrow">Step 03</div>
-              <h2>Wand Capture</h2>
+              <h2>Pose Capture</h2>
             </div>
             <span class="step-status" id="stepWandStatus">Pending</span>
           </div>
           <div class="step-summary" id="wandSummary"></div>
           <div class="button-row">
             <button class="secondary" data-command="start">Start Pose Capture</button>
-            <button class="ghost" data-command="stop">Stop Capture</button>
-            <button class="secondary" data-command="start_wand_metric_capture">Start Wand Metric Capture</button>
-            <button class="ghost" data-command="stop_wand_metric_capture">Stop Metric Capture</button>
+            <button class="ghost" data-command="stop">Stop Pose Capture</button>
           </div>
         </section>
 
@@ -725,17 +722,13 @@ HTML_PAGE = """<!doctype html>
           <div class="step-summary" id="extrinsicsSummary"></div>
           <div class="controls-grid">
             <label for="intrinsicsPath">Intrinsics Dir<input id="intrinsicsPath" type="text" value="calibration"></label>
-             <label for="logPath">Pose Log Path<input id="logPath" type="text" value="logs/extrinsics_pose_capture.jsonl"></label>
-            <label for="wandMetricLogPath">Wand Metric Log<input id="wandMetricLogPath" type="text" value="logs/extrinsics_wand_metric.jsonl"></label>
-            <label for="outputPath">Output Path<input id="outputPath" type="text" value="calibration/calibration_extrinsics_v1.json"></label>
+            <label for="logPath">Pose Log Path<input id="logPath" type="text" value="logs/extrinsics_pose_capture.jsonl"></label>
+            <label for="outputPath">Output Path<input id="outputPath" type="text" value="calibration/extrinsics_pose_v2.json"></label>
             <label for="pairWindowUs">Pair Window (us)<input id="pairWindowUs" type="number" min="1" step="100" value="8000"></label>
             <label for="minPairs">Min Pairs<input id="minPairs" type="number" min="1" step="1" value="8"></label>
-            <label for="maxWandMetricSamples">Wand Metric Samples<input id="maxWandMetricSamples" type="number" min="1" step="1" value="16"></label>
-            <label for="expectedBaselineM">Expected Baseline (m)<input id="expectedBaselineM" type="number" min="0" step="0.01" value=""></label>
           </div>
           <div class="button-row">
             <button id="generateExtrinsics">Generate Extrinsics</button>
-            <button class="secondary" id="applyWandScaleFloor">Apply Wand Scale/Floor</button>
           </div>
         </section>
       </div>
@@ -842,7 +835,7 @@ HTML_PAGE = """<!doctype html>
     const stepLabels = {
       blob: "Blob",
       mask: "Mask",
-      wand: "Wand",
+      wand: "Pose Capture",
       extrinsics: "Extrinsics",
     };
     const values = {
@@ -874,12 +867,9 @@ HTML_PAGE = """<!doctype html>
       status: document.getElementById("status"),
       intrinsicsPath: document.getElementById("intrinsicsPath"),
       logPath: document.getElementById("logPath"),
-      wandMetricLogPath: document.getElementById("wandMetricLogPath"),
       outputPath: document.getElementById("outputPath"),
       pairWindowUs: document.getElementById("pairWindowUs"),
       minPairs: document.getElementById("minPairs"),
-      maxWandMetricSamples: document.getElementById("maxWandMetricSamples"),
-      expectedBaselineM: document.getElementById("expectedBaselineM"),
       selectionMetric: document.getElementById("selectionMetric"),
       selectionSummary: document.getElementById("selectionSummary"),
       blobMetric: document.getElementById("blobMetric"),
@@ -1313,9 +1303,6 @@ HTML_PAGE = """<!doctype html>
         } else if (index === activeIndex) {
           status = "current";
         }
-        if (step === "extrinsics" && workflow.metric_floor_applied) {
-          status = "done";
-        }
         if (step === "wand" && workflow.pose_capture_complete) {
           status = "done";
         }
@@ -1349,15 +1336,13 @@ HTML_PAGE = """<!doctype html>
       elements.blobSummary.textContent = `${workflow.blob_ready_count ?? 0}/${selectedCount || totalCount} 台で blob が見えています。Pi preview 上で反射マーカーが安定して 3 点前後に見えるまで threshold / diameter / circularity を詰めます。`;
       elements.maskSummary.textContent = `${workflow.mask_ready_count ?? 0}/${selectedCount || totalCount} 台で mask が準備できています。preview に mask overlay が出ていることと、mask ratio warning が出ていないことを確認します。`;
       elements.wandSummary.textContent = (workflow.running_count ?? 0) > 0
-        ? `${workflow.running_count} 台が wand capture 中です。Pi デスクトップ preview で wand の追従と誤検出の有無を見ます。`
+        ? `${workflow.running_count} 台が pose capture 中です。Pi デスクトップ preview で単一点の追従と誤検出の有無を見ます。`
         : workflow.pose_capture_complete
-        ? `Pose capture は完了しています（${workflow.pose_capture_log_path || "logs/extrinsics_pose_capture.jsonl"}）。続けて Wand Metric Capture を完了させます。`
+        ? `Pose capture は完了しています（${workflow.pose_capture_log_path || "logs/extrinsics_pose_capture.jsonl"}）。続けて Generate Extrinsics を実行します。`
         : `mask 完了後に Start Pose Capture を実行します。収録中は Pi preview で単一点ターゲット追従を監視します。`;
-      elements.extrinsicsSummary.textContent = workflow.metric_floor_applied
-        ? `Extrinsics と wand floor metric は適用済みです。tracking に進めます。`
-        : workflow.extrinsics_ready
-        ? `Similarity extrinsics は生成済みです。Wand Metric Log を確認して Apply Wand Scale/Floor を実行します。`
-        : `pose capture 後に Generate Extrinsics を実行し、その後 Apply Wand Scale/Floor で floor と world 座標系を確定します。`;
+      elements.extrinsicsSummary.textContent = workflow.extrinsics_ready
+        ? `Similarity extrinsics は生成済みです。tracking はこの v2 pose をそのまま使用します。metric/world は未解決です。`
+        : `pose capture 後に Generate Extrinsics を実行します。出力は similarity pose のみで、metric/world は後続実装です。`;
 
       const stepMap = {
         blob: elements.stepBlob,
@@ -1385,7 +1370,7 @@ HTML_PAGE = """<!doctype html>
       elements.cameraSummary.innerHTML = [
         `<div class="metric"><span class="eyebrow">Selected</span><strong>${selected.length}</strong><p>現在の操作対象</p></div>`,
         `<div class="metric"><span class="eyebrow">Healthy</span><strong>${healthy}</strong><p>ping ack=true</p></div>`,
-        `<div class="metric"><span class="eyebrow">Running</span><strong>${running}</strong><p>wand capture 実行中</p></div>`,
+        `<div class="metric"><span class="eyebrow">Running</span><strong>${running}</strong><p>pose capture 実行中</p></div>`,
         `<div class="metric"><span class="eyebrow">Preview Enabled</span><strong>${preview}</strong><p>Pi desktop OpenCV</p></div>`,
       ].join("");
     }
@@ -1654,22 +1639,6 @@ HTML_PAGE = """<!doctype html>
       }
     });
 
-    document.getElementById("applyWandScaleFloor").addEventListener("click", async () => {
-      try {
-        await postJson("/api/apply_wand_scale_floor", {
-          intrinsics_path: elements.intrinsicsPath.value,
-          wand_metric_log_path: elements.wandMetricLogPath.value,
-          output_path: elements.outputPath.value,
-          pair_window_us: Number(elements.pairWindowUs.value),
-          max_wand_metric_samples: Number(elements.maxWandMetricSamples.value),
-          expected_baseline_m: elements.expectedBaselineM.value === "" ? null : Number(elements.expectedBaselineM.value),
-        });
-        await safeLoadState();
-      } catch (error) {
-        reportUiError("apply_wand_scale_floor", error);
-      }
-    });
-
     elements.tabCalibration.addEventListener("click", () => setActivePage("calibration"));
     elements.tabTracking.addEventListener("click", () => setActivePage("tracking"));
 
@@ -1745,21 +1714,17 @@ class WandGuiState:
         self.last_result: Dict[str, Any] = {"status": "idle"}
         self.capture_log_dir: Path = DEFAULT_CAPTURE_LOG_DIR
         self.pose_capture_log_path: Path = DEFAULT_POSE_LOG_PATH
-        self.wand_metric_log_path: Path = DEFAULT_WAND_METRIC_LOG_PATH
         self._capture_logger: FrameLogger | None = None
         self._capture_log_active: bool = False
-        self._capture_completed: Dict[str, bool] = {"pose_capture": False, "wand_metric_capture": False}
+        self._capture_completed: Dict[str, bool] = {"pose_capture": False}
         self._active_capture_kind: str | None = None
         self._receiver_frame_callback = getattr(receiver, "_frame_callback", None)
         if hasattr(self.receiver, "set_frame_callback"):
             self.receiver.set_frame_callback(self._on_frame_received)
-        solve_extrinsics_fn, apply_wand_scale_floor_fn = _load_extrinsics_solvers()
-        self._generate_extrinsics_solver = solve_extrinsics_fn
-        self._apply_wand_scale_floor_solver = apply_wand_scale_floor_fn
+        self._generate_extrinsics_solver = _load_extrinsics_solver()
         self.tracking_runtime = tracking_runtime or TrackingRuntime()
         self.latest_extrinsics_path: Path | None = None
         self.latest_extrinsics_quality: Dict[str, Any] | None = None
-        self.latest_extrinsics_metric_applied: bool = False
         self._restore_latest_extrinsics(DEFAULT_EXTRINSICS_OUTPUT_PATH)
 
     def _default_config(self) -> SessionConfig:
@@ -1915,16 +1880,11 @@ class WandGuiState:
             1 for camera in active_cameras if bool(diagnostics(camera).get("debug_preview_active"))
         )
         pose_capture_exists = self.pose_capture_log_path.exists() and self.pose_capture_log_path.is_file()
-        wand_metric_exists = self.wand_metric_log_path.exists() and self.wand_metric_log_path.is_file()
         pose_capture_complete = bool(self._capture_completed.get("pose_capture")) and pose_capture_exists
-        wand_metric_capture_complete = bool(self._capture_completed.get("wand_metric_capture")) and wand_metric_exists
         extrinsics_ready = self.latest_extrinsics_path is not None and self.latest_extrinsics_path.exists() and self.latest_extrinsics_path.is_file()
-        metric_floor_applied = self.latest_extrinsics_metric_applied
 
         active_segment = "blob"
-        if metric_floor_applied:
-            active_segment = "extrinsics"
-        elif running_count > 0:
+        if running_count > 0:
             active_segment = "wand"
         elif pose_capture_complete:
             active_segment = "extrinsics"
@@ -1944,10 +1904,7 @@ class WandGuiState:
             "preview_active_count": preview_active_count,
             "pose_capture_complete": pose_capture_complete,
             "pose_capture_log_path": str(self.pose_capture_log_path),
-            "wand_metric_capture_complete": wand_metric_capture_complete,
-            "wand_metric_log_path": str(self.wand_metric_log_path),
             "extrinsics_ready": extrinsics_ready,
-            "metric_floor_applied": metric_floor_applied,
             "latest_extrinsics_path": str(self.latest_extrinsics_path) if self.latest_extrinsics_path else None,
             "latest_extrinsics_quality": self.latest_extrinsics_quality,
             "active_segment": active_segment,
@@ -1955,7 +1912,7 @@ class WandGuiState:
 
     def _tracking_extrinsics_ready(self) -> bool:
         path = self.latest_extrinsics_path
-        return bool(path is not None and path.exists() and path.is_file() and self.latest_extrinsics_metric_applied)
+        return bool(path is not None and path.exists() and path.is_file())
 
     @staticmethod
     def _summarize_extrinsics_quality(camera_rows: Any) -> Dict[str, Any]:
@@ -2004,18 +1961,15 @@ class WandGuiState:
         if not isinstance(payload, dict):
             return
         self.latest_extrinsics_path = path
-        session_meta = payload.get("session_meta", {})
-        if isinstance(session_meta, dict):
-            scale_source = str(session_meta.get("scale_source", "none") or "none")
-            floor_source = str(session_meta.get("floor_source", "none") or "none")
-            self.latest_extrinsics_metric_applied = scale_source != "none" and floor_source != "none"
-            if self.latest_extrinsics_metric_applied:
-                self.latest_extrinsics_quality = self._summarize_validation(session_meta.get("wand_metric_validation"))
-            else:
-                self.latest_extrinsics_quality = self._summarize_validation(session_meta.get("pose_validation"))
+        solve_summary = payload.get("pose", {}).get("solve_summary", {}) if isinstance(payload.get("pose"), dict) else {}
+        if isinstance(solve_summary, dict):
+            self.latest_extrinsics_quality = {
+                key: solve_summary.get(key)
+                for key in ("usable_rows", "complete_rows", "median_reproj_error_px", "p90_reproj_error_px")
+                if key in solve_summary
+            }
         else:
-            self.latest_extrinsics_metric_applied = False
-            self.latest_extrinsics_quality = self._summarize_extrinsics_quality(payload.get("cameras"))
+            self.latest_extrinsics_quality = {}
 
     @staticmethod
     def _resolve_project_path(raw_path: str, fallback: Path) -> Path:
@@ -2037,7 +1991,7 @@ class WandGuiState:
             resolved = PROJECT_ROOT / resolved
         if resolved.is_dir():
             return resolved
-        if resolved.is_file() and resolved.name.startswith("calibration_extrinsics_v1"):
+        if resolved.is_file() and resolved.name.startswith("extrinsics_pose_v2"):
             return resolved.parent
         raise ValueError("tracking calibration_path must be a calibration directory or extrinsics file")
 
@@ -2140,14 +2094,9 @@ class WandGuiState:
             "mask_stop": lambda: self.session._broadcast(targets, "mask_stop"),
         }
         handler = command_handlers.get(command)
-        if command in ("start", "start_pose_capture", "start_wand_metric_capture"):
-            capture_kind = "pose_capture"
-            if command == "start_wand_metric_capture":
-                capture_kind = "wand_metric_capture"
-            if command == "start":
-                capture_kind = "pose_capture"
-            log_path = self._start_capture_log(capture_kind)
-            result = self.session._broadcast(targets, "start", mode=capture_kind)
+        if command in ("start", "start_pose_capture"):
+            log_path = self._start_capture_log("pose_capture")
+            result = self.session._broadcast(targets, "start", mode="pose_capture")
             payload_out: Dict[str, Any] = {command: result, "capture_log": {"path": str(log_path)}}
             if not self._all_acked(result):
                 stop_meta = self._stop_capture_log()
@@ -2156,7 +2105,7 @@ class WandGuiState:
             self._update_camera_status({command: result})
             self.last_result = payload_out
             return self.last_result
-        if command in ("stop", "stop_pose_capture", "stop_wand_metric_capture"):
+        if command in ("stop", "stop_pose_capture"):
             result = self.session._broadcast(targets, "stop")
             payload_out = {command: result}
             stop_meta = self._stop_capture_log()
@@ -2206,89 +2155,30 @@ class WandGuiState:
         if not isinstance(raw_result, dict):
             raise ValueError("extrinsics solver returned invalid response")
 
-        camera_rows = raw_result.get("cameras")
+        pose_section = raw_result.get("pose", {})
+        camera_rows = pose_section.get("camera_poses", []) if isinstance(pose_section, dict) else []
         camera_count = len(camera_rows) if isinstance(camera_rows, list) else 0
-        session_meta = raw_result.get("session_meta", {})
-        if not isinstance(session_meta, dict):
-            session_meta = {}
-        quality_summary = self._summarize_validation(session_meta.get("pose_validation"))
+        solve_summary = pose_section.get("solve_summary", {}) if isinstance(pose_section, dict) else {}
+        if not isinstance(solve_summary, dict):
+            solve_summary = {}
+        quality_summary = {
+            key: solve_summary.get(key)
+            for key in ("usable_rows", "complete_rows", "median_reproj_error_px", "p90_reproj_error_px")
+            if key in solve_summary
+        }
 
         summary = {
             "ok": True,
-            "reference_camera_id": raw_result.get("reference_camera_id"),
+            "camera_order": raw_result.get("camera_order", []),
             "camera_count": camera_count,
             "output_path": str(resolved_output),
             "quality": quality_summary,
-            "metric_floor_applied": False,
-            "wand_validation_applied": False,
+            "metric_status": raw_result.get("metric", {}).get("status"),
+            "world_status": raw_result.get("world", {}).get("status"),
         }
         self.latest_extrinsics_path = resolved_output
         self.latest_extrinsics_quality = quality_summary
-        self.latest_extrinsics_metric_applied = False
         self.last_result = {"generate_extrinsics": summary}
-        return self.last_result
-
-    def apply_wand_scale_floor(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        intrinsics_raw = str(payload.get("intrinsics_path", "calibration")).strip()
-        wand_metric_raw = str(payload.get("wand_metric_log_path", str(DEFAULT_WAND_METRIC_LOG_PATH))).strip()
-        output_raw = str(payload.get("output_path", str(DEFAULT_EXTRINSICS_OUTPUT_PATH))).strip()
-        intrinsics_path = self._resolve_project_path(intrinsics_raw, Path("calibration"))
-        resolved_wand_metric = self._resolve_project_path(wand_metric_raw, DEFAULT_WAND_METRIC_LOG_PATH)
-        resolved_output = self._resolve_project_path(output_raw, DEFAULT_EXTRINSICS_OUTPUT_PATH)
-        pair_window_us = int(payload.get("pair_window_us", 8000))
-        max_wand_metric_samples = int(payload.get("max_wand_metric_samples", 16))
-        expected_baseline_raw = payload.get("expected_baseline_m")
-        if pair_window_us < 1:
-            raise ValueError("pair_window_us must be >= 1")
-        if max_wand_metric_samples < 1:
-            raise ValueError("max_wand_metric_samples must be >= 1")
-        expected_baseline_m = None if expected_baseline_raw in (None, "") else float(expected_baseline_raw)
-        if expected_baseline_m is not None and expected_baseline_m <= 0.0:
-            raise ValueError("expected_baseline_m must be > 0")
-        if not resolved_output.exists() or not resolved_output.is_file():
-            raise ValueError(f"output_path does not exist: {resolved_output}")
-        if not resolved_wand_metric.exists() or not resolved_wand_metric.is_file():
-            raise ValueError(f"wand_metric_log_path does not exist: {resolved_wand_metric}")
-
-        try:
-            raw_result = self._apply_wand_scale_floor_solver(
-                intrinsics_path=str(intrinsics_path),
-                extrinsics_path=str(resolved_output),
-                wand_metric_log_path=str(resolved_wand_metric),
-                output_path=str(resolved_output),
-                pair_window_us=pair_window_us,
-                max_wand_metric_samples=max_wand_metric_samples,
-                expected_baseline_m=expected_baseline_m,
-            )
-        except FileNotFoundError as exc:
-            missing_path = Path(getattr(exc, "filename", "") or str(resolved_wand_metric))
-            raise ValueError(f"wand_metric_log_path does not exist: {missing_path}") from exc
-        if not isinstance(raw_result, dict):
-            raise ValueError("wand scale/floor solver returned invalid response")
-
-        camera_rows = raw_result.get("cameras")
-        camera_count = len(camera_rows) if isinstance(camera_rows, list) else 0
-        session_meta = raw_result.get("session_meta", {})
-        if not isinstance(session_meta, dict):
-            session_meta = {}
-        quality_summary = self._summarize_validation(session_meta.get("wand_metric_validation"))
-        summary = {
-            "ok": True,
-            "reference_camera_id": raw_result.get("reference_camera_id"),
-            "camera_count": camera_count,
-            "output_path": str(resolved_output),
-            "quality": quality_summary,
-            "wand_metric_validation": self._summarize_validation(session_meta.get("wand_metric_validation")),
-            "scale_source": session_meta.get("scale_source"),
-            "floor_source": session_meta.get("floor_source"),
-            "wand_metric_frames": int(session_meta.get("wand_metric_frames", 0) or 0),
-        }
-        self.latest_extrinsics_path = resolved_output
-        self.latest_extrinsics_quality = quality_summary
-        self.latest_extrinsics_metric_applied = bool(
-            summary.get("scale_source") not in (None, "none") and summary.get("floor_source") not in (None, "none")
-        )
-        self.last_result = {"apply_wand_scale_floor": summary}
         return self.last_result
 
     def _update_camera_status(self, result: Dict[str, Dict[str, Dict[str, Any]]]) -> None:
@@ -2318,10 +2208,10 @@ class WandGuiState:
     def _start_capture_log(self, capture_kind: str) -> Path:
         with self.lock:
             if self._capture_logger is not None and self._capture_log_active:
-                default_path = self.pose_capture_log_path if capture_kind == "pose_capture" else self.wand_metric_log_path
+                default_path = self.pose_capture_log_path
                 return Path(self._capture_logger.current_log_file or str(default_path))
             self.capture_log_dir.mkdir(parents=True, exist_ok=True)
-            target_path = self.pose_capture_log_path if capture_kind == "pose_capture" else self.wand_metric_log_path
+            target_path = self.pose_capture_log_path
             if target_path.exists():
                 target_path.unlink(missing_ok=True)
             logger = FrameLogger(log_dir=str(self.capture_log_dir))
@@ -2330,11 +2220,8 @@ class WandGuiState:
             self._capture_log_active = True
             self._active_capture_kind = capture_kind
             self._capture_completed[capture_kind] = False
-            if capture_kind == "pose_capture":
-                self.pose_capture_log_path = Path(log_file)
-                return self.pose_capture_log_path
-            self.wand_metric_log_path = Path(log_file)
-            return self.wand_metric_log_path
+            self.pose_capture_log_path = Path(log_file)
+            return self.pose_capture_log_path
 
     def _stop_capture_log(self) -> Dict[str, Any] | None:
         with self.lock:
@@ -2351,12 +2238,8 @@ class WandGuiState:
                 path = Path(str(metadata["log_file"]))
                 if active_kind == "pose_capture":
                     self.pose_capture_log_path = path
-                elif active_kind == "wand_metric_capture":
-                    self.wand_metric_log_path = path
             if active_kind == "pose_capture":
                 self._capture_completed["pose_capture"] = self.pose_capture_log_path.exists() and self.pose_capture_log_path.is_file()
-            elif active_kind == "wand_metric_capture":
-                self._capture_completed["wand_metric_capture"] = self.wand_metric_log_path.exists() and self.wand_metric_log_path.is_file()
         return metadata
 
     @staticmethod
@@ -2401,10 +2284,6 @@ class WandGuiHandler(BaseHTTPRequestHandler):
             if self.path == "/api/generate_extrinsics":
                 self._debug_log("POST /api/generate_extrinsics")
                 self._send_json(self.state.generate_extrinsics(payload))
-                return
-            if self.path == "/api/apply_wand_scale_floor":
-                self._debug_log("POST /api/apply_wand_scale_floor")
-                self._send_json(self.state.apply_wand_scale_floor(payload))
                 return
             if self.path == "/api/tracking/start":
                 self._debug_log("POST /api/tracking/start")
@@ -2501,7 +2380,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _load_extrinsics_solvers():
+def _load_extrinsics_solver():
     script_path = MODULE_SRC_ROOT / "camera-calibration" / "calibrate_extrinsics.py"
     spec = importlib.util.spec_from_file_location("calibrate_extrinsics", script_path)
     if spec is None or spec.loader is None:
@@ -2510,12 +2389,9 @@ def _load_extrinsics_solvers():
     sys.modules["calibrate_extrinsics"] = module
     spec.loader.exec_module(module)
     solve_extrinsics = getattr(module, "solve_extrinsics", None)
-    apply_wand_scale_floor = getattr(module, "apply_wand_scale_floor", None)
     if not callable(solve_extrinsics):
         raise RuntimeError("solve_extrinsics is missing in calibrate_extrinsics.py")
-    if not callable(apply_wand_scale_floor):
-        raise RuntimeError("apply_wand_scale_floor is missing in calibrate_extrinsics.py")
-    return solve_extrinsics, apply_wand_scale_floor
+    return solve_extrinsics
 
 
 def main() -> None:

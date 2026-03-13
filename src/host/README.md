@@ -254,7 +254,7 @@ print(status["recommendation"])
 
 ### wand_session.py - wand収録オーケストレーション
 
-Host主導で `ping -> set_exposure/set_gain/set_fps -> mask_start -> start(mode=pose_capture|wand_metric_capture) -> stop` を実行。
+Host主導で `ping -> set_exposure/set_gain/set_fps -> mask_start -> start(mode=pose_capture) -> stop` を実行。
 `hosts.ini` と `UDPReceiver.get_camera_addresses()` をマージして対象カメラを確定。
 
 ```python

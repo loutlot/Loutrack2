@@ -1,0 +1,96 @@
+{
+  "schema_version": "2.0",
+  "method": "reference_pose_capture",
+  "created_at": "2026-03-13T03:45:06.666455+00:00",
+  "pose_capture_log_path": "/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/logs/extrinsics_pose_capture.jsonl",
+  "camera_order": [
+    "pi-cam-01",
+    "pi-cam-02"
+  ],
+  "pose": {
+    "frame": "similarity_camera",
+    "camera_poses": [
+      {
+        "camera_id": "pi-cam-01",
+        "R": [
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "t": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "focal_scale": 1.0035936616835908,
+        "median_reproj_error_px": 4.909019641598401
+      },
+      {
+        "camera_id": "pi-cam-02",
+        "R": [
+          [
+            -0.022878187663503857,
+            0.14348126344807502,
+            -0.9893885564168294
+          ],
+          [
+            -0.3218670937419764,
+            0.9358978869560903,
+            0.1431667529743521
+          ],
+          [
+            0.9465084059295656,
+            0.32172701507717605,
+            0.02477024978080067
+          ]
+        ],
+        "t": [
+          0.9926908378627431,
+          -0.15608417467376406,
+          0.3140799714701196
+        ],
+        "focal_scale": 1.0379109138611402,
+        "median_reproj_error_px": 3.008014770200608
+      }
+    ],
+    "solve_summary": {
+      "captured_rows": 1645,
+      "complete_rows": 152,
+      "pair_overlaps": {
+        "pi-cam-01|pi-cam-02": 152
+      },
+      "iterations": 14,
+      "ba_cost": 2323.9374291161866,
+      "status": 2,
+      "success": true,
+      "message": "`ftol` termination condition is satisfied.",
+      "usable_rows": 152,
+      "median_reproj_error_px": 3.9140976334614326,
+      "p90_reproj_error_px": 98.45212403789925
+    }
+  },
+  "metric": {
+    "status": "unresolved",
+    "scale_m_per_unit": null,
+    "source": null
+  },
+  "world": {
+    "status": "unresolved",
+    "frame": null,
+    "to_world_matrix": null,
+    "floor_plane": null,
+    "source": null
+  }
+}
