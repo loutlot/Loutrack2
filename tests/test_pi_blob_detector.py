@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.pi.capture import (
+    ClockSyncSnapshot,
     ControlServer,
     ControlServerConfig,
     DebugPreview,
@@ -87,6 +88,33 @@ def test_control_server_ping_includes_blob_diagnostics() -> None:
     assert result["debug_preview_enabled"] is False
     assert result["debug_preview_active"] is False
     assert result["blob_diagnostics"]["threshold"] == 200
+    assert result["clock_sync"]["status"] in {"locked", "degraded", "unknown"}
+    assert "offset_us" in result["clock_sync"]
+    assert "source" in result["clock_sync"]
+    assert result["timestamping"]["active_source"] == "capture_dequeue"
+    assert result["timestamping"]["sensor_timestamp_available"] is False
+
+
+def test_control_server_ping_caches_clock_sync_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=False))
+    calls = {"count": 0}
+
+    def _probe() -> ClockSyncSnapshot:
+        calls["count"] += 1
+        return ClockSyncSnapshot(status="locked", offset_us=12.0, source="pmc")
+
+    times = iter([1_000_000, 1_500_000, 62_000_000])
+    monkeypatch.setattr(server, "_probe_clock_sync", _probe)
+    monkeypatch.setattr("src.pi.capture._clock_realtime_us", lambda: next(times))
+
+    first = server._handle_ping("req-1", "pi-cam-01")
+    second = server._handle_ping("req-2", "pi-cam-01")
+    third = server._handle_ping("req-3", "pi-cam-01")
+
+    assert first["result"]["clock_sync"]["status"] == "locked"
+    assert second["result"]["clock_sync"]["status"] == "locked"
+    assert third["result"]["clock_sync"]["status"] == "locked"
+    assert calls["count"] == 2
 
 
 def test_mask_start_can_refresh_existing_mask() -> None:

@@ -34,6 +34,10 @@ ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@<PI_IP_02>
 各Raspberry Piで以下を設定:
 
 ```bash
+# PTP prerequisite
+sudo apt-get update
+sudo apt-get install -y linuxptp
+
 # ディレクトリ作成
 sudo mkdir -p /opt/loutrack/releases
 sudo chown pi:pi /opt/loutrack
@@ -59,6 +63,12 @@ EOF
 sudo systemctl daemon-reload
 sudo systemctl enable loutrack.service
 ```
+
+PTP はアプリとは別に OS/service レイヤで常時追従させます。
+
+- `pi-cam-01` を fixed Grandmaster とする
+- 他 Pi は PTP client として同期する
+- `capture.py` は `pmc` で状態参照するだけで、`ptp4l` / `phc2sys` の起動・再起動は行わない
 
 ### 3. sudo権限の設定
 
@@ -225,6 +235,7 @@ tail -f src/deploy/deploy.log
 - エントリポイント: Pi 側のキャプチャ処理は src/pi/capture.py を使用します。
 - TCP 制御 NDJSON ポート: 8554 をデフォルトとして、制御コマンドは PYTHONPATH=src .venv/bin/python -m host.control ... 形式で実行します。
 - UDP フレーム: Pi から Host へ送信される各データグラムは JSON 形式。デフォルトのブロードキャスト先は 255.255.255.255:5000 です。
+- UDP フレーム: 既存キーに加えて `timestamp_source` を含みます。`timestamp` は露光寄りの epoch(us) を優先して送ります。
 - systemd の例: capture.py を引数付きで実行するか、EnvironmentFile を用いて環境変数を読み込む形で起動します。
 - src/deploy/hosts.ini の camera_id: 文字列で pi-cam-01 等を使用します。
 - 未実装/検討中: mask/LED の制御欄は現時点では未実装、または今後の計画として記載します。

@@ -43,6 +43,7 @@ class CameraRow:
     anchor_timestamp: int
     anchor_frame_index: int
     image_points: List[np.ndarray | None]
+    matched_delta_us: List[int | None]
 
 
 def _extract_frame_payload(entry: Dict[str, Any]) -> Dict[str, Any] | None:
@@ -190,9 +191,11 @@ def build_camera_order_and_rows(
     complete_rows = 0
     for obs in observations_by_camera[anchor_camera]:
         image_points: List[np.ndarray | None] = [obs.image_point.astype(np.float64)]
+        matched_delta_us: List[int | None] = [None]
         for camera_id in camera_order[1:]:
             match = _nearest_within_window(observations_by_camera[camera_id], obs.timestamp, pair_window_us)
             image_points.append(None if match is None else match.image_point.astype(np.float64))
+            matched_delta_us.append(None if match is None else int(abs(match.timestamp - obs.timestamp)))
         if sum(point is not None for point in image_points) == len(camera_order):
             complete_rows += 1
         rows.append(
@@ -200,6 +203,7 @@ def build_camera_order_and_rows(
                 anchor_timestamp=obs.timestamp,
                 anchor_frame_index=obs.frame_index,
                 image_points=image_points,
+                matched_delta_us=matched_delta_us,
             )
         )
 
@@ -519,6 +523,28 @@ def _compute_reprojection_statistics(
     }
 
 
+def _compute_matching_statistics(rows: Sequence[CameraRow]) -> Dict[str, int | None]:
+    matched_deltas: List[int] = []
+    for row in rows:
+        observations = [point for point in row.image_points if point is not None]
+        if len(observations) < 2:
+            continue
+        for delta in row.matched_delta_us[1:]:
+            if delta is not None:
+                matched_deltas.append(int(delta))
+    if not matched_deltas:
+        return {
+            "matched_delta_us_p50": None,
+            "matched_delta_us_p90": None,
+            "matched_delta_us_max": None,
+        }
+    return {
+        "matched_delta_us_p50": int(round(float(np.percentile(matched_deltas, 50)))),
+        "matched_delta_us_p90": int(round(float(np.percentile(matched_deltas, 90)))),
+        "matched_delta_us_max": int(max(matched_deltas)),
+    }
+
+
 def serialize_extrinsics_pose_v2(
     *,
     output_path: str | Path,
@@ -616,6 +642,7 @@ def solve_extrinsics(
         "usable_rows": int(validation["usable_rows"]),
         "median_reproj_error_px": validation["median_reproj_error_px"],
         "p90_reproj_error_px": validation["p90_reproj_error_px"],
+        **_compute_matching_statistics(rows),
     }
     return serialize_extrinsics_pose_v2(
         output_path=output_path,

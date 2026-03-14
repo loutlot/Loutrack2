@@ -137,6 +137,9 @@ def test_solver_outputs_v2_and_filters_non_single_blob_rows(tmp_path: Path) -> N
     assert result["world"]["status"] == "unresolved"
     assert result["pose"]["frame"] == "similarity_camera"
     assert result["pose"]["solve_summary"]["usable_rows"] >= 20
+    assert result["pose"]["solve_summary"]["matched_delta_us_p50"] == 900
+    assert result["pose"]["solve_summary"]["matched_delta_us_p90"] == 900
+    assert result["pose"]["solve_summary"]["matched_delta_us_max"] == 900
     assert len(result["pose"]["camera_poses"]) == 2
 
 
@@ -210,5 +213,6 @@ def test_three_camera_solver_recovers_pose_and_focal_bounds(tmp_path: Path) -> N
     assert len(result["pose"]["camera_poses"]) == 3
     assert result["pose"]["solve_summary"]["median_reproj_error_px"] is not None
     assert result["pose"]["solve_summary"]["median_reproj_error_px"] < 5.0
+    assert result["pose"]["solve_summary"]["matched_delta_us_max"] == 1400
     for row in result["pose"]["camera_poses"]:
         assert 0.9 <= float(row["focal_scale"]) <= 1.1

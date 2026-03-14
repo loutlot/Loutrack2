@@ -643,6 +643,8 @@ HTML_PAGE = """<!doctype html>
                   <th>Blobs</th>
                   <th>Reject</th>
                   <th>Mask</th>
+                  <th>Clock</th>
+                  <th>Timestamp</th>
                   <th>Preview</th>
                   <th>Healthy</th>
                   <th>Last Error</th>
@@ -724,7 +726,7 @@ HTML_PAGE = """<!doctype html>
             <label for="intrinsicsPath">Intrinsics Dir<input id="intrinsicsPath" type="text" value="calibration"></label>
             <label for="logPath">Pose Log Path<input id="logPath" type="text" value="logs/extrinsics_pose_capture.jsonl"></label>
             <label for="outputPath">Output Path<input id="outputPath" type="text" value="calibration/extrinsics_pose_v2.json"></label>
-            <label for="pairWindowUs">Pair Window (us)<input id="pairWindowUs" type="number" min="1" step="100" value="8000"></label>
+            <label for="pairWindowUs">Pair Window (us)<input id="pairWindowUs" type="number" min="1" step="100" value="2000"></label>
             <label for="minPairs">Min Pairs<input id="minPairs" type="number" min="1" step="1" value="8"></label>
           </div>
           <div class="button-row">
@@ -1315,6 +1317,7 @@ HTML_PAGE = """<!doctype html>
       const selectedCount = workflow.selected_count ?? 0;
       const totalCount = workflow.total_count ?? state.cameras.length;
       const statuses = segmentStatuses(workflow);
+      const extrinsicsQuality = workflow.latest_extrinsics_quality || {};
 
       elements.workflowRail.innerHTML = stepOrder.map((step, index) => `
         <div class="step-pill" data-status="${statuses[step]}">
@@ -1341,7 +1344,7 @@ HTML_PAGE = """<!doctype html>
         ? `Pose capture は完了しています（${workflow.pose_capture_log_path || "logs/extrinsics_pose_capture.jsonl"}）。続けて Generate Extrinsics を実行します。`
         : `mask 完了後に Start Pose Capture を実行します。収録中は Pi preview で単一点ターゲット追従を監視します。`;
       elements.extrinsicsSummary.textContent = workflow.extrinsics_ready
-        ? `Similarity extrinsics は生成済みです。tracking はこの v2 pose をそのまま使用します。metric/world は未解決です。`
+        ? `Similarity extrinsics は生成済みです。usable=${extrinsicsQuality.usable_rows ?? "-"}, median=${extrinsicsQuality.median_reproj_error_px ?? "-"}px, p90=${extrinsicsQuality.p90_reproj_error_px ?? "-"}px, match p90=${extrinsicsQuality.matched_delta_us_p90 ?? "-"}us。tracking はこの v2 pose をそのまま使用します。metric/world は未解決です。`
         : `pose capture 後に Generate Extrinsics を実行します。出力は similarity pose のみで、metric/world は後続実装です。`;
 
       const stepMap = {
@@ -1367,10 +1370,12 @@ HTML_PAGE = """<!doctype html>
       const healthy = selected.filter((camera) => camera.healthy).length;
       const running = selected.filter((camera) => camera.diagnostics?.state === "RUNNING").length;
       const preview = selected.filter((camera) => camera.diagnostics?.debug_preview_enabled).length;
+      const locked = selected.filter((camera) => camera.diagnostics?.clock_sync?.status === "locked").length;
       elements.cameraSummary.innerHTML = [
         `<div class="metric"><span class="eyebrow">Selected</span><strong>${selected.length}</strong><p>現在の操作対象</p></div>`,
         `<div class="metric"><span class="eyebrow">Healthy</span><strong>${healthy}</strong><p>ping ack=true</p></div>`,
         `<div class="metric"><span class="eyebrow">Running</span><strong>${running}</strong><p>pose capture 実行中</p></div>`,
+        `<div class="metric"><span class="eyebrow">PTP Locked</span><strong>${locked}</strong><p>offset <= 500us</p></div>`,
         `<div class="metric"><span class="eyebrow">Preview Enabled</span><strong>${preview}</strong><p>Pi desktop OpenCV</p></div>`,
       ].join("");
     }
@@ -1381,6 +1386,14 @@ HTML_PAGE = """<!doctype html>
         const blob = diagnostics.blob_diagnostics || {};
         const rejectCount = Number(blob.rejected_by_diameter || 0) + Number(blob.rejected_by_circularity || 0);
         const maskRatio = diagnostics.mask_ratio != null ? `${(Number(diagnostics.mask_ratio) * 100).toFixed(1)}%` : "-";
+        const clockSync = diagnostics.clock_sync || {};
+        const timestamping = diagnostics.timestamping || {};
+        const offsetUs = Number(clockSync.offset_us);
+        const offsetLabel = Number.isFinite(offsetUs) ? `${Math.round(offsetUs)}us` : "n/a";
+        const clockVariant = clockSync.status === "locked" ? "ok" : (clockSync.status === "degraded" ? "warn" : "muted");
+        const clockLabel = clockSync.status || "unknown";
+        const timestampSource = timestamping.active_source || "-";
+        const timestampHint = timestamping.sensor_timestamp_available ? "sensor" : "fallback";
         const previewState = diagnostics.debug_preview_enabled
           ? diagnostics.debug_preview_active ? badge("Active", "ok") : badge("Enabled", "warn")
           : badge("Off", "muted");
@@ -1393,6 +1406,8 @@ HTML_PAGE = """<!doctype html>
             <td>${escapeHtml(blob.last_blob_count ?? "")}</td>
             <td>${escapeHtml(rejectCount)}</td>
             <td>${escapeHtml(maskRatio)}</td>
+            <td>${badge(`${clockLabel}`, clockVariant)} <span class="hint">${escapeHtml(offsetLabel)}</span></td>
+            <td>${escapeHtml(timestampSource)} <span class="hint">${escapeHtml(timestampHint)}</span></td>
             <td>${previewState}</td>
             <td>${camera.healthy ? badge("OK", "ok") : badge("No Ack", "warn")}</td>
             <td>${escapeHtml(camera.last_error || "")}</td>
@@ -1965,7 +1980,15 @@ class WandGuiState:
         if isinstance(solve_summary, dict):
             self.latest_extrinsics_quality = {
                 key: solve_summary.get(key)
-                for key in ("usable_rows", "complete_rows", "median_reproj_error_px", "p90_reproj_error_px")
+                for key in (
+                    "usable_rows",
+                    "complete_rows",
+                    "median_reproj_error_px",
+                    "p90_reproj_error_px",
+                    "matched_delta_us_p50",
+                    "matched_delta_us_p90",
+                    "matched_delta_us_max",
+                )
                 if key in solve_summary
             }
         else:
@@ -2129,7 +2152,7 @@ class WandGuiState:
         intrinsics_path = self._resolve_project_path(intrinsics_raw, Path("calibration"))
         resolved_log_path = self._resolve_project_path(log_raw, DEFAULT_POSE_LOG_PATH)
         resolved_output = self._resolve_project_path(output_raw, DEFAULT_EXTRINSICS_OUTPUT_PATH)
-        pair_window_us = int(payload.get("pair_window_us", 8000))
+        pair_window_us = int(payload.get("pair_window_us", 2000))
         min_pairs = int(payload.get("min_pairs", 8))
         if pair_window_us < 1:
             raise ValueError("pair_window_us must be >= 1")
@@ -2163,7 +2186,15 @@ class WandGuiState:
             solve_summary = {}
         quality_summary = {
             key: solve_summary.get(key)
-            for key in ("usable_rows", "complete_rows", "median_reproj_error_px", "p90_reproj_error_px")
+            for key in (
+                "usable_rows",
+                "complete_rows",
+                "median_reproj_error_px",
+                "p90_reproj_error_px",
+                "matched_delta_us_p50",
+                "matched_delta_us_p90",
+                "matched_delta_us_max",
+            )
             if key in solve_summary
         }
 

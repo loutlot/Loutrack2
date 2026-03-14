@@ -156,6 +156,9 @@ def test_generate_extrinsics_summary_and_tracking_use_v2_path(tmp_path: Path, mo
                     "pair_overlaps": {"pi-cam-01|pi-cam-02": 32},
                     "median_reproj_error_px": 1.2,
                     "p90_reproj_error_px": 2.4,
+                    "matched_delta_us_p50": 600,
+                    "matched_delta_us_p90": 900,
+                    "matched_delta_us_max": 1200,
                 },
             },
             "metric": {"status": "unresolved", "scale_m_per_unit": None, "source": None},
@@ -174,6 +177,7 @@ def test_generate_extrinsics_summary_and_tracking_use_v2_path(tmp_path: Path, mo
     )
     assert generated["generate_extrinsics"]["ok"] is True
     assert generated["generate_extrinsics"]["quality"]["median_reproj_error_px"] == 1.2
+    assert generated["generate_extrinsics"]["quality"]["matched_delta_us_p90"] == 900
     assert generated["generate_extrinsics"]["metric_status"] == "unresolved"
     assert generated["generate_extrinsics"]["world_status"] == "unresolved"
     assert "wand_metric_log_path" not in called

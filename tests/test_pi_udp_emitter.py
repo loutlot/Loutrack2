@@ -56,13 +56,15 @@ def test_udp_frame_emitter_sends_three_frames() -> None:
 
     assert len(received) == 3
 
-    required_keys = {"camera_id", "timestamp", "frame_index", "blobs"}
+    required_keys = {"camera_id", "timestamp", "timestamp_source", "frame_index", "blobs", "capture_mode"}
     frame_indices: list[int] = []
     for msg in received:
         assert set(msg.keys()) == required_keys
         assert msg["camera_id"] == "pi-cam-test"
         assert isinstance(msg["timestamp"], int)
         assert msg["timestamp"] >= 0
+        assert msg["timestamp_source"] == "capture_dequeue"
+        assert msg["capture_mode"] == "capture"
         assert isinstance(msg["frame_index"], int)
         frame_indices.append(msg["frame_index"])
         assert isinstance(msg["blobs"], list)

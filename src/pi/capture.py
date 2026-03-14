@@ -6,6 +6,8 @@ import importlib
 import json
 import math
 import os
+import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -13,7 +15,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Optional, Protocol, cast
+from typing import Literal, Optional, Protocol, cast
 
 import cv2
 import numpy as np
@@ -45,6 +47,8 @@ DEFAULT_CAPTURE_WIDTH = 2304
 DEFAULT_CAPTURE_HEIGHT = 1296
 DEFAULT_TARGET_FPS = 56
 PREVIEW_STOP_TIMEOUT_SECONDS = 2.0
+PTP_SANITY_CACHE_US = 60_000_000
+PTP_LOCK_OFFSET_THRESHOLD_US = 500.0
 
 MAX_LINE_BYTES = 65536
 LINE_TIMEOUT_SECONDS = 2.0
@@ -235,6 +239,11 @@ class UDPFrameEmitter:
         self._debug_preview: DebugPreview | None = debug_preview
         self._capture_mode: str = str(capture_mode)
         self._last_pose_blob_xy: tuple[float, float] | None = None
+        self._time_override_enabled: bool = time_us_fn is not None
+        self._last_timestamping_status: dict[str, object] = {
+            "active_source": "capture_dequeue",
+            "sensor_timestamp_available": False,
+        }
 
     def start(self) -> None:
         with self._lock:
@@ -302,6 +311,10 @@ class UDPFrameEmitter:
         with self._lock:
             return dict(self._last_detection_stats)
 
+    def get_last_timestamping_status(self) -> dict[str, object]:
+        with self._lock:
+            return dict(self._last_timestamping_status)
+
     def set_mask(self, mask: np.ndarray | None) -> None:
         with self._lock:
             self._mask = mask.astype(bool, copy=False) if mask is not None else None
@@ -338,7 +351,8 @@ class UDPFrameEmitter:
                 return
 
             try:
-                frame = self._backend.next_frame()
+                captured_frame = self._backend.next_captured_frame()
+                frame = captured_frame.image
                 blobs, detection_stats = detect_blobs(
                     frame,
                     threshold=threshold,
@@ -349,6 +363,10 @@ class UDPFrameEmitter:
                 )
                 with self._lock:
                     self._last_detection_stats = detection_stats
+                    self._last_timestamping_status = {
+                        "active_source": str(captured_frame.timestamp_source),
+                        "sensor_timestamp_available": bool(captured_frame.sensor_timestamp_ns is not None),
+                    }
                 if self._debug_preview is not None:
                     self._debug_preview.show(
                         frame=frame,
@@ -361,7 +379,8 @@ class UDPFrameEmitter:
                 return
             msg = {
                 "camera_id": self._camera_id,
-                "timestamp": int(self._time_us_fn()),
+                "timestamp": self._public_timestamp_us(captured_frame),
+                "timestamp_source": str(captured_frame.timestamp_source),
                 "frame_index": int(self._frame_index & 0xFFFFFFFF),
                 "blobs": blobs,
             }
@@ -394,6 +413,17 @@ class UDPFrameEmitter:
                 else:
                     next_tick = now
 
+    def _public_timestamp_us(self, captured_frame: "CapturedFrame") -> int:
+        if (
+            self._time_override_enabled
+            and str(captured_frame.timestamp_source) == "capture_dequeue"
+        ):
+            return int(self._time_us_fn())
+        value = int(captured_frame.timestamp_us)
+        if value >= 0:
+            return value
+        return int(self._time_us_fn())
+
 
 @dataclass
 class DummyBackendConfig:
@@ -408,6 +438,21 @@ class DummyBackendConfig:
 
 class BackendUnavailableError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class CapturedFrame:
+    image: np.ndarray
+    timestamp_us: int
+    timestamp_source: Literal["sensor_metadata", "capture_dequeue"]
+    sensor_timestamp_ns: int | None = None
+
+
+@dataclass(frozen=True)
+class ClockSyncSnapshot:
+    status: Literal["locked", "degraded", "unknown"]
+    offset_us: float | None
+    source: Literal["pmc", "unavailable"]
 
 
 class DebugPreview:
@@ -571,6 +616,8 @@ class FrameBackend(Protocol):
 
     def stop(self) -> None: ...
 
+    def next_captured_frame(self) -> CapturedFrame: ...
+
     def next_frame(self) -> np.ndarray: ...
 
     def capture_array(self) -> np.ndarray: ...
@@ -597,7 +644,17 @@ class _Picamera2Api(Protocol):
 
     def capture_array(self) -> object: ...
 
+    def capture_request(self) -> object: ...
+
     def set_controls(self, controls: dict[str, object]) -> object: ...
+
+
+class _Picamera2Request(Protocol):
+    def make_array(self, stream: str = "main") -> object: ...
+
+    def get_metadata(self) -> object: ...
+
+    def release(self) -> None: ...
 
 
 class DummyBackend:
@@ -631,7 +688,19 @@ class DummyBackend:
     def frame_index(self) -> int:
         return self._frame_index
 
+    def next_captured_frame(self) -> CapturedFrame:
+        frame = self._generate_frame()
+        return CapturedFrame(
+            image=frame,
+            timestamp_us=int(time.time_ns() // 1000),
+            timestamp_source="capture_dequeue",
+            sensor_timestamp_ns=None,
+        )
+
     def next_frame(self) -> np.ndarray:
+        return self.next_captured_frame().image
+
+    def _generate_frame(self) -> np.ndarray:
         cfg = self._config
         frame = np.full(
             (cfg.height, cfg.width),
@@ -666,7 +735,7 @@ class DummyBackend:
         return frame
 
     def capture_array(self) -> np.ndarray:
-        return self.next_frame()
+        return self.next_captured_frame().image
 
 
 @dataclass
@@ -757,18 +826,82 @@ class Picamera2Backend:
         except Exception:
             pass
 
-    def next_frame(self) -> np.ndarray:
+    def next_captured_frame(self) -> CapturedFrame:
         picam2 = self._picam2
         if picam2 is None or not self._running:
             raise RuntimeError("picamera2 backend not running")
 
+        capture_realtime_us: int | None = None
+        capture_monotonic_us: int | None = None
+        sensor_timestamp_ns: int | None = None
+
+        if hasattr(picam2, "capture_request"):
+            request_obj = None
+            try:
+                request_obj = picam2.capture_request()
+                capture_realtime_us = _clock_realtime_us()
+                capture_monotonic_us = _clock_monotonic_us()
+                request = cast(_Picamera2Request, request_obj)
+                try:
+                    frame_obj = request.make_array("main")
+                except TypeError:
+                    frame_obj = request.make_array()
+                metadata = request.get_metadata()
+                sensor_timestamp_ns = _extract_sensor_timestamp_ns(metadata)
+                if not isinstance(frame_obj, np.ndarray):
+                    raise RuntimeError("picamera2 capture_request.make_array returned non-ndarray")
+                timestamp_us = _sensor_timestamp_to_epoch_us(
+                    sensor_timestamp_ns,
+                    capture_realtime_us,
+                    capture_monotonic_us,
+                )
+                try:
+                    request.release()
+                except Exception:
+                    pass
+                request_obj = None
+                if timestamp_us is not None:
+                    return CapturedFrame(
+                        image=cast(np.ndarray, frame_obj),
+                        timestamp_us=timestamp_us,
+                        timestamp_source="sensor_metadata",
+                        sensor_timestamp_ns=sensor_timestamp_ns,
+                    )
+                return CapturedFrame(
+                    image=cast(np.ndarray, frame_obj),
+                    timestamp_us=int(capture_realtime_us),
+                    timestamp_source="capture_dequeue",
+                    sensor_timestamp_ns=sensor_timestamp_ns,
+                )
+            except Exception:
+                if request_obj is not None and hasattr(request_obj, "release"):
+                    try:
+                        cast(_Picamera2Request, request_obj).release()
+                    except Exception:
+                        pass
+            else:
+                if request_obj is not None and hasattr(request_obj, "release"):
+                    try:
+                        cast(_Picamera2Request, request_obj).release()
+                    except Exception:
+                        pass
+
         frame = picam2.capture_array()
+        capture_realtime_us = _clock_realtime_us()
         if not isinstance(frame, np.ndarray):
             raise RuntimeError("picamera2 capture_array returned non-ndarray")
-        return cast(np.ndarray, frame)
+        return CapturedFrame(
+            image=cast(np.ndarray, frame),
+            timestamp_us=int(capture_realtime_us),
+            timestamp_source="capture_dequeue",
+            sensor_timestamp_ns=None,
+        )
+
+    def next_frame(self) -> np.ndarray:
+        return self.next_captured_frame().image
 
     def capture_array(self) -> np.ndarray:
-        return self.next_frame()
+        return self.next_captured_frame().image
 
     def _apply_controls_if_running(self) -> None:
         if not self._running or self._picam2 is None:
@@ -811,6 +944,75 @@ class Picamera2Backend:
         if af_mode_enum is None:
             return 0
         return int(getattr(af_mode_enum, "Manual", 0))
+
+
+def _clock_realtime_us() -> int:
+    if hasattr(time, "clock_gettime_ns") and hasattr(time, "CLOCK_REALTIME"):
+        return int(time.clock_gettime_ns(time.CLOCK_REALTIME) // 1000)
+    return int(time.time_ns() // 1000)
+
+
+def _clock_monotonic_us() -> int:
+    if hasattr(time, "clock_gettime_ns") and hasattr(time, "CLOCK_MONOTONIC"):
+        return int(time.clock_gettime_ns(time.CLOCK_MONOTONIC) // 1000)
+    return int(time.monotonic_ns() // 1000)
+
+
+def _sensor_timestamp_to_epoch_us(
+    sensor_timestamp_ns: int | None,
+    realtime_us: int | None = None,
+    monotonic_us: int | None = None,
+) -> int | None:
+    if sensor_timestamp_ns is None:
+        return None
+    try:
+        sensor_timestamp_us = int(sensor_timestamp_ns) // 1000
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if sensor_timestamp_us < 0:
+        return None
+    realtime_value = _clock_realtime_us() if realtime_us is None else int(realtime_us)
+    monotonic_value = _clock_monotonic_us() if monotonic_us is None else int(monotonic_us)
+    epoch_offset_us = realtime_value - monotonic_value
+    timestamp_us = sensor_timestamp_us + epoch_offset_us
+    if timestamp_us < 0:
+        return None
+    return int(timestamp_us)
+
+
+def _extract_sensor_timestamp_ns(metadata: object) -> int | None:
+    if not isinstance(metadata, Mapping):
+        return None
+    for key in ("SensorTimestamp", "sensor_timestamp_ns"):
+        value = metadata.get(key)
+        if isinstance(value, (int, float)):
+            try:
+                timestamp_ns = int(value)
+            except (TypeError, ValueError, OverflowError):
+                return None
+            return timestamp_ns if timestamp_ns >= 0 else None
+    return None
+
+
+def _parse_pmc_time_status(stdout: str) -> ClockSyncSnapshot:
+    offset_match = re.search(r"\bmaster_offset\s+(-?\d+(?:\.\d+)?)", stdout)
+    if offset_match is None:
+        return ClockSyncSnapshot(status="unknown", offset_us=None, source="unavailable")
+    try:
+        offset_us = float(offset_match.group(1))
+    except ValueError:
+        return ClockSyncSnapshot(status="unknown", offset_us=None, source="unavailable")
+    servo_healthy = True
+    gm_present = re.search(r"\bgmPresent\s+(true|false)\b", stdout, flags=re.IGNORECASE)
+    if gm_present is not None and gm_present.group(1).lower() == "false":
+        servo_healthy = False
+    port_state = re.search(r"\bportState\s+([A-Z_]+)\b", stdout)
+    if port_state is not None and port_state.group(1) in {"FAULTY", "DISABLED", "LISTENING"}:
+        servo_healthy = False
+    status: Literal["locked", "degraded", "unknown"] = "locked"
+    if not servo_healthy or abs(offset_us) > PTP_LOCK_OFFSET_THRESHOLD_US:
+        status = "degraded"
+    return ClockSyncSnapshot(status=status, offset_us=offset_us, source="pmc")
 
 
 def detect_blobs(
@@ -955,6 +1157,16 @@ class ControlServer:
             "rejected_by_circularity": 0,
             "last_blob_count": 0,
         }
+        self._last_timestamping_diagnostics: dict[str, object] = {
+            "active_source": "capture_dequeue",
+            "sensor_timestamp_available": False,
+        }
+        self._clock_sync_cache_checked_at_us: int = 0
+        self._clock_sync_cache: ClockSyncSnapshot = ClockSyncSnapshot(
+            status="unknown",
+            offset_us=None,
+            source="unavailable",
+        )
 
     def _log(self, message: str) -> None:
         print(f"[capture:{self._config.camera_id}] {message}", flush=True)
@@ -1885,6 +2097,7 @@ class ControlServer:
             emitter = self._udp_emitter
             self._udp_emitter = None
             if emitter is not None:
+                self._record_timestamping_diagnostics(emitter.get_last_timestamping_status())
                 emitter.stop()
                 self._log("udp emitter stopped")
             backend = self._backend
@@ -1989,6 +2202,13 @@ class ControlServer:
     def _record_blob_diagnostics(self, stats: dict[str, object]) -> None:
         with self._state_lock:
             self._last_blob_diagnostics = dict(stats)
+
+    def _record_timestamping_diagnostics(self, stats: dict[str, object]) -> None:
+        with self._state_lock:
+            self._last_timestamping_diagnostics = {
+                "active_source": str(stats.get("active_source", "capture_dequeue")),
+                "sensor_timestamp_available": bool(stats.get("sensor_timestamp_available", False)),
+            }
 
     def _show_debug_preview(
         self,
@@ -2122,6 +2342,7 @@ class ControlServer:
             emitter = self._udp_emitter
             preview_thread = self._preview_thread
             blob_diagnostics = dict(self._last_blob_diagnostics)
+            timestamping = dict(self._last_timestamping_diagnostics)
         diagnostics["debug_preview_active"] = bool(
             emitter is not None
             or (preview_thread is not None and preview_thread.is_alive())
@@ -2130,7 +2351,49 @@ class ControlServer:
         diagnostics["blob_diagnostics"] = (
             emitter.get_last_detection_stats() if emitter is not None else blob_diagnostics
         )
+        diagnostics["clock_sync"] = self._get_clock_sync_diagnostics()
+        diagnostics["timestamping"] = (
+            emitter.get_last_timestamping_status() if emitter is not None else timestamping
+        )
         return self._ok_response(request_id, request_camera_id, result=diagnostics)
+
+    def _get_clock_sync_diagnostics(self) -> dict[str, object]:
+        now_us = _clock_realtime_us()
+        with self._state_lock:
+            cache_age_us = now_us - self._clock_sync_cache_checked_at_us
+            cached = self._clock_sync_cache
+        if self._clock_sync_cache_checked_at_us > 0 and cache_age_us < PTP_SANITY_CACHE_US:
+            return {
+                "status": str(cached.status),
+                "offset_us": cached.offset_us,
+                "source": str(cached.source),
+            }
+        snapshot = self._probe_clock_sync()
+        with self._state_lock:
+            self._clock_sync_cache_checked_at_us = now_us
+            self._clock_sync_cache = snapshot
+        return {
+            "status": str(snapshot.status),
+            "offset_us": snapshot.offset_us,
+            "source": str(snapshot.source),
+        }
+
+    def _probe_clock_sync(self) -> ClockSyncSnapshot:
+        if shutil.which("pmc") is None:
+            return ClockSyncSnapshot(status="unknown", offset_us=None, source="unavailable")
+        try:
+            completed = subprocess.run(
+                ["pmc", "-u", "-b", "0", "GET TIME_STATUS_NP"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=1.0,
+            )
+        except (OSError, subprocess.SubprocessError, TimeoutError):
+            return ClockSyncSnapshot(status="unknown", offset_us=None, source="unavailable")
+        if completed.returncode != 0:
+            return ClockSyncSnapshot(status="unknown", offset_us=None, source="unavailable")
+        return _parse_pmc_time_status(completed.stdout)
 
     def _ensure_backend(self) -> FrameBackend:
         with self._state_lock:
