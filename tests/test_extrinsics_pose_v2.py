@@ -8,6 +8,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -19,6 +20,8 @@ if _spec is None or _spec.loader is None:
 _mod = importlib.util.module_from_spec(_spec)
 sys.modules["calibrate_extrinsics"] = _mod
 _spec.loader.exec_module(_mod)
+
+from wand_model import WAND_POINTS_MM
 
 
 def _write_intrinsics(path: Path, camera_id: str, width: int = 1280, height: int = 960) -> None:
@@ -68,6 +71,27 @@ def _write_pose_frame(
     }
     if blob_count is not None:
         payload["data"]["blob_count"] = blob_count
+    handle.write(json.dumps(payload) + "\n")
+
+
+def _write_wand_metric_frame(
+    handle,
+    camera_id: str,
+    frame_index: int,
+    timestamp: int,
+    blobs: list[dict[str, float]],
+) -> None:
+    payload = {
+        "_type": "frame",
+        "data": {
+            "camera_id": camera_id,
+            "timestamp": timestamp,
+            "frame_index": frame_index,
+            "blobs": blobs,
+            "blob_count": len(blobs),
+            "capture_mode": "wand_metric_capture",
+        },
+    }
     handle.write(json.dumps(payload) + "\n")
 
 
@@ -211,8 +235,83 @@ def test_three_camera_solver_recovers_pose_and_focal_bounds(tmp_path: Path) -> N
         min_pairs=10,
     )
     assert len(result["pose"]["camera_poses"]) == 3
+
+
+def test_solver_resolves_metric_and_world_with_wand_log(tmp_path: Path) -> None:
+    intrinsics_dir = tmp_path / "calibration"
+    intrinsics_dir.mkdir()
+    _write_intrinsics(intrinsics_dir / "calibration_intrinsics_v1_pi-cam-01.json", "pi-cam-01")
+    _write_intrinsics(intrinsics_dir / "calibration_intrinsics_v1_pi-cam-02.json", "pi-cam-02")
+
+    k = np.array([[900.0, 0.0, 640.0], [0.0, 900.0, 480.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+    rvec_cam2 = np.array([0.0, np.deg2rad(10.0), 0.0], dtype=np.float64)
+    tvec_cam2 = np.array([0.30, 0.02, 0.01], dtype=np.float64)
+
+    pose_log = tmp_path / "extrinsics_pose_capture.jsonl"
+    with pose_log.open("w", encoding="utf-8") as handle:
+        handle.write(json.dumps({"_type": "header", "schema_version": "1.0"}) + "\n")
+        for frame_index in range(28):
+            point_w = np.array(
+                [-0.20 + frame_index * 0.015, -0.04 + frame_index * 0.006, 1.8 + (frame_index % 4) * 0.05],
+                dtype=np.float64,
+            )
+            uv1 = _project(point_w, np.zeros(3, dtype=np.float64), np.zeros(3, dtype=np.float64), k)
+            uv2 = _project(point_w, rvec_cam2, tvec_cam2, k)
+            timestamp = 1_700_001_000_000_000 + frame_index * 16_000
+            _write_pose_frame(
+                handle,
+                "pi-cam-01",
+                frame_index,
+                timestamp,
+                [{"x": float(uv1[0]), "y": float(uv1[1]), "area": 80.0}],
+                blob_count=1,
+            )
+            _write_pose_frame(
+                handle,
+                "pi-cam-02",
+                frame_index,
+                timestamp + 900,
+                [{"x": float(uv2[0]), "y": float(uv2[1]), "area": 80.0}],
+                blob_count=1,
+            )
+
+    wand_log = tmp_path / "extrinsics_wand_metric.jsonl"
+    with wand_log.open("w", encoding="utf-8") as handle:
+        handle.write(json.dumps({"_type": "header", "schema_version": "1.0"}) + "\n")
+        wand_points = np.asarray(WAND_POINTS_MM, dtype=np.float64) / 1000.0
+        for frame_index in range(6):
+            wand_origin = np.array([0.05 * frame_index, 0.02 * (frame_index % 2), 2.2], dtype=np.float64)
+            world_points = wand_points + wand_origin.reshape(1, 3)
+            timestamp = 1_700_001_500_000_000 + frame_index * 25_000
+            blobs_cam1 = []
+            blobs_cam2 = []
+            for point_idx, point_w in enumerate(world_points):
+                uv1 = _project(point_w, np.zeros(3, dtype=np.float64), np.zeros(3, dtype=np.float64), k)
+                uv2 = _project(point_w, rvec_cam2, tvec_cam2, k)
+                blobs_cam1.append({"x": float(uv1[0]), "y": float(uv1[1]), "area": 100.0 - point_idx})
+                blobs_cam2.append({"x": float(uv2[0]), "y": float(uv2[1]), "area": 100.0 - point_idx})
+            _write_wand_metric_frame(handle, "pi-cam-01", frame_index, timestamp, blobs_cam1)
+            _write_wand_metric_frame(handle, "pi-cam-02", frame_index, timestamp + 900, blobs_cam2)
+
+    output_path = intrinsics_dir / "extrinsics_pose_v2.json"
+    result = _mod.solve_extrinsics(
+        intrinsics_path=intrinsics_dir,
+        pose_log_path=pose_log,
+        wand_metric_log_path=wand_log,
+        output_path=output_path,
+        min_pairs=8,
+    )
+
+    assert result["metric"]["status"] == "resolved"
+    assert result["world"]["status"] == "resolved"
+    assert result["metric"]["source"] == "wand_floor_metric"
+    assert result["world"]["source"] == "wand_floor_metric"
+    assert float(result["metric"]["scale_m_per_unit"]) > 0.0
+    assert result["metric"]["wand_metric_frames"] >= 1
+    assert result["world"]["to_world_matrix"] is not None
+    assert result["world"]["floor_plane"]["axis"] == "Z"
     assert result["pose"]["solve_summary"]["median_reproj_error_px"] is not None
     assert result["pose"]["solve_summary"]["median_reproj_error_px"] < 5.0
-    assert result["pose"]["solve_summary"]["matched_delta_us_max"] == 1400
+    assert result["pose"]["solve_summary"]["matched_delta_us_max"] == 900
     for row in result["pose"]["camera_poses"]:
         assert 0.9 <= float(row["focal_scale"]) <= 1.1

@@ -85,8 +85,9 @@ class _FakeTrackingRuntime:
         }
 
 
-def test_gui_pose_capture_and_generate_only(tmp_path: Path, monkeypatch) -> None:
+def test_gui_pose_and_floor_capture_paths(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("host.wand_gui.DEFAULT_EXTRINSICS_OUTPUT_PATH", tmp_path / "extrinsics_pose_v2.json")
+    monkeypatch.setattr("host.wand_gui.DEFAULT_WAND_METRIC_LOG_PATH", tmp_path / "extrinsics_wand_metric.jsonl")
     receiver = _FakeReceiver()
     state = WandGuiState(
         session=_FakeSession(),
@@ -97,9 +98,8 @@ def test_gui_pose_capture_and_generate_only(tmp_path: Path, monkeypatch) -> None
     state.capture_log_dir = tmp_path / "logs"
     state.capture_log_dir.mkdir(parents=True, exist_ok=True)
 
-    assert "Start Wand Metric Capture" not in HTML_PAGE
-    assert "Apply Wand Scale/Floor" not in HTML_PAGE
-    assert "start_wand_metric_capture" not in HTML_PAGE
+    assert "Capture Floor / Metric" in HTML_PAGE
+    assert "wandMetricLogPath" in HTML_PAGE
 
     start_pose = state.run_command({"command": "start_pose_capture", "camera_ids": ["pi-cam-01"]})
     assert "capture_log" in start_pose
@@ -118,13 +118,40 @@ def test_gui_pose_capture_and_generate_only(tmp_path: Path, monkeypatch) -> None
     stop_pose = state.run_command({"command": "stop_pose_capture", "camera_ids": ["pi-cam-01"]})
     assert "capture_log" in stop_pose
 
+    scheduled = {}
+    monkeypatch.setattr(
+        state,
+        "_schedule_auto_stop",
+        lambda camera_ids, duration_s, capture_kind: scheduled.update(
+            {"camera_ids": list(camera_ids), "duration_s": duration_s, "capture_kind": capture_kind}
+        ),
+    )
+    start_metric = state.run_command(
+        {
+            "command": "start_wand_metric_capture",
+            "camera_ids": ["pi-cam-01"],
+            "duration_s": 2.5,
+        }
+    )
+    assert start_metric["duration_s"] == 2.5
+    assert scheduled == {
+        "camera_ids": ["pi-cam-01"],
+        "duration_s": 2.5,
+        "capture_kind": "wand_metric_capture",
+    }
+    receiver.emit_frame(_Frame())
+    stop_metric = state.run_command({"command": "stop_wand_metric_capture", "camera_ids": ["pi-cam-01"]})
+    assert "capture_log" in stop_metric
+
     snapshot = state.get_state()
     assert snapshot["workflow"]["pose_capture_log_path"]
-    assert "wand_metric_log_path" not in snapshot["workflow"]
+    assert snapshot["workflow"]["wand_metric_log_path"]
+    assert snapshot["workflow"]["wand_metric_complete"] is True
 
 
 def test_generate_extrinsics_summary_and_tracking_use_v2_path(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("host.wand_gui.DEFAULT_EXTRINSICS_OUTPUT_PATH", tmp_path / "extrinsics_pose_v2.json")
+    monkeypatch.setattr("host.wand_gui.DEFAULT_WAND_METRIC_LOG_PATH", tmp_path / "extrinsics_wand_metric.jsonl")
     runtime = _FakeTrackingRuntime()
     state = WandGuiState(
         session=_FakeSession(),
@@ -134,6 +161,8 @@ def test_generate_extrinsics_summary_and_tracking_use_v2_path(tmp_path: Path, mo
     )
     pose_log = tmp_path / "extrinsics_pose_capture.jsonl"
     pose_log.write_text("{}", encoding="utf-8")
+    wand_log = tmp_path / "extrinsics_wand_metric.jsonl"
+    wand_log.write_text("{}", encoding="utf-8")
     output_path = tmp_path / "extrinsics_pose_v2.json"
     called: Dict[str, Any] = {}
 
@@ -161,8 +190,9 @@ def test_generate_extrinsics_summary_and_tracking_use_v2_path(tmp_path: Path, mo
                     "matched_delta_us_max": 1200,
                 },
             },
-            "metric": {"status": "unresolved", "scale_m_per_unit": None, "source": None},
-            "world": {"status": "unresolved", "frame": None, "to_world_matrix": None, "floor_plane": None, "source": None},
+            "wand_metric_log_path": str(wand_log),
+            "metric": {"status": "resolved", "scale_m_per_unit": 1.0, "source": "wand_floor_metric"},
+            "world": {"status": "resolved", "frame": "world", "to_world_matrix": [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]], "floor_plane": {"normal": [0,0,1], "offset": 0.0, "axis": "Z"}, "source": "wand_floor_metric"},
         }
         Path(kwargs["output_path"]).write_text(json.dumps(payload), encoding="utf-8")
         return payload
@@ -172,15 +202,16 @@ def test_generate_extrinsics_summary_and_tracking_use_v2_path(tmp_path: Path, mo
         {
             "intrinsics_path": "calibration",
             "pose_log_path": str(pose_log),
+            "wand_metric_log_path": str(wand_log),
             "output_path": str(output_path),
         }
     )
     assert generated["generate_extrinsics"]["ok"] is True
     assert generated["generate_extrinsics"]["quality"]["median_reproj_error_px"] == 1.2
     assert generated["generate_extrinsics"]["quality"]["matched_delta_us_p90"] == 900
-    assert generated["generate_extrinsics"]["metric_status"] == "unresolved"
-    assert generated["generate_extrinsics"]["world_status"] == "unresolved"
-    assert "wand_metric_log_path" not in called
+    assert generated["generate_extrinsics"]["metric_status"] == "resolved"
+    assert generated["generate_extrinsics"]["world_status"] == "resolved"
+    assert called["wand_metric_log_path"] == str(wand_log)
 
     calibration_dir = tmp_path / "calibration"
     calibration_dir.mkdir()
@@ -190,6 +221,80 @@ def test_generate_extrinsics_summary_and_tracking_use_v2_path(tmp_path: Path, mo
     state.start_tracking({"patterns": ["waist"]})
     assert runtime.started_with == (str(calibration_dir), ["waist"])
     assert PROJECT_ROOT is not None
+
+
+def test_generate_extrinsics_returns_diagnostic_instead_of_raising_for_missing_pose_rows(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr("host.wand_gui.DEFAULT_EXTRINSICS_OUTPUT_PATH", tmp_path / "extrinsics_pose_v2.json")
+    state = WandGuiState(
+        session=_FakeSession(),
+        receiver=_FakeReceiver(),
+        settings_path=tmp_path / "wand_gui_settings.json",
+        tracking_runtime=_FakeTrackingRuntime(),
+    )
+    pose_log = tmp_path / "extrinsics_pose_capture.jsonl"
+    pose_log.write_text(
+        "\n".join(
+            (
+                json.dumps({"camera_id": "pi-cam-01", "blob_count": 1, "blobs": [{"x": 10.0, "y": 20.0}]}),
+                json.dumps({"camera_id": "pi-cam-02", "blob_count": 2, "blobs": [{"x": 1.0, "y": 2.0}, {"x": 3.0, "y": 4.0}]}),
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    def _raise_solver(**_: Any) -> Dict[str, Any]:
+        raise ValueError("At least two cameras with intrinsics and single-blob pose_capture observations are required")
+
+    state._generate_extrinsics_solver = _raise_solver  # type: ignore[attr-defined]
+    result = state.generate_extrinsics({"pose_log_path": str(pose_log)})
+
+    summary = result["generate_extrinsics"]
+    assert summary["ok"] is False
+    assert "At least two cameras" in summary["error"]
+    assert summary["pose_log_summary"]["rows_by_camera"] == {"pi-cam-01": 1, "pi-cam-02": 1}
+    assert summary["pose_log_summary"]["single_blob_rows_by_camera"] == {"pi-cam-01": 1}
+    assert summary["pose_log_summary"]["usable_camera_count"] == 1
+
+
+def test_generate_extrinsics_returns_diagnostic_for_missing_pose_log(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("host.wand_gui.DEFAULT_EXTRINSICS_OUTPUT_PATH", tmp_path / "extrinsics_pose_v2.json")
+    state = WandGuiState(
+        session=_FakeSession(),
+        receiver=_FakeReceiver(),
+        settings_path=tmp_path / "wand_gui_settings.json",
+        tracking_runtime=_FakeTrackingRuntime(),
+    )
+
+    result = state.generate_extrinsics({"pose_log_path": str(tmp_path / "missing_pose.jsonl")})
+
+    summary = result["generate_extrinsics"]
+    assert summary["ok"] is False
+    assert "log_path does not exist" in summary["error"]
+    assert summary["pose_log_summary"]["usable_camera_count"] == 0
+
+
+def test_workflow_marks_existing_pose_and_metric_logs_complete(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("host.wand_gui.DEFAULT_EXTRINSICS_OUTPUT_PATH", tmp_path / "extrinsics_pose_v2.json")
+    monkeypatch.setattr("host.wand_gui.DEFAULT_WAND_METRIC_LOG_PATH", tmp_path / "extrinsics_wand_metric.jsonl")
+    state = WandGuiState(
+        session=_FakeSession(),
+        receiver=_FakeReceiver(),
+        settings_path=tmp_path / "wand_gui_settings.json",
+        tracking_runtime=_FakeTrackingRuntime(),
+    )
+    state.pose_capture_log_path = tmp_path / "extrinsics_pose_capture.jsonl"
+    state.pose_capture_log_path.write_text("{}", encoding="utf-8")
+    state.wand_metric_log_path = tmp_path / "extrinsics_wand_metric.jsonl"
+    state.wand_metric_log_path.write_text("{}", encoding="utf-8")
+
+    snapshot = state.get_state()
+
+    assert snapshot["workflow"]["pose_capture_exists"] is True
+    assert snapshot["workflow"]["pose_capture_complete"] is True
+    assert snapshot["workflow"]["wand_metric_exists"] is True
+    assert snapshot["workflow"]["wand_metric_complete"] is True
 
 
 def test_resolve_static_asset_prefers_repo_root_static(tmp_path: Path, monkeypatch) -> None:

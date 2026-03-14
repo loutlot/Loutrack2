@@ -22,10 +22,15 @@ for path in (SRC_ROOT, MODULE_ROOT):
         sys.path.insert(0, str(path))
 
 from host.geo import CalibrationLoader, CameraParams
+from extrinsics_capture import load_wand_metric_observations
+from extrinsics_scale import apply_wand_metric_alignment
+from extrinsics_validate import validate_wand_metric_extrinsics
+from wand_model import WAND_POINTS_MM
 
 
 DEFAULT_OUTPUT = "calibration/extrinsics_pose_v2.json"
 DEFAULT_PAIR_WINDOW_US = 8000
+DEFAULT_WAND_PAIR_WINDOW_US = 8000
 DEFAULT_MIN_PAIRS = 8
 _LARGE_RESIDUAL_PX = 50.0
 
@@ -554,7 +559,24 @@ def serialize_extrinsics_pose_v2(
     focal_scales: Dict[str, float],
     per_camera_median_reproj_px: Dict[str, float],
     solve_summary: Dict[str, Any],
+    metric_payload: Dict[str, Any] | None = None,
+    world_payload: Dict[str, Any] | None = None,
+    wand_metric_log_path: str | Path | None = None,
 ) -> Dict[str, Any]:
+    if metric_payload is None:
+        metric_payload = {
+            "status": "unresolved",
+            "scale_m_per_unit": None,
+            "source": None,
+        }
+    if world_payload is None:
+        world_payload = {
+            "status": "unresolved",
+            "frame": None,
+            "to_world_matrix": None,
+            "floor_plane": None,
+            "source": None,
+        }
     payload = {
         "schema_version": "2.0",
         "method": "reference_pose_capture",
@@ -579,23 +601,105 @@ def serialize_extrinsics_pose_v2(
             ],
             "solve_summary": solve_summary,
         },
-        "metric": {
-            "status": "unresolved",
-            "scale_m_per_unit": None,
-            "source": None,
-        },
-        "world": {
-            "status": "unresolved",
-            "frame": None,
-            "to_world_matrix": None,
-            "floor_plane": None,
-            "source": None,
-        },
+        "metric": metric_payload,
+        "world": world_payload,
     }
+    if wand_metric_log_path is not None:
+        payload["wand_metric_log_path"] = str(Path(wand_metric_log_path))
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     return payload
+
+
+def _serialize_camera_pose_rows(
+    camera_order: Sequence[str],
+    camera_poses: Dict[str, Tuple[np.ndarray, np.ndarray]],
+    focal_scales: Dict[str, float],
+    per_camera_median_reproj_px: Dict[str, float],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "camera_id": camera_id,
+            "R": camera_poses[camera_id][0].tolist(),
+            "t": camera_poses[camera_id][1].tolist(),
+            "focal_scale": float(focal_scales[camera_id]),
+            "median_reproj_error_px": (
+                None
+                if camera_id not in per_camera_median_reproj_px
+                else float(per_camera_median_reproj_px[camera_id])
+            ),
+        }
+        for camera_id in camera_order
+    ]
+
+
+def _resolved_metric_payload(
+    *,
+    camera_order: Sequence[str],
+    camera_poses_metric: Dict[str, Tuple[np.ndarray, np.ndarray]],
+    focal_scales: Dict[str, float],
+    per_camera_median_reproj_px: Dict[str, float],
+    scale_meta: Dict[str, Any],
+    validation: Dict[str, Any],
+    wand_metric_log_path: Path,
+) -> Dict[str, Any]:
+    return {
+        "status": "resolved",
+        "frame": "metric_camera",
+        "scale_m_per_unit": float(scale_meta.get("scale_m_per_unit", 1.0)),
+        "source": scale_meta.get("scale_source"),
+        "wand_metric_log_path": str(wand_metric_log_path),
+        "wand_metric_frames": int(scale_meta.get("wand_metric_frames", 0) or 0),
+        "camera_poses": _serialize_camera_pose_rows(
+            camera_order,
+            camera_poses_metric,
+            focal_scales,
+            validation.get("per_camera_median_reproj_px", {}) if isinstance(validation, dict) else {},
+        ),
+        "validation": {
+            key: validation.get(key)
+            for key in (
+                "median_reproj_error_px",
+                "p90_reproj_error_px",
+                "positive_depth_ratio",
+                "baseline_range_m",
+                "floor_residual_mm",
+                "world_up_consistency",
+            )
+            if isinstance(validation, dict) and key in validation
+        },
+        "shape_rms_error_mm": scale_meta.get("shape_rms_error_mm"),
+    }
+
+
+def _resolved_world_payload(
+    *,
+    to_world_coords_matrix: np.ndarray,
+    scale_meta: Dict[str, Any],
+    validation: Dict[str, Any],
+) -> Dict[str, Any]:
+    up_axis = str(scale_meta.get("up_axis", "Z")).upper()
+    floor_normal = [0.0, 0.0, 1.0] if up_axis == "Z" else [0.0, 1.0, 0.0]
+    return {
+        "status": "resolved",
+        "frame": "world",
+        "to_world_matrix": to_world_coords_matrix.tolist(),
+        "floor_plane": {
+            "normal": floor_normal,
+            "offset": 0.0,
+            "axis": up_axis,
+        },
+        "source": scale_meta.get("floor_source"),
+        "origin_world": scale_meta.get("origin_world"),
+        "origin_marker": scale_meta.get("origin_marker"),
+        "aligned_axis_world": scale_meta.get("aligned_axis_world"),
+        "validation": {
+            key: validation.get(key)
+            for key in ("floor_residual_mm", "world_up_consistency")
+            if isinstance(validation, dict) and key in validation
+        },
+    }
 
 
 def solve_extrinsics(
@@ -605,6 +709,8 @@ def solve_extrinsics(
     output_path: str | Path = DEFAULT_OUTPUT,
     pair_window_us: int = DEFAULT_PAIR_WINDOW_US,
     min_pairs: int = DEFAULT_MIN_PAIRS,
+    wand_metric_log_path: str | Path | None = None,
+    wand_pair_window_us: int = DEFAULT_WAND_PAIR_WINDOW_US,
 ) -> Dict[str, Any]:
     calibrations = CalibrationLoader.load_intrinsics(str(intrinsics_path))
     camera_params = {
@@ -644,6 +750,42 @@ def solve_extrinsics(
         "p90_reproj_error_px": validation["p90_reproj_error_px"],
         **_compute_matching_statistics(rows),
     }
+
+    metric_payload: Dict[str, Any] | None = None
+    world_payload: Dict[str, Any] | None = None
+    resolved_wand_metric_log: Path | None = None
+    if wand_metric_log_path is not None:
+        resolved_wand_metric_log = Path(wand_metric_log_path)
+        wand_observations = load_wand_metric_observations(resolved_wand_metric_log)
+        camera_poses_metric, to_world_coords_matrix, scale_meta = apply_wand_metric_alignment(
+            camera_params=camera_params,
+            camera_poses_similarity=camera_poses,
+            wand_observations_by_camera=wand_observations,
+            wand_points_mm=WAND_POINTS_MM,
+            pair_window_us=wand_pair_window_us,
+        )
+        if scale_meta.get("scale_source") != "none":
+            metric_validation = validate_wand_metric_extrinsics(
+                camera_params=camera_params,
+                camera_poses=camera_poses_metric,
+                wand_observations_by_camera=wand_observations,
+                wand_points_mm=WAND_POINTS_MM,
+                pair_window_us=wand_pair_window_us,
+            )
+            metric_payload = _resolved_metric_payload(
+                camera_order=camera_order,
+                camera_poses_metric=camera_poses_metric,
+                focal_scales=focal_scales,
+                per_camera_median_reproj_px=per_camera_median_reproj_px,
+                scale_meta=scale_meta,
+                validation=metric_validation,
+                wand_metric_log_path=resolved_wand_metric_log,
+            )
+            world_payload = _resolved_world_payload(
+                to_world_coords_matrix=to_world_coords_matrix,
+                scale_meta=scale_meta,
+                validation=metric_validation,
+            )
     return serialize_extrinsics_pose_v2(
         output_path=output_path,
         pose_log_path=pose_log_path,
@@ -652,6 +794,9 @@ def solve_extrinsics(
         focal_scales=focal_scales,
         per_camera_median_reproj_px=per_camera_median_reproj_px,
         solve_summary=solve_summary,
+        metric_payload=metric_payload,
+        world_payload=world_payload,
+        wand_metric_log_path=resolved_wand_metric_log,
     )
 
 
@@ -659,9 +804,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Reference-style pose capture extrinsics solver")
     parser.add_argument("--intrinsics", default="calibration", help="Intrinsics directory or file")
     parser.add_argument("--pose-log", default="logs/extrinsics_pose_capture.jsonl", help="Pose capture JSONL path")
+    parser.add_argument("--wand-metric-log", default=None, help="Optional wand metric/floor JSONL path")
     parser.add_argument("--output", default=DEFAULT_OUTPUT, help="Output JSON path")
     parser.add_argument("--pair-window-us", type=int, default=DEFAULT_PAIR_WINDOW_US, help="Timestamp pairing window")
     parser.add_argument("--min-pairs", type=int, default=DEFAULT_MIN_PAIRS, help="Minimum adjacent pair rows")
+    parser.add_argument("--wand-pair-window-us", type=int, default=DEFAULT_WAND_PAIR_WINDOW_US, help="Timestamp pairing window for wand metric rows")
     args = parser.parse_args(argv)
 
     result = solve_extrinsics(
@@ -670,6 +817,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         output_path=args.output,
         pair_window_us=args.pair_window_us,
         min_pairs=args.min_pairs,
+        wand_metric_log_path=args.wand_metric_log,
+        wand_pair_window_us=args.wand_pair_window_us,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0

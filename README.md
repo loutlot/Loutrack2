@@ -141,27 +141,78 @@ GUI 上では、基本的に次の順で進めます。
 6. `Pose Capture` セクションで `Start Pose Capture`
 7. 単一点ターゲットを空間全体で動かして pose log を収録
 8. `Stop Pose Capture` で収録を止める
-9. `Generate Extrinsics` で reference ベースの similarity extrinsics を生成
+9. wand を床に静置して `Capture Floor / Metric` を数秒だけ実行
+10. `Generate Extrinsics` で pose + wand floor/metric をまとめて解く
 
 既定の重要パス:
 
 - pose 収録ログ: `logs/extrinsics_pose_capture.jsonl`
+- wand metric/floor 収録ログ: `logs/extrinsics_wand_metric.jsonl`
 - GUI 設定: `logs/wand_gui_settings.json`
 - 外部較正出力: `calibration/extrinsics_pose_v2.json`
+
+GUI の workflow は、当該 log ファイルがすでに存在する場合も `Pose Capture` / `Floor / Metric` を完了扱いにします。途中で GUI を再起動しても、同じ log path を指していればそのまま `Generate Extrinsics` を再開できます。
+
+`Generate Extrinsics` は、pose log 不足や single-blob 観測不足でも HTTP 400 で処理を止めず、GUI の status に `ok: false` と `pose_log_summary` を返します。これにより、どの camera に何行あり、single-blob row が何件あるかを見ながらそのまま切り分けできます。
 
 外部較正を CLI で直接作る場合:
 
 ```bash
-python src/camera-calibration/calibrate_extrinsics.py \
+.venv/bin/python src/camera-calibration/calibrate_extrinsics.py \
   --intrinsics calibration \
   --pose-log logs/extrinsics_pose_capture.jsonl \
+  --wand-metric-log logs/extrinsics_wand_metric.jsonl \
   --output calibration/extrinsics_pose_v2.json
 ```
 
-いまの `Generate Extrinsics` は similarity pose だけを出します。`metric` / `world` は JSON 上では `unresolved` のまま残し、wand ベース固定は後続タスクで埋める前提です。
+床置き wand の log が揃っていれば、`Generate Extrinsics` は similarity `pose` に加えて `metric` / `world` も解きます。wand log が無い場合だけ `metric` / `world` は `unresolved` のまま残ります。
+
+床置き wand だけを CLI で短時間収録したい場合:
+
+```bash
+.venv/bin/python src/host/capture_wand_floor.py \
+  --output logs/extrinsics_wand_metric.jsonl \
+  --duration-s 3.0
+```
 
 `pose.solve_summary` には reprojection 指標に加えて、非 anchor 観測の timestamp 差分統計
 `matched_delta_us_p50` / `matched_delta_us_p90` / `matched_delta_us_max` も保存されます。
+
+pose log の「悪化が時間起因か、位置起因か」を切り分けたい場合は、次の分析 CLI を使えます。
+
+```bash
+.venv/bin/python src/camera-calibration/analyze_pose_segments.py \
+  --intrinsics calibration \
+  --extrinsics calibration/extrinsics_pose_v2.json \
+  --pose-log logs/extrinsics_pose_capture.jsonl \
+  --pair-window-us 2000 \
+  --output logs/extrinsics_pose_segments_analysis.json
+```
+
+この出力には、時間セグメント、anchor 画像グリッド、3D 位置軸ごとの reprojection 誤差集計と、
+`diagnosis.likely_driver` による時間優勢 / 位置優勢のヒントが入ります。
+
+悪い時間帯だけ除外して再 solve を試したい場合は、次で pose log を再生成できます。
+
+```bash
+.venv/bin/python src/camera-calibration/filter_pose_log_segments.py \
+  --intrinsics calibration \
+  --extrinsics calibration/extrinsics_pose_v2.json \
+  --pose-log logs/extrinsics_pose_capture.jsonl \
+  --output logs/extrinsics_pose_capture_filtered.jsonl \
+  --pair-window-us 2000 \
+  --median-ratio-threshold 1.5
+```
+
+その後、filtered log を使ってもう一度 extrinsics を解きます。
+
+pose log の 2D 座標だけを各カメラ別の動画にしたい場合は、次を使います。
+
+```bash
+.venv/bin/python src/host/render_pose_log_2d.py \
+  --log logs/extrinsics_pose_capture.jsonl \
+  --output-dir logs/pose_trace_videos
+```
 
 Pi 側の debug preview は camera pipeline と分離された best-effort 描画です。capture backend の再起動や preview handoff は行わず、同じ camera stream から idle / mask build / capture を処理します。高負荷時は preview frame を drop して capture を優先します。
 また、`capture` / `pose_capture` / `wand_metric_capture` の全 mode で static mask が必須です。`Build Mask` 後に `READY` へ入っていないカメラは `start` できません。
@@ -203,9 +254,10 @@ Tracking タブには組み込みの `three.js` ビューアを使った 3D canv
 - `calibration/calibration_intrinsics_v1_<camera_id>.json`
 - `calibration/extrinsics_pose_v2.json`
 - `logs/extrinsics_pose_capture.jsonl`
+- `logs/extrinsics_wand_metric.jsonl`
 - `logs/wand_gui_settings.json`
 
-README を読む側は、まずこの 4 つが何者かを把握すると迷いにくいです。
+README を読む側は、まずこの 5 つが何者かを把握すると迷いにくいです。
 
 ## 8. 詰まりやすい点
 

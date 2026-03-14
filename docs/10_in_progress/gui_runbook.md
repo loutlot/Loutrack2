@@ -158,16 +158,31 @@ http://<HOST_IP>:8765/
 1. `Start Pose Capture` で単一点ターゲットを空間全体で動かし、`logs/extrinsics_pose_capture.jsonl` を作る
 2. `Stop Pose Capture` で収録を止める
 
-`Generate Extrinsics` はこの pose log だけを入力にして similarity extrinsics を作ります。
-metric / floor / world はこのフローではまだ解かず、出力 JSON では `unresolved` のまま残ります。
 `Start Pose Capture` を含む capture 系 start はすべて static mask 必須なので、mask を消した直後や `READY` でないカメラが混ざっている状態では開始できません。
 `pose_capture` の UDP payload は full blobs を保持するため、multi-blob frame は Pi 側で best blob に縮約されません。bad frame 判定は host 側 solver が `blob_count` と `len(blobs)` を見て行います。
 
-### 4.5 Extrinsics Generation
+### 4.5 Floor / Metric Capture
+
+1. wand を床に静置する
+2. `Capture Floor / Metric` を押す
+3. 数秒待つと自動停止し、`logs/extrinsics_wand_metric.jsonl` が更新される
+
+この capture も static mask 必須です。wand は静止していればよく、数秒の短時間収録で足ります。
+
+CLI で同じ log を作る場合:
+
+```bash
+.venv/bin/python src/host/capture_wand_floor.py \
+  --output logs/extrinsics_wand_metric.jsonl \
+  --duration-s 3.0
+```
+
+### 4.6 Extrinsics Generation
 
 `Generate Extrinsics` を実行し、次を確認します。
 
 - `Pair Window (us)` は既定 `2000`
+- `Wand Pair Window (us)` は既定 `8000`
 - `Min Pairs` は既定 `8`
 - `Min Pairs` は「全体サンプル数」だけでなく「各カメラが ref camera と同時観測したサンプル数」にも適用される
 
@@ -175,6 +190,7 @@ metric / floor / world はこのフローではまだ解かず、出力 JSON で
 - `camera count` が期待台数に近い
 - 最新出力が `calibration/extrinsics_pose_v2.json` に書かれる
 - `pose.solve_summary` に `usable_rows` / `complete_rows` / `median_reproj_error_px` / `p90_reproj_error_px` / `matched_delta_us_p50` / `matched_delta_us_p90` / `matched_delta_us_max` が入る
+- wand log があれば `metric.status=resolved`, `world.status=resolved` になる
 
 raw similarity solve の確認項目:
 
@@ -186,8 +202,8 @@ raw similarity solve の確認項目:
 
 補足:
 
-- GUI は `metric.status=unresolved`, `world.status=unresolved` を明示表示する
-- 現行の `Generate Extrinsics` は camera pose のみを返す
+- GUI は wand log があれば `metric/world` を同時に解く
+- wand log が無いときだけ `metric.status=unresolved`, `world.status=unresolved` のまま残る
 
 ここで失敗した場合は、まず pose capture の同時観測不足または sample の parallax 不足を疑います。
 

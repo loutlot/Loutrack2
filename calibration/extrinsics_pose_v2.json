@@ -1,7 +1,7 @@
 {
   "schema_version": "2.0",
   "method": "reference_pose_capture",
-  "created_at": "2026-03-14T12:40:17.641189+00:00",
+  "created_at": "2026-03-14T18:57:14.182315+00:00",
   "pose_capture_log_path": "/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/logs/extrinsics_pose_capture.jsonl",
   "camera_order": [
     "pi-cam-01",
@@ -34,66 +34,186 @@
           0.0,
           0.0
         ],
-        "focal_scale": 1.09853017094826,
-        "median_reproj_error_px": 12.38465972468216
+        "focal_scale": 1.0998864038651504,
+        "median_reproj_error_px": 6.845989281040833
       },
       {
         "camera_id": "pi-cam-02",
         "R": [
           [
-            0.055262200421003604,
-            0.1499700847942982,
-            -0.9871449046980993
+            0.09938787128827992,
+            0.15242552507167434,
+            -0.98330489185573
           ],
           [
-            -0.3392387548306374,
-            0.932663557565615,
-            0.12270189733663113
+            -0.3623236729251231,
+            0.9259010959413687,
+            0.10690517561194648
           ],
           [
-            0.9390756925964954,
-            0.32809703146453717,
-            0.10241670527102009
+            0.9267381545392598,
+            0.34564956218863785,
+            0.14725071504060755
           ]
         ],
         "t": [
-          1.5770666896542602,
-          -0.21981671843133244,
-          0.40241049908097226
+          0.6920861366728756,
+          -0.08700088954614375,
+          0.14308551365803887
         ],
-        "focal_scale": 1.0934884633064963,
-        "median_reproj_error_px": 7.114291483200234
+        "focal_scale": 1.099983956158975,
+        "median_reproj_error_px": 4.899584710716695
       }
     ],
     "solve_summary": {
-      "captured_rows": 1466,
-      "complete_rows": 1451,
+      "captured_rows": 1059,
+      "complete_rows": 1058,
       "pair_overlaps": {
-        "pi-cam-01|pi-cam-02": 1451
+        "pi-cam-01|pi-cam-02": 1058
       },
-      "iterations": 13,
-      "ba_cost": 31889.061144771862,
+      "iterations": 16,
+      "ba_cost": 12744.928522784441,
       "status": 2,
       "success": true,
       "message": "`ftol` termination condition is satisfied.",
-      "usable_rows": 1451,
-      "median_reproj_error_px": 9.636436395688445,
-      "p90_reproj_error_px": 221.54076189580636,
-      "matched_delta_us_p50": 1958,
-      "matched_delta_us_p90": 1976,
-      "matched_delta_us_max": 1987
+      "usable_rows": 1058,
+      "median_reproj_error_px": 5.828891595053472,
+      "p90_reproj_error_px": 24.13589176896958,
+      "matched_delta_us_p50": 848,
+      "matched_delta_us_p90": 851,
+      "matched_delta_us_max": 855
     }
   },
   "metric": {
-    "status": "unresolved",
-    "scale_m_per_unit": null,
-    "source": null
+    "status": "resolved",
+    "frame": "metric_camera",
+    "scale_m_per_unit": 11.439512816609206,
+    "source": "wand_floor_metric",
+    "wand_metric_log_path": "/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/logs/extrinsics_wand_metric.jsonl",
+    "wand_metric_frames": 170,
+    "camera_poses": [
+      {
+        "camera_id": "pi-cam-01",
+        "R": [
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "t": [
+          -0.0,
+          -0.0,
+          -0.0
+        ],
+        "focal_scale": 1.0998864038651504,
+        "median_reproj_error_px": 59.06546384378683
+      },
+      {
+        "camera_id": "pi-cam-02",
+        "R": [
+          [
+            0.09938787128827992,
+            0.15242552507167434,
+            -0.98330489185573
+          ],
+          [
+            -0.3623236729251231,
+            0.9259010959413687,
+            0.10690517561194648
+          ],
+          [
+            0.9267381545392598,
+            0.34564956218863785,
+            0.14725071504060755
+          ]
+        ],
+        "t": [
+          7.91712823066691,
+          -0.9952477910195132,
+          1.6368285673622471
+        ],
+        "focal_scale": 1.099983956158975,
+        "median_reproj_error_px": 42.02613112205124
+      }
+    ],
+    "validation": {
+      "median_reproj_error_px": 45.035340489171176,
+      "p90_reproj_error_px": 60.36725507212603,
+      "positive_depth_ratio": 1.0,
+      "baseline_range_m": [
+        8.14559054613509,
+        8.14559054613509
+      ],
+      "floor_residual_mm": 7920.390542414391,
+      "world_up_consistency": 0.6106958660681142
+    },
+    "shape_rms_error_mm": 10.95999565901914
   },
   "world": {
-    "status": "unresolved",
-    "frame": null,
-    "to_world_matrix": null,
-    "floor_plane": null,
-    "source": null
-  }
+    "status": "resolved",
+    "frame": "world",
+    "to_world_matrix": [
+      [
+        0.5220482398653532,
+        -0.8317155581913365,
+        0.1889837705094282,
+        -0.6036856857447429
+      ],
+      [
+        0.6048428542025223,
+        0.20478402088351022,
+        -0.7695639197044832,
+        6.522939243990703
+      ],
+      [
+        0.60135742863428,
+        0.5160549728984845,
+        0.6099643497558782,
+        -4.67062587285246
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "floor_plane": {
+      "normal": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "offset": 0.0,
+      "axis": "Z"
+    },
+    "source": "wand_floor_metric",
+    "origin_world": [
+      0.6036856857447429,
+      -6.522939243990703,
+      4.67062587285246
+    ],
+    "origin_marker": "elbow",
+    "aligned_axis_world": [
+      0.0,
+      1.0,
+      0.0
+    ],
+    "validation": {
+      "floor_residual_mm": 7920.390542414391,
+      "world_up_consistency": 0.6106958660681142
+    }
+  },
+  "wand_metric_log_path": "/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/logs/extrinsics_wand_metric.jsonl"
 }

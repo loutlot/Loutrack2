@@ -254,7 +254,7 @@ print(status["recommendation"])
 
 ### wand_session.py - wand収録オーケストレーション
 
-Host主導で `ping -> set_exposure/set_gain/set_fps -> mask_start -> start(mode=pose_capture) -> stop` を実行。
+Host主導で `ping -> set_exposure/set_gain/set_fps -> mask_start -> start(mode=pose_capture|wand_metric_capture) -> stop` を実行。
 `hosts.ini` と `UDPReceiver.get_camera_addresses()` をマージして対象カメラを確定。
 
 ```python
@@ -278,7 +278,7 @@ print(result["session_id"])
 
 ### wand_gui.py - 映像なし Web GUI
 
-同期スライダー（exposure/gain/fps）と `ping` / `mask_start` / `start` / `stop` をブラウザから操作する最小 GUI。
+同期スライダー（exposure/gain/fps）と `ping` / `mask_start` / `pose_capture` / `wand_metric_capture` / `Generate Extrinsics` をブラウザから操作する最小 GUI。
 `UDPReceiver` を起動して受動発見し、`WandSession` の inventory merge をそのまま利用する。
 
 ```bash
@@ -286,6 +286,14 @@ python3 src/host/wand_gui.py --host <HOST_IP> --port 8765
 ```
 
 ブラウザで `http://<HOST_IP>:8765/` を開く。
+
+床置き wand の短時間収録だけを CLI で行う場合:
+
+```bash
+.venv/bin/python src/host/capture_wand_floor.py \
+  --output logs/extrinsics_wand_metric.jsonl \
+  --duration-s 3.0
+```
 
 ---
 
