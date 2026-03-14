@@ -56,6 +56,8 @@ fi
 cat >/etc/linuxptp/loutrack-ptp.conf <<EOF
 [global]
 time_stamping ${TIMESTAMPING_MODE}
+uds_ro_address /var/run/ptp4lro
+uds_ro_file_mode 0666
 EOF
 
 if [ "${ROLE}" = "master" ]; then
@@ -75,10 +77,16 @@ EOF
 
 if [ "${ROLE}" = "master" ]; then
   PTP4L_EXEC="/usr/sbin/ptp4l -f /etc/linuxptp/loutrack-ptp.conf -i ${INTERFACE} -m"
-  PHC2SYS_EXEC="/usr/sbin/phc2sys -s CLOCK_REALTIME -c ${INTERFACE} -O 0 --step_threshold 0.5 -w -m"
 else
   PTP4L_EXEC="/usr/sbin/ptp4l -f /etc/linuxptp/loutrack-ptp.conf -i ${INTERFACE} -s -m --summary_interval 1"
-  PHC2SYS_EXEC="/usr/sbin/phc2sys -s ${INTERFACE} -c CLOCK_REALTIME -O 0 --step_threshold 0.5 -w -m"
+fi
+
+if [ "${TIMESTAMPING_MODE}" = "hardware" ]; then
+  if [ "${ROLE}" = "master" ]; then
+    PHC2SYS_EXEC="/usr/sbin/phc2sys -s CLOCK_REALTIME -c ${INTERFACE} -O 0 --step_threshold 0.5 -w -m"
+  else
+    PHC2SYS_EXEC="/usr/sbin/phc2sys -s ${INTERFACE} -c CLOCK_REALTIME -O 0 --step_threshold 0.5 -w -m"
+  fi
 fi
 
 cat >/etc/systemd/system/${PTP4L_UNIT} <<EOF
@@ -98,7 +106,8 @@ RestartSec=2
 WantedBy=multi-user.target
 EOF
 
-cat >/etc/systemd/system/${PHC2SYS_UNIT} <<EOF
+if [ "${TIMESTAMPING_MODE}" = "hardware" ]; then
+  cat >/etc/systemd/system/${PHC2SYS_UNIT} <<EOF
 [Unit]
 Description=Loutrack PHC2SYS (${ROLE})
 After=${PTP4L_UNIT}
@@ -113,14 +122,24 @@ RestartSec=2
 [Install]
 WantedBy=multi-user.target
 EOF
+else
+  systemctl stop "${PHC2SYS_UNIT}" >/dev/null 2>&1 || true
+  systemctl disable "${PHC2SYS_UNIT}" >/dev/null 2>&1 || true
+  rm -f "/etc/systemd/system/${PHC2SYS_UNIT}"
+fi
 
 systemctl daemon-reload
-systemctl enable "${PTP4L_UNIT}" "${PHC2SYS_UNIT}"
+systemctl enable "${PTP4L_UNIT}"
 systemctl restart "${PTP4L_UNIT}"
-systemctl restart "${PHC2SYS_UNIT}"
+if [ "${TIMESTAMPING_MODE}" = "hardware" ]; then
+  systemctl enable "${PHC2SYS_UNIT}"
+  systemctl restart "${PHC2SYS_UNIT}"
+fi
 
 echo "Configured Loutrack PTP role=${ROLE} interface=${INTERFACE} timestamping=${TIMESTAMPING_MODE}"
 echo "Check status with:"
 echo "  systemctl status ${PTP4L_UNIT}"
-echo "  systemctl status ${PHC2SYS_UNIT}"
+if [ "${TIMESTAMPING_MODE}" = "hardware" ]; then
+  echo "  systemctl status ${PHC2SYS_UNIT}"
+fi
 echo "  pmc -u -b 0 \"GET TIME_STATUS_NP\""

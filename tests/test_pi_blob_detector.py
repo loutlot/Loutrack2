@@ -23,6 +23,7 @@ from src.pi.capture import (
     get_default_backend,
     resolve_debug_preview_enabled,
 )
+from src.pi import capture as capture_mod
 
 
 def _expected_centers(cfg: DummyBackendConfig, frame_index: int) -> list[tuple[int, int]]:
@@ -91,6 +92,8 @@ def test_control_server_ping_includes_blob_diagnostics() -> None:
     assert result["clock_sync"]["status"] in {"locked", "degraded", "unknown"}
     assert "offset_us" in result["clock_sync"]
     assert "source" in result["clock_sync"]
+    assert result["clock_sync"]["role"] in {"master", "slave", "unknown"}
+    assert result["clock_sync"]["timestamping_mode"] in {"software", "hardware", "unknown"}
     assert result["timestamping"]["active_source"] == "capture_dequeue"
     assert result["timestamping"]["sensor_timestamp_available"] is False
 
@@ -101,7 +104,13 @@ def test_control_server_ping_caches_clock_sync_probe(monkeypatch: pytest.MonkeyP
 
     def _probe() -> ClockSyncSnapshot:
         calls["count"] += 1
-        return ClockSyncSnapshot(status="locked", offset_us=12.0, source="pmc")
+        return ClockSyncSnapshot(
+            status="locked",
+            offset_us=12.0,
+            source="pmc",
+            role="slave",
+            timestamping_mode="software",
+        )
 
     times = iter([1_000_000, 1_500_000, 62_000_000])
     monkeypatch.setattr(server, "_probe_clock_sync", _probe)
@@ -114,7 +123,39 @@ def test_control_server_ping_caches_clock_sync_probe(monkeypatch: pytest.MonkeyP
     assert first["result"]["clock_sync"]["status"] == "locked"
     assert second["result"]["clock_sync"]["status"] == "locked"
     assert third["result"]["clock_sync"]["status"] == "locked"
+    assert first["result"]["clock_sync"]["role"] == "slave"
+    assert first["result"]["clock_sync"]["timestamping_mode"] == "software"
     assert calls["count"] == 2
+
+
+def test_parse_pmc_time_status_normalizes_ns_to_us_for_slave() -> None:
+    snapshot = capture_mod._parse_pmc_time_status(
+        """
+        master_offset              -250000
+        gmPresent                  true
+        """,
+        role="slave",
+        timestamping_mode="software",
+    )
+
+    assert snapshot.status == "locked"
+    assert snapshot.offset_us == -250.0
+    assert snapshot.role == "slave"
+    assert snapshot.timestamping_mode == "software"
+
+
+def test_parse_pmc_time_status_allows_software_master_gm_present_false() -> None:
+    snapshot = capture_mod._parse_pmc_time_status(
+        """
+        master_offset              0
+        gmPresent                  false
+        """,
+        role="master",
+        timestamping_mode="software",
+    )
+
+    assert snapshot.status == "locked"
+    assert snapshot.offset_us == 0.0
 
 
 def test_mask_start_can_refresh_existing_mask() -> None:

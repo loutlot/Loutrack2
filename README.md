@@ -73,7 +73,7 @@ Pi ごとに `camera_id` を分けて起動します。
 
 ポイント:
 
-- PTP の初期設定は `pi-cam-01` で `sudo ./src/pi/setup_ptp.sh master`、他 Pi で `sudo ./src/pi/setup_ptp.sh slave` を使うと最短です。既定は `software` timestamping で、必要なら第3引数で `hardware` も選べます
+- PTP の初期設定は `pi-cam-01` で `sudo ./src/pi/setup_ptp.sh master`、他 Pi で `sudo ./src/pi/setup_ptp.sh slave` を使うと最短です。標準運用は `software` timestamping で、`hardware` は実験用です
 - Loutrack が入れた PTP 設定を全部戻すときは `sudo ./src/pi/revert_ptp.sh` を使います
 - `pi-cam-01` の wall clock が怪しいときは、session 前に `sudo ./src/pi/manual_ntp_sync.sh` で一度だけ手動 NTP 同期してから PTP に戻せます
 - `Generate Extrinsics` の GUI 既定 `Pair Window (us)` は `2000` です

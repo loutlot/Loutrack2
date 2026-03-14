@@ -52,7 +52,7 @@ export XAUTHORITY=/home/pi/.Xauthority
 
 ## 1 コマンドでできる PTP 設定
 
-Loutrack の固定トポロジー向けに、`src/pi/setup_ptp.sh` は `linuxptp` をインストールし、`systemd-timesyncd` を無効化し、ロール別の systemd ユニットを作成して即座に起動します。現在の既定は `software` timestamping です。
+Loutrack の固定トポロジー向けに、`src/pi/setup_ptp.sh` は `linuxptp` をインストールし、`systemd-timesyncd` を無効化し、ロール別の systemd ユニットを作成して即座に起動します。supported path は `software` timestamping です。
 
 ### Master (pi-cam-01) 設定
 
@@ -73,17 +73,19 @@ sudo ./src/pi/setup_ptp.sh slave eth0 software
 sudo ./src/pi/setup_ptp.sh slave eth0 hardware
 ```
 
+`software` モードでは `loutrack-ptp4l.service` だけを起動します。`loutrack-phc2sys.service` は作成しません。
+`hardware` は実験用オプションとして残していますが、現行の標準運用には含めません。
+
 スクリプトが作成するファイル:
 
 - `/etc/linuxptp/loutrack-ptp.conf`
 - `/etc/systemd/system/loutrack-ptp4l.service`
 - `/etc/systemd/system/loutrack-phc2sys.service`
 
-ステータス確認例:
+標準の software 運用でのステータス確認例:
 
 ```bash
 systemctl status loutrack-ptp4l.service
-systemctl status loutrack-phc2sys.service
 pmc -u -b 0 "GET TIME_STATUS_NP"
 ```
 
@@ -119,7 +121,7 @@ sudo ./src/pi/manual_ntp_sync.sh
 - `systemd-timesyncd` を一時的に有効化して NTP 同期
 - `NTPSynchronized=yes` を待機
 - `systemd-timesyncd` を再度停止
-- Loutrack の PTP service を再起動
+- Loutrack の PTP service を存在するものだけ再起動
 
 常用ではなく、長期停止後や wall clock が怪しいときの手動復旧専用です。
 
@@ -135,7 +137,7 @@ PTP は Raspberry Pi 実行時の OS レベルの前提条件です。
 - `pi-cam-01` が固定 Grandmaster です
 - それ以外の Pi カメラは PTP クライアントです
 - `capture.py` は PTP サービスの起動/再起動を行いません
-- `ping` は `pmc` を用いてベストエフォートで PTP 健全性を取得し、結果を 60 秒間キャッシュします
+- `ping` は `pmc` を read-only UDS socket 経由で用いてベストエフォートで PTP 健全性を取得し、結果を 60 秒間キャッシュします
 
 ### 必要な Pi パッケージ（ハイレベル）
 

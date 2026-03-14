@@ -15,6 +15,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal, Optional, Protocol, cast
 
 import cv2
@@ -49,6 +50,9 @@ DEFAULT_TARGET_FPS = 56
 PREVIEW_STOP_TIMEOUT_SECONDS = 2.0
 PTP_SANITY_CACHE_US = 60_000_000
 PTP_LOCK_OFFSET_THRESHOLD_US = 500.0
+PTP_RO_SOCKET_PATH = "/var/run/ptp4lro"
+LINUXPTP_ROLE_PATH = "/etc/linuxptp/loutrack-role"
+LINUXPTP_TIMESTAMPING_MODE_PATH = "/etc/linuxptp/loutrack-timestamping-mode"
 
 MAX_LINE_BYTES = 65536
 LINE_TIMEOUT_SECONDS = 2.0
@@ -453,6 +457,8 @@ class ClockSyncSnapshot:
     status: Literal["locked", "degraded", "unknown"]
     offset_us: float | None
     source: Literal["pmc", "unavailable"]
+    role: Literal["master", "slave", "unknown"] = "unknown"
+    timestamping_mode: Literal["software", "hardware", "unknown"] = "unknown"
 
 
 class DebugPreview:
@@ -994,17 +1000,46 @@ def _extract_sensor_timestamp_ns(metadata: object) -> int | None:
     return None
 
 
-def _parse_pmc_time_status(stdout: str) -> ClockSyncSnapshot:
+def _read_linuxptp_setting(
+    path: str,
+    allowed: set[str],
+) -> str:
+    try:
+        value = Path(path).read_text(encoding="utf-8").strip().lower()
+    except OSError:
+        return "unknown"
+    return value if value in allowed else "unknown"
+
+
+def _parse_pmc_time_status(
+    stdout: str,
+    *,
+    role: Literal["master", "slave", "unknown"] = "unknown",
+    timestamping_mode: Literal["software", "hardware", "unknown"] = "unknown",
+) -> ClockSyncSnapshot:
     offset_match = re.search(r"\bmaster_offset\s+(-?\d+(?:\.\d+)?)", stdout)
     if offset_match is None:
-        return ClockSyncSnapshot(status="unknown", offset_us=None, source="unavailable")
+        return ClockSyncSnapshot(
+            status="unknown",
+            offset_us=None,
+            source="unavailable",
+            role=role,
+            timestamping_mode=timestamping_mode,
+        )
     try:
-        offset_us = float(offset_match.group(1))
+        offset_ns = float(offset_match.group(1))
     except ValueError:
-        return ClockSyncSnapshot(status="unknown", offset_us=None, source="unavailable")
+        return ClockSyncSnapshot(
+            status="unknown",
+            offset_us=None,
+            source="unavailable",
+            role=role,
+            timestamping_mode=timestamping_mode,
+        )
+    offset_us = offset_ns / 1000.0
     servo_healthy = True
     gm_present = re.search(r"\bgmPresent\s+(true|false)\b", stdout, flags=re.IGNORECASE)
-    if gm_present is not None and gm_present.group(1).lower() == "false":
+    if gm_present is not None and gm_present.group(1).lower() == "false" and role != "master":
         servo_healthy = False
     port_state = re.search(r"\bportState\s+([A-Z_]+)\b", stdout)
     if port_state is not None and port_state.group(1) in {"FAULTY", "DISABLED", "LISTENING"}:
@@ -1012,7 +1047,13 @@ def _parse_pmc_time_status(stdout: str) -> ClockSyncSnapshot:
     status: Literal["locked", "degraded", "unknown"] = "locked"
     if not servo_healthy or abs(offset_us) > PTP_LOCK_OFFSET_THRESHOLD_US:
         status = "degraded"
-    return ClockSyncSnapshot(status=status, offset_us=offset_us, source="pmc")
+    return ClockSyncSnapshot(
+        status=status,
+        offset_us=offset_us,
+        source="pmc",
+        role=role,
+        timestamping_mode=timestamping_mode,
+    )
 
 
 def detect_blobs(
@@ -2367,6 +2408,8 @@ class ControlServer:
                 "status": str(cached.status),
                 "offset_us": cached.offset_us,
                 "source": str(cached.source),
+                "role": str(cached.role),
+                "timestamping_mode": str(cached.timestamping_mode),
             }
         snapshot = self._probe_clock_sync()
         with self._state_lock:
@@ -2376,24 +2419,72 @@ class ControlServer:
             "status": str(snapshot.status),
             "offset_us": snapshot.offset_us,
             "source": str(snapshot.source),
+            "role": str(snapshot.role),
+            "timestamping_mode": str(snapshot.timestamping_mode),
         }
 
     def _probe_clock_sync(self) -> ClockSyncSnapshot:
+        role = cast(
+            Literal["master", "slave", "unknown"],
+            _read_linuxptp_setting(LINUXPTP_ROLE_PATH, {"master", "slave"}),
+        )
+        timestamping_mode = cast(
+            Literal["software", "hardware", "unknown"],
+            _read_linuxptp_setting(LINUXPTP_TIMESTAMPING_MODE_PATH, {"software", "hardware"}),
+        )
         if shutil.which("pmc") is None:
-            return ClockSyncSnapshot(status="unknown", offset_us=None, source="unavailable")
+            return ClockSyncSnapshot(
+                status="unknown",
+                offset_us=None,
+                source="unavailable",
+                role=role,
+                timestamping_mode=timestamping_mode,
+            )
+        client_socket_path = f"/tmp/pmc.{os.getpid()}.{threading.get_ident()}"
         try:
             completed = subprocess.run(
-                ["pmc", "-u", "-b", "0", "GET TIME_STATUS_NP"],
+                [
+                    "pmc",
+                    "-u",
+                    "-b",
+                    "0",
+                    "-s",
+                    PTP_RO_SOCKET_PATH,
+                    "-i",
+                    client_socket_path,
+                    "GET TIME_STATUS_NP",
+                ],
                 check=False,
                 capture_output=True,
                 text=True,
                 timeout=1.0,
             )
         except (OSError, subprocess.SubprocessError, TimeoutError):
-            return ClockSyncSnapshot(status="unknown", offset_us=None, source="unavailable")
+            return ClockSyncSnapshot(
+                status="unknown",
+                offset_us=None,
+                source="unavailable",
+                role=role,
+                timestamping_mode=timestamping_mode,
+            )
+        finally:
+            try:
+                os.unlink(client_socket_path)
+            except OSError:
+                pass
         if completed.returncode != 0:
-            return ClockSyncSnapshot(status="unknown", offset_us=None, source="unavailable")
-        return _parse_pmc_time_status(completed.stdout)
+            return ClockSyncSnapshot(
+                status="unknown",
+                offset_us=None,
+                source="unavailable",
+                role=role,
+                timestamping_mode=timestamping_mode,
+            )
+        return _parse_pmc_time_status(
+            completed.stdout,
+            role=role,
+            timestamping_mode=timestamping_mode,
+        )
 
     def _ensure_backend(self) -> FrameBackend:
         with self._state_lock:

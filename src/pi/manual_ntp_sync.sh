@@ -53,11 +53,17 @@ timedatectl set-ntp false || true
 systemctl disable --now "${TIMESYNCD_UNIT}" >/dev/null 2>&1 || true
 
 echo "[manual_ntp_sync] restarting Loutrack PTP services"
-systemctl restart "${PTP4L_UNIT}"
-systemctl restart "${PHC2SYS_UNIT}"
+if systemctl list-unit-files "${PTP4L_UNIT}" >/dev/null 2>&1; then
+  systemctl restart "${PTP4L_UNIT}"
+fi
+if systemctl list-unit-files "${PHC2SYS_UNIT}" >/dev/null 2>&1; then
+  systemctl restart "${PHC2SYS_UNIT}"
+fi
 
 echo "[manual_ntp_sync] done"
 echo "verify with:"
 echo "  systemctl status ${PTP4L_UNIT}"
-echo "  systemctl status ${PHC2SYS_UNIT}"
+if systemctl list-unit-files "${PHC2SYS_UNIT}" >/dev/null 2>&1; then
+  echo "  systemctl status ${PHC2SYS_UNIT}"
+fi
 echo "  pmc -u -b 0 \"GET TIME_STATUS_NP\""
