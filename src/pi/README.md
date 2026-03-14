@@ -52,7 +52,7 @@ export XAUTHORITY=/home/pi/.Xauthority
 
 ## 1 コマンドでできる PTP 設定
 
-Loutrack の固定トポロジー向けに、`src/pi/setup_ptp.sh` は `linuxptp` をインストールし、`systemd-timesyncd` を無効化し、ロール別の systemd ユニットを作成して即座に起動します。
+Loutrack の固定トポロジー向けに、`src/pi/setup_ptp.sh` は `linuxptp` をインストールし、`systemd-timesyncd` を無効化し、ロール別の systemd ユニットを作成して即座に起動します。現在の既定は `software` timestamping です。
 
 ### Master (pi-cam-01) 設定
 
@@ -66,7 +66,12 @@ sudo ./src/pi/setup_ptp.sh master
 sudo ./src/pi/setup_ptp.sh slave
 ```
 
-第二引数を指定するとインターフェース名を上書きできます（例: `sudo ./src/pi/setup_ptp.sh slave eth0`）。
+第二引数を指定するとインターフェース名を上書きできます。第三引数で `software|hardware` を選べます。
+
+```bash
+sudo ./src/pi/setup_ptp.sh slave eth0 software
+sudo ./src/pi/setup_ptp.sh slave eth0 hardware
+```
 
 スクリプトが作成するファイル:
 
@@ -81,6 +86,24 @@ systemctl status loutrack-ptp4l.service
 systemctl status loutrack-phc2sys.service
 pmc -u -b 0 "GET TIME_STATUS_NP"
 ```
+
+## PTP 設定の巻き戻し
+
+Loutrack が作成した PTP 設定を全部戻すには、`src/pi/revert_ptp.sh` を実行します。
+
+```bash
+sudo ./src/pi/revert_ptp.sh
+```
+
+このスクリプトは:
+
+- `loutrack-ptp4l.service` / `loutrack-phc2sys.service` を停止して disable
+- `/etc/systemd/system/` の Loutrack unit を削除
+- `/etc/linuxptp/loutrack-*` を削除
+- `systemd-timesyncd` を再度 enable/start
+- `timedatectl set-ntp true` で NTP を戻す
+
+`linuxptp` パッケージ自体は削除しません。再セットアップや手動検証で再利用できるように残します。
 
 ## Master 用の手動 NTP 復旧
 
