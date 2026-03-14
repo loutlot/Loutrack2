@@ -162,6 +162,10 @@ python src/camera-calibration/calibrate_extrinsics.py \
 `pose.solve_summary` には reprojection 指標に加えて、非 anchor 観測の timestamp 差分統計
 `matched_delta_us_p50` / `matched_delta_us_p90` / `matched_delta_us_max` も保存されます。
 
+Pi 側の debug preview は `Build Mask` 中だけ capture backend へ切り替わるため、一時的に止まることがあります。
+それ以外の capture 開始では preview handoff に成功した場合のみ開始し、preview は同じウィンドウのまま継続します。
+また、`capture` / `pose_capture` / `wand_metric_capture` の全 mode で static mask が必須です。`Build Mask` 後に `READY` へ入っていないカメラは `start` できません。
+
 ## 5. tracking を起動して表示確認
 
 外部較正が生成済みなら、GUI の tracking ページで `Start Tracking` を押します。

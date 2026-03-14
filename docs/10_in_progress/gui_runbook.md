@@ -142,6 +142,8 @@ http://<HOST_IP>:8765/
 - wand や人を画角から外してから押す
 - 動く物体が画面内にある状態で mask を作らない
 - マスク作成後に再度 wand を見せ、必要な点だけ残るか確認する
+- `READY` に戻ったことを確認してから `Start Pose Capture` を押す
+- debug preview は `Build Mask` 中だけ一時的に止まることがあるが、それ以外では capture 中も同じ window を使い続ける
 
 失敗の兆候:
 
@@ -157,6 +159,7 @@ http://<HOST_IP>:8765/
 
 `Generate Extrinsics` はこの pose log だけを入力にして similarity extrinsics を作ります。
 metric / floor / world はこのフローではまだ解かず、出力 JSON では `unresolved` のまま残ります。
+`Start Pose Capture` を含む capture 系 start はすべて static mask 必須なので、mask を消した直後や `READY` でないカメラが混ざっている状態では開始できません。
 
 ### 4.5 Extrinsics Generation
 

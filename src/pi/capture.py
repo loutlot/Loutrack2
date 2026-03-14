@@ -2006,7 +2006,7 @@ class ControlServer:
                 error_message=f"invalid_request: unsupported_mode ({mode})",
             )
 
-        mask_required = mode == "wand_metric_capture"
+        mask_required = True
 
         with self._state_lock:
             prev_state = self._state
@@ -2035,12 +2035,11 @@ class ControlServer:
 
         backend: FrameBackend | None = None
         emitter: UDPFrameEmitter | None = None
-        mask_to_apply = self._static_mask if mask_required else None
+        mask_to_apply = self._static_mask
         try:
             backend = self._take_preview_backend_for_mask()
             if backend is None:
-                self._log("capture backend source=fresh")
-                if not self._stop_preview_loop():
+                if self._config.debug_preview:
                     with self._state_lock:
                         self._state = prev_state
                     self._start_preview_loop()
@@ -2048,8 +2047,12 @@ class ControlServer:
                         request_id=request_id,
                         request_camera_id=camera_id,
                         error_code=ERROR_INTERNAL,
-                        error_message="internal_error: start_failed: preview_stop_timeout",
+                        error_message=(
+                            "internal_error: start_failed: preview_handoff_required "
+                            "(rebuild mask or check preview/backend state)"
+                        ),
                     )
+                self._log("capture backend source=fresh")
                 backend = self._ensure_backend()
                 self._apply_backend_settings(backend)
                 backend.start()
@@ -2067,7 +2070,7 @@ class ControlServer:
                 min_diameter_px=self._desired_blob_min_diameter_px,
                 max_diameter_px=self._desired_blob_max_diameter_px,
                 circularity_min=self._desired_circularity_min,
-                debug_preview=None,
+                debug_preview=self._debug_preview,
                 capture_mode=mode,
             )
             emitter.set_mask(mask_to_apply)
@@ -2112,9 +2115,9 @@ class ControlServer:
 
         result: dict[str, object] = {
             "mode": mode,
-            "mask_active": mask_required and mask_to_apply is not None,
-            "mask_ratio": self._mask_ratio if mask_required else None,
-            "mask_warning": self._mask_warning if mask_required else None,
+            "mask_active": mask_to_apply is not None,
+            "mask_ratio": self._mask_ratio,
+            "mask_warning": self._mask_warning,
         }
         return self._ok_response(
             request_id=request_id,
