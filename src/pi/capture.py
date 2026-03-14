@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import queue
 import importlib
 import json
 import math
@@ -13,10 +14,11 @@ import subprocess
 import sys
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Optional, Protocol, cast
+from typing import Any, Literal, Optional, Protocol, cast
 
 import cv2
 import numpy as np
@@ -48,6 +50,9 @@ DEFAULT_CAPTURE_WIDTH = 2304
 DEFAULT_CAPTURE_HEIGHT = 1296
 DEFAULT_TARGET_FPS = 56
 PREVIEW_STOP_TIMEOUT_SECONDS = 2.0
+PROCESSING_QUEUE_MAXSIZE = 2
+PREVIEW_QUEUE_MAXSIZE = 1
+PREVIEW_MAX_DIMENSION = 1280
 PTP_SANITY_CACHE_US = 60_000_000
 PTP_LOCK_OFFSET_THRESHOLD_US = 500.0
 PTP_RO_SOCKET_PATH = "/var/run/ptp4lro"
@@ -183,6 +188,181 @@ def get_default_backend() -> str:
     return "picamera2" if running_on_raspberry_pi() else "dummy"
 
 
+def _latest_queue_put(target_queue: queue.Queue[object], item: object) -> int:
+    dropped = 0
+    while True:
+        try:
+            target_queue.put_nowait(item)
+            return dropped
+        except queue.Full:
+            try:
+                _ = target_queue.get_nowait()
+                dropped += 1
+            except queue.Empty:
+                time.sleep(0)
+
+
+def _pose_capture_quality(blobs: list[dict[str, object]]) -> float:
+    if not blobs:
+        return 0.0
+    quality = 1.0 / float(max(1, len(blobs)))
+    max_area = max(float(blob.get("area", 0.0)) for blob in blobs)
+    if max_area <= 0.0:
+        quality *= 0.25
+    return float(max(0.0, min(1.0, quality)))
+
+
+def _resize_preview_payload(
+    frame: np.ndarray,
+    blobs: list[dict[str, float]],
+    mask: np.ndarray | None,
+) -> tuple[np.ndarray, list[dict[str, float]], np.ndarray | None]:
+    height, width = frame.shape[:2]
+    max_dim = max(height, width)
+    if max_dim <= PREVIEW_MAX_DIMENSION:
+        return frame, blobs, mask
+
+    scale = float(PREVIEW_MAX_DIMENSION) / float(max_dim)
+    target_width = max(1, int(round(width * scale)))
+    target_height = max(1, int(round(height * scale)))
+    resized_frame = cv2.resize(
+        frame,
+        (target_width, target_height),
+        interpolation=cv2.INTER_AREA,
+    )
+    resized_blobs = [
+        {
+            "x": float(blob["x"]) * scale,
+            "y": float(blob["y"]) * scale,
+            "area": float(blob["area"]) * scale * scale,
+        }
+        for blob in blobs
+    ]
+    resized_mask: np.ndarray | None = None
+    if mask is not None:
+        resized_mask = cv2.resize(
+            mask.astype(np.uint8),
+            (target_width, target_height),
+            interpolation=cv2.INTER_NEAREST,
+        ).astype(bool)
+    return resized_frame, resized_blobs, resized_mask
+
+
+def _finalize_static_mask_from_hits(
+    hit_counts: np.ndarray,
+    *,
+    frames: int,
+    hit_ratio: float,
+    min_area: int,
+    dilate: int,
+) -> tuple[np.ndarray, int]:
+    required = max(1, math.ceil(float(hit_ratio) * float(frames)))
+    mask_uint8 = (hit_counts >= required).astype(np.uint8) * 255
+
+    if min_area > 0:
+        contours_info = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours = contours_info[0] if len(contours_info) == 2 else contours_info[1]
+        for contour in contours:
+            if cv2.contourArea(contour) < min_area:
+                cv2.drawContours(mask_uint8, [contour], -1, 0, thickness=-1)
+
+    if dilate > 0:
+        kernel_size = max(1, dilate) * 2 + 1
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+        mask_uint8 = cv2.dilate(mask_uint8, kernel)
+
+    mask = mask_uint8.astype(bool)
+    return mask, int(np.count_nonzero(mask))
+
+
+@dataclass(frozen=True)
+class _FramePacket:
+    captured_frame: CapturedFrame
+    captured_monotonic_ns: int
+
+
+@dataclass(frozen=True)
+class _PreviewPacket:
+    frame: np.ndarray
+    blobs: list[dict[str, float]]
+    mask: np.ndarray | None
+    stats: dict[str, object]
+    extra_lines: tuple[str, ...] = ()
+
+
+class _MaskBuildRequest:
+    def __init__(
+        self,
+        *,
+        frames: int,
+        threshold: int,
+        hit_ratio: float,
+        min_area: int,
+        dilate: int,
+        deadline_monotonic: float | None,
+    ) -> None:
+        self.frames = int(frames)
+        self.threshold = int(threshold)
+        self.hit_ratio = float(hit_ratio)
+        self.min_area = int(min_area)
+        self.dilate = int(dilate)
+        self.deadline_monotonic = deadline_monotonic
+        self._lock = threading.Lock()
+        self._completed = threading.Event()
+        self._hit_counts: np.ndarray | None = None
+        self._frames_seen = 0
+        self._mask: np.ndarray | None = None
+        self._mask_pixels = 0
+        self._error: Exception | None = None
+
+    @property
+    def completed(self) -> bool:
+        return self._completed.is_set()
+
+    def consume_frame(self, frame: np.ndarray) -> None:
+        with self._lock:
+            if self._completed.is_set():
+                return
+            if (
+                self.deadline_monotonic is not None
+                and time.perf_counter() > self.deadline_monotonic
+            ):
+                self._error = TimeoutError("mask_init_timed_out")
+                self._completed.set()
+                return
+
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+            if self._hit_counts is None:
+                self._hit_counts = np.zeros(gray.shape, dtype=np.uint16)
+            self._hit_counts += (gray > self.threshold).astype(np.uint16)
+            self._frames_seen += 1
+
+            if self._frames_seen < self.frames:
+                return
+
+            try:
+                self._mask, self._mask_pixels = _finalize_static_mask_from_hits(
+                    self._hit_counts,
+                    frames=self.frames,
+                    hit_ratio=self.hit_ratio,
+                    min_area=self.min_area,
+                    dilate=self.dilate,
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._error = exc
+            self._completed.set()
+
+    def wait(self, timeout: float | None = None) -> tuple[np.ndarray, int]:
+        if not self._completed.wait(timeout=timeout):
+            raise TimeoutError("mask_init_timed_out")
+        with self._lock:
+            if self._error is not None:
+                raise self._error
+            if self._mask is None:
+                raise RuntimeError("mask_init_incomplete")
+            return self._mask, int(self._mask_pixels)
+
+
 class UDPFrameEmitter:
     def __init__(
         self,
@@ -242,7 +422,6 @@ class UDPFrameEmitter:
         )
         self._debug_preview: DebugPreview | None = debug_preview
         self._capture_mode: str = str(capture_mode)
-        self._last_pose_blob_xy: tuple[float, float] | None = None
         self._time_override_enabled: bool = time_us_fn is not None
         self._last_timestamping_status: dict[str, object] = {
             "active_source": "capture_dequeue",
@@ -323,20 +502,6 @@ class UDPFrameEmitter:
         with self._lock:
             self._mask = mask.astype(bool, copy=False) if mask is not None else None
 
-    def _pick_pose_blob(self, blobs: list[dict[str, object]], frame: np.ndarray) -> tuple[dict[str, object] | None, float]:
-        if not blobs:
-            self._last_pose_blob_xy = None
-            return None, 0.0
-        best_blob = max(blobs, key=lambda blob: float(blob.get("area", 0.0)))
-        if best_blob is None:
-            self._last_pose_blob_xy = None
-            return None, 0.0
-        self._last_pose_blob_xy = (float(best_blob.get("x", 0.0)), float(best_blob.get("y", 0.0)))
-        quality = 1.0 / float(max(1, len(blobs)))
-        if float(best_blob.get("area", 0.0)) <= 0.0:
-            quality *= 0.25
-        return best_blob, float(max(0.0, min(1.0, quality)))
-
     def _loop(self) -> None:
         sent = 0
         next_tick = time.perf_counter()
@@ -389,11 +554,8 @@ class UDPFrameEmitter:
                 "blobs": blobs,
             }
             if self._capture_mode == "pose_capture":
-                best_blob, quality = self._pick_pose_blob(blobs, frame)
-                if best_blob is not None:
-                    msg["blobs"] = [best_blob]
                 msg["blob_count"] = len(blobs)
-                msg["quality"] = quality
+                msg["quality"] = _pose_capture_quality(cast(list[dict[str, object]], blobs))
             msg["capture_mode"] = self._capture_mode
             self._frame_index = (self._frame_index + 1) & 0xFFFFFFFF
 
@@ -575,10 +737,6 @@ class DebugPreview:
                 mask_overlay[:, :, 2] = 255
                 blended = cv2.addWeighted(canvas, 0.72, mask_overlay, 0.28, 0)
                 canvas[mask_bool] = blended[mask_bool]
-                mask_uint8 = mask_bool.astype(np.uint8) * 255
-                contours_info = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                contours = contours_info[0] if len(contours_info) == 2 else contours_info[1]
-                cv2.drawContours(canvas, contours, -1, (0, 64, 255), 2)
 
         for blob in blobs:
             center = (int(round(float(blob["x"]))), int(round(float(blob["y"]))))
@@ -1133,6 +1291,676 @@ def detect_blobs(
     return blobs, diagnostics
 
 
+class _PreviewWorker:
+    def __init__(
+        self,
+        *,
+        preview: DebugPreview,
+        camera_id: str,
+        log_fn: Callable[[str], None],
+    ) -> None:
+        self._preview = preview
+        self._camera_id = camera_id
+        self._log = log_fn
+        self._queue: queue.Queue[object] = queue.Queue(maxsize=PREVIEW_QUEUE_MAXSIZE)
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+        self._frames_rendered = 0
+        self._frames_dropped = 0
+        self._started_monotonic = 0.0
+
+    def start(self) -> None:
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._stop_event.clear()
+            self._started_monotonic = time.monotonic()
+            self._thread = threading.Thread(target=self._loop, daemon=True)
+            self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        with self._lock:
+            thread = self._thread
+            self._thread = None
+        if thread is not None:
+            thread.join(timeout=1.0)
+
+    def submit(self, packet: _PreviewPacket) -> None:
+        dropped = _latest_queue_put(self._queue, packet)
+        if dropped <= 0:
+            return
+        with self._lock:
+            self._frames_dropped += dropped
+
+    def is_active(self) -> bool:
+        with self._lock:
+            thread = self._thread
+        return bool(
+            (thread is not None and thread.is_alive())
+            or self._preview.window_open
+        )
+
+    def get_runtime_diagnostics(self) -> dict[str, object]:
+        with self._lock:
+            frames_rendered = self._frames_rendered
+            frames_dropped = self._frames_dropped
+            started_monotonic = self._started_monotonic
+        elapsed = max(1e-6, time.monotonic() - started_monotonic) if started_monotonic > 0.0 else 0.0
+        preview_fps = float(frames_rendered) / elapsed if elapsed > 0.0 else 0.0
+        return {
+            "preview_fps": preview_fps,
+            "frames_dropped_preview": int(frames_dropped),
+        }
+
+    def _loop(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                packet = cast(_PreviewPacket, self._queue.get(timeout=0.1))
+            except queue.Empty:
+                continue
+            try:
+                self._preview.show(
+                    frame=packet.frame,
+                    blobs=packet.blobs,
+                    mask=packet.mask,
+                    stats=packet.stats,
+                    camera_id=self._camera_id,
+                    extra_lines=list(packet.extra_lines),
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._log(f"preview worker failed: {exc}")
+            with self._lock:
+                self._frames_rendered += 1
+
+
+class _CameraWorker:
+    def __init__(
+        self,
+        *,
+        backend_factory: Callable[[], FrameBackend],
+        apply_backend_settings: Callable[[FrameBackend], None],
+        frame_queue: queue.Queue[object],
+        active_event: threading.Event,
+        get_loop_fps: Callable[[], float],
+        log_fn: Callable[[str], None],
+    ) -> None:
+        self._backend_factory = backend_factory
+        self._apply_backend_settings = apply_backend_settings
+        self._frame_queue = frame_queue
+        self._active_event = active_event
+        self._get_loop_fps = get_loop_fps
+        self._log = log_fn
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+        self._backend: FrameBackend | None = None
+        self._frames_captured = 0
+        self._frames_dropped_processing = 0
+        self._started_monotonic = 0.0
+
+    def start(self) -> None:
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            backend = self._backend_factory()
+            self._apply_backend_settings(backend)
+            backend.start()
+            self._backend = backend
+            self._stop_event.clear()
+            self._started_monotonic = time.monotonic()
+            self._thread = threading.Thread(target=self._loop, daemon=True)
+            self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        self._active_event.set()
+        with self._lock:
+            thread = self._thread
+            backend = self._backend
+            self._thread = None
+            self._backend = None
+        if thread is not None:
+            thread.join(timeout=1.0)
+        if backend is not None:
+            try:
+                backend.stop()
+            except Exception:
+                pass
+
+    def get_runtime_diagnostics(self) -> dict[str, object]:
+        with self._lock:
+            frames_captured = self._frames_captured
+            dropped = self._frames_dropped_processing
+            started_monotonic = self._started_monotonic
+            backend = self._backend
+        elapsed = max(1e-6, time.monotonic() - started_monotonic) if started_monotonic > 0.0 else 0.0
+        capture_fps = float(frames_captured) / elapsed if elapsed > 0.0 else 0.0
+        return {
+            "capture_fps": capture_fps,
+            "frames_dropped_processing": int(dropped),
+            "backend_active": bool(backend is not None),
+        }
+
+    def apply_control(self, fn: Callable[[FrameBackend], None]) -> None:
+        with self._lock:
+            backend = self._backend
+        if backend is None:
+            return
+        fn(backend)
+
+    def _loop(self) -> None:
+        with self._lock:
+            backend = self._backend
+        if backend is None:
+            return
+        is_dummy_backend = isinstance(backend, DummyBackend)
+        while not self._stop_event.is_set():
+            if not self._active_event.wait(timeout=0.1):
+                continue
+            try:
+                captured_frame = backend.next_captured_frame()
+            except Exception as exc:  # noqa: BLE001
+                self._log(f"camera worker capture failed: {exc}")
+                self._stop_event.wait(0.05)
+                continue
+            dropped = _latest_queue_put(
+                self._frame_queue,
+                _FramePacket(
+                    captured_frame=captured_frame,
+                    captured_monotonic_ns=time.monotonic_ns(),
+                ),
+            )
+            with self._lock:
+                self._frames_captured += 1
+                self._frames_dropped_processing += dropped
+            if is_dummy_backend:
+                fps = max(1.0, float(self._get_loop_fps()))
+                self._stop_event.wait(1.0 / fps)
+
+
+class _ProcessingWorker:
+    def __init__(
+        self,
+        *,
+        camera_id: str,
+        udp_host: str,
+        udp_port: int,
+        frame_queue: queue.Queue[object],
+        preview_worker: _PreviewWorker | None,
+        log_fn: Callable[[str], None],
+    ) -> None:
+        self._camera_id = camera_id
+        self._udp_host = udp_host
+        self._udp_port = udp_port
+        self._frame_queue = frame_queue
+        self._preview_worker = preview_worker
+        self._log = log_fn
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._socket: socket.socket | None = None
+        self._lock = threading.Lock()
+        self._threshold = MASK_THRESHOLD
+        self._min_diameter_px: float | None = None
+        self._max_diameter_px: float | None = None
+        self._circularity_min = DEFAULT_CIRCULARITY_MIN
+        self._mask: np.ndarray | None = None
+        self._state_label = STATE_IDLE
+        self._stream_mode: str | None = None
+        self._mask_build_request: _MaskBuildRequest | None = None
+        self._last_detection_stats: dict[str, object] = {
+            "threshold": self._threshold,
+            "min_diameter_px": self._min_diameter_px,
+            "max_diameter_px": self._max_diameter_px,
+            "circularity_min": self._circularity_min,
+            "raw_contour_count": 0,
+            "accepted_blob_count": 0,
+            "rejected_by_diameter": 0,
+            "rejected_by_circularity": 0,
+            "last_blob_count": 0,
+        }
+        self._last_timestamping_status: dict[str, object] = {
+            "active_source": "capture_dequeue",
+            "sensor_timestamp_available": False,
+        }
+        self._frame_index = 0
+        self._frames_processed = 0
+        self._frames_sent = 0
+        self._capture_to_process_ms: deque[float] = deque(maxlen=256)
+        self._capture_to_send_ms: deque[float] = deque(maxlen=256)
+        self._started_monotonic = 0.0
+
+    def start(self) -> None:
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._stop_event.clear()
+            self._started_monotonic = time.monotonic()
+            self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            if self._udp_host in ("255.255.255.255", "<broadcast>"):
+                self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            self._thread = threading.Thread(target=self._loop, daemon=True)
+            self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        with self._lock:
+            thread = self._thread
+            sock = self._socket
+            self._thread = None
+            self._socket = None
+            self._mask_build_request = None
+            self._stream_mode = None
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
+        if thread is not None:
+            thread.join(timeout=1.0)
+
+    def set_detection_settings(
+        self,
+        *,
+        threshold: int,
+        min_diameter_px: float | None,
+        max_diameter_px: float | None,
+        circularity_min: float,
+    ) -> None:
+        with self._lock:
+            self._threshold = int(threshold)
+            self._min_diameter_px = min_diameter_px
+            self._max_diameter_px = max_diameter_px
+            self._circularity_min = float(circularity_min)
+
+    def set_mask(self, mask: np.ndarray | None) -> None:
+        with self._lock:
+            self._mask = mask.astype(bool, copy=False) if mask is not None else None
+
+    def set_state_label(self, state_label: str) -> None:
+        with self._lock:
+            self._state_label = str(state_label)
+
+    def set_stream_mode(self, mode: str | None) -> None:
+        with self._lock:
+            self._stream_mode = str(mode) if mode is not None else None
+
+    def set_mask_build_request(self, request: _MaskBuildRequest | None) -> None:
+        with self._lock:
+            self._mask_build_request = request
+
+    def get_last_detection_stats(self) -> dict[str, object]:
+        with self._lock:
+            return dict(self._last_detection_stats)
+
+    def get_last_timestamping_status(self) -> dict[str, object]:
+        with self._lock:
+            return dict(self._last_timestamping_status)
+
+    def get_runtime_diagnostics(self) -> dict[str, object]:
+        with self._lock:
+            frames_processed = self._frames_processed
+            frames_sent = self._frames_sent
+            capture_to_process_ms = list(self._capture_to_process_ms)
+            capture_to_send_ms = list(self._capture_to_send_ms)
+            started_monotonic = self._started_monotonic
+            stream_mode = self._stream_mode
+        elapsed = max(1e-6, time.monotonic() - started_monotonic) if started_monotonic > 0.0 else 0.0
+        processing_fps = float(frames_processed) / elapsed if elapsed > 0.0 else 0.0
+        send_fps = float(frames_sent) / elapsed if elapsed > 0.0 else 0.0
+        return {
+            "processing_fps": processing_fps,
+            "send_fps": send_fps,
+            "capture_to_process_ms_p50": float(np.percentile(capture_to_process_ms, 50))
+            if capture_to_process_ms
+            else 0.0,
+            "capture_to_process_ms_p90": float(np.percentile(capture_to_process_ms, 90))
+            if capture_to_process_ms
+            else 0.0,
+            "capture_to_send_ms_p50": float(np.percentile(capture_to_send_ms, 50))
+            if capture_to_send_ms
+            else 0.0,
+            "capture_to_send_ms_p90": float(np.percentile(capture_to_send_ms, 90))
+            if capture_to_send_ms
+            else 0.0,
+            "stream_active": bool(stream_mode is not None),
+        }
+
+    def _loop(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                packet = cast(_FramePacket, self._frame_queue.get(timeout=0.1))
+            except queue.Empty:
+                continue
+
+            with self._lock:
+                threshold = self._threshold
+                min_diameter_px = self._min_diameter_px
+                max_diameter_px = self._max_diameter_px
+                circularity_min = self._circularity_min
+                mask = self._mask
+                state_label = self._state_label
+                stream_mode = self._stream_mode
+                mask_build_request = self._mask_build_request
+                sock = self._socket
+
+            if mask_build_request is not None:
+                try:
+                    mask_build_request.consume_frame(packet.captured_frame.image)
+                except Exception as exc:  # noqa: BLE001
+                    self._log(f"mask build failed: {exc}")
+
+            applied_mask = None if state_label == STATE_MASK_INIT else mask
+            blobs, stats = detect_blobs(
+                packet.captured_frame.image,
+                threshold=threshold,
+                mask=applied_mask,
+                min_diameter_px=min_diameter_px,
+                max_diameter_px=max_diameter_px,
+                circularity_min=circularity_min,
+            )
+
+            processed_monotonic_ns = time.monotonic_ns()
+            capture_to_process_ms = (
+                float(processed_monotonic_ns - packet.captured_monotonic_ns) / 1_000_000.0
+            )
+            timestamping_status = {
+                "active_source": str(packet.captured_frame.timestamp_source),
+                "sensor_timestamp_available": bool(
+                    packet.captured_frame.sensor_timestamp_ns is not None
+                ),
+            }
+            with self._lock:
+                self._last_detection_stats = dict(stats)
+                self._last_timestamping_status = dict(timestamping_status)
+                self._frames_processed += 1
+                self._capture_to_process_ms.append(capture_to_process_ms)
+
+            if self._preview_worker is not None:
+                preview_frame, preview_blobs, preview_mask = _resize_preview_payload(
+                    packet.captured_frame.image,
+                    cast(list[dict[str, float]], blobs),
+                    applied_mask,
+                )
+                extra_lines = [f"state={state_label}"]
+                if stream_mode is not None:
+                    extra_lines.append(f"mode={stream_mode}")
+                self._preview_worker.submit(
+                    _PreviewPacket(
+                        frame=preview_frame,
+                        blobs=preview_blobs,
+                        mask=preview_mask,
+                        stats=stats,
+                        extra_lines=tuple(extra_lines),
+                    )
+                )
+
+            if stream_mode is None or sock is None:
+                continue
+
+            msg: dict[str, object] = {
+                "camera_id": self._camera_id,
+                "timestamp": int(packet.captured_frame.timestamp_us),
+                "timestamp_source": str(packet.captured_frame.timestamp_source),
+                "frame_index": int(self._frame_index & 0xFFFFFFFF),
+                "blobs": blobs,
+                "capture_mode": stream_mode,
+            }
+            if stream_mode == "pose_capture":
+                msg["blob_count"] = len(blobs)
+                msg["quality"] = _pose_capture_quality(cast(list[dict[str, object]], blobs))
+            self._frame_index = (self._frame_index + 1) & 0xFFFFFFFF
+
+            payload = json.dumps(msg, separators=(",", ":")).encode("utf-8")
+            try:
+                _ = sock.sendto(payload, (self._udp_host, self._udp_port))
+            except OSError:
+                continue
+            sent_monotonic_ns = time.monotonic_ns()
+            with self._lock:
+                self._frames_sent += 1
+                self._capture_to_send_ms.append(
+                    float(sent_monotonic_ns - packet.captured_monotonic_ns) / 1_000_000.0
+                )
+
+
+class _CapturePipeline:
+    def __init__(
+        self,
+        *,
+        camera_id: str,
+        udp_host: str,
+        udp_port: int,
+        backend_factory: Callable[[], FrameBackend],
+        debug_preview: DebugPreview | None,
+        log_fn: Callable[[str], None],
+    ) -> None:
+        self._camera_id = camera_id
+        self._backend_factory = backend_factory
+        self._debug_preview = debug_preview
+        self._log = log_fn
+        self._lock = threading.Lock()
+        self._active_event = threading.Event()
+        self._frame_queue: queue.Queue[object] = queue.Queue(maxsize=PROCESSING_QUEUE_MAXSIZE)
+        self._started = False
+        self._stream_mode: str | None = None
+        self._mask_build_active = False
+        self._desired_fps = float(DEFAULT_TARGET_FPS)
+        self._desired_exposure_us: int | None = None
+        self._desired_gain: float | None = None
+        self._desired_focus: float | None = 5.215
+        self._state_label = STATE_IDLE
+        self._preview_worker = (
+            _PreviewWorker(preview=debug_preview, camera_id=camera_id, log_fn=log_fn)
+            if debug_preview is not None and debug_preview.enabled
+            else None
+        )
+        self._processing_worker = _ProcessingWorker(
+            camera_id=camera_id,
+            udp_host=udp_host,
+            udp_port=udp_port,
+            frame_queue=self._frame_queue,
+            preview_worker=self._preview_worker,
+            log_fn=log_fn,
+        )
+        self._camera_worker = _CameraWorker(
+            backend_factory=backend_factory,
+            apply_backend_settings=self._apply_backend_settings,
+            frame_queue=self._frame_queue,
+            active_event=self._active_event,
+            get_loop_fps=self._get_loop_fps,
+            log_fn=log_fn,
+        )
+
+    def start(self) -> None:
+        with self._lock:
+            if self._started:
+                return
+        if self._preview_worker is not None:
+            self._preview_worker.start()
+        try:
+            self._processing_worker.start()
+            self._camera_worker.start()
+        except Exception:
+            self._processing_worker.stop()
+            if self._preview_worker is not None:
+                self._preview_worker.stop()
+            raise
+        with self._lock:
+            self._started = True
+        self._refresh_activity()
+
+    def stop(self) -> None:
+        with self._lock:
+            if not self._started:
+                return
+            self._started = False
+        self._active_event.set()
+        self._camera_worker.stop()
+        self._processing_worker.stop()
+        if self._preview_worker is not None:
+            self._preview_worker.stop()
+
+    def set_backend_controls(
+        self,
+        *,
+        exposure_us: int | None = None,
+        gain: float | None = None,
+        fps: int | None = None,
+        focus: float | None = None,
+    ) -> None:
+        with self._lock:
+            if exposure_us is not None:
+                self._desired_exposure_us = int(exposure_us)
+            if gain is not None:
+                self._desired_gain = float(gain)
+            if fps is not None and int(fps) > 0:
+                self._desired_fps = float(int(fps))
+            if focus is not None:
+                self._desired_focus = float(focus)
+        if exposure_us is not None:
+            self._camera_worker.apply_control(lambda backend: backend.set_exposure_us(int(exposure_us)))
+        if gain is not None:
+            self._camera_worker.apply_control(lambda backend: backend.set_gain(float(gain)))
+        if fps is not None and int(fps) > 0:
+            self._camera_worker.apply_control(lambda backend: backend.set_fps(int(fps)))
+        if focus is not None:
+            self._camera_worker.apply_control(lambda backend: backend.set_focus(float(focus)))
+
+    def set_detection_settings(
+        self,
+        *,
+        threshold: int,
+        min_diameter_px: float | None,
+        max_diameter_px: float | None,
+        circularity_min: float,
+    ) -> None:
+        self._processing_worker.set_detection_settings(
+            threshold=threshold,
+            min_diameter_px=min_diameter_px,
+            max_diameter_px=max_diameter_px,
+            circularity_min=circularity_min,
+        )
+
+    def set_mask(self, mask: np.ndarray | None) -> None:
+        self._processing_worker.set_mask(mask)
+
+    def set_state_label(self, state_label: str) -> None:
+        with self._lock:
+            self._state_label = str(state_label)
+        self._processing_worker.set_state_label(state_label)
+
+    def start_stream(self, mode: str) -> None:
+        with self._lock:
+            self._stream_mode = str(mode)
+        self._processing_worker.set_stream_mode(mode)
+        self._refresh_activity()
+
+    def stop_stream(self) -> None:
+        with self._lock:
+            self._stream_mode = None
+        self._processing_worker.set_stream_mode(None)
+        self._refresh_activity()
+
+    def build_mask(
+        self,
+        *,
+        frames: int,
+        threshold: int,
+        hit_ratio: float,
+        min_area: int,
+        dilate: int,
+        timeout_s: float,
+    ) -> tuple[np.ndarray, int]:
+        request = _MaskBuildRequest(
+            frames=frames,
+            threshold=threshold,
+            hit_ratio=hit_ratio,
+            min_area=min_area,
+            dilate=dilate,
+            deadline_monotonic=time.perf_counter() + max(0.1, float(timeout_s)),
+        )
+        with self._lock:
+            self._mask_build_active = True
+        self._processing_worker.set_mask_build_request(request)
+        self._refresh_activity()
+        try:
+            return request.wait(timeout=max(0.1, float(timeout_s) + 0.5))
+        finally:
+            self._processing_worker.set_mask_build_request(None)
+            with self._lock:
+                self._mask_build_active = False
+            self._refresh_activity()
+
+    def get_last_detection_stats(self) -> dict[str, object]:
+        return self._processing_worker.get_last_detection_stats()
+
+    def get_last_timestamping_status(self) -> dict[str, object]:
+        return self._processing_worker.get_last_timestamping_status()
+
+    def get_runtime_diagnostics(self) -> dict[str, object]:
+        runtime = {}
+        runtime.update(self._camera_worker.get_runtime_diagnostics())
+        runtime.update(self._processing_worker.get_runtime_diagnostics())
+        if self._preview_worker is not None:
+            runtime.update(self._preview_worker.get_runtime_diagnostics())
+            runtime["preview_queue_depth"] = self._preview_worker._queue.qsize()
+        else:
+            runtime["preview_fps"] = 0.0
+            runtime["frames_dropped_preview"] = 0
+            runtime["preview_queue_depth"] = 0
+        runtime["processing_queue_depth"] = self._frame_queue.qsize()
+        return runtime
+
+    def debug_preview_active(self) -> bool:
+        with self._lock:
+            stream_mode = self._stream_mode
+        return bool(
+            stream_mode is not None
+            or (self._preview_worker is not None and self._preview_worker.is_active())
+        )
+
+    def _apply_backend_settings(self, backend: FrameBackend) -> None:
+        with self._lock:
+            desired_exposure_us = self._desired_exposure_us
+            desired_gain = self._desired_gain
+            desired_fps = self._desired_fps
+            desired_focus = self._desired_focus
+        if desired_exposure_us is not None:
+            backend.set_exposure_us(int(desired_exposure_us))
+        if desired_gain is not None:
+            backend.set_gain(float(desired_gain))
+        if desired_fps > 0.0:
+            backend.set_fps(int(round(desired_fps)))
+        if desired_focus is not None:
+            backend.set_focus(float(desired_focus))
+
+    def _get_loop_fps(self) -> float:
+        with self._lock:
+            desired_fps = max(1.0, float(self._desired_fps))
+            stream_mode = self._stream_mode
+            mask_build_active = self._mask_build_active
+            preview_enabled = self._preview_worker is not None
+        if stream_mode is not None or mask_build_active:
+            return desired_fps
+        if preview_enabled:
+            return min(desired_fps, IDLE_PREVIEW_FPS)
+        return desired_fps
+
+    def _refresh_activity(self) -> None:
+        with self._lock:
+            should_run = bool(
+                self._stream_mode is not None
+                or self._mask_build_active
+                or self._preview_worker is not None
+            )
+        if should_run:
+            self._active_event.set()
+        else:
+            self._active_event.clear()
+
+
 @dataclass
 class ControlServerConfig:
     camera_id: str = field(default_factory=get_default_camera_id)
@@ -1171,6 +1999,7 @@ class ControlServer:
         self._preview_handoff_backend: FrameBackend | None = None
         self._preview_handoff_ready_event: threading.Event | None = None
         self._preview_resume_event: threading.Event | None = None
+        self._pipeline: _CapturePipeline | None = None
 
         self._desired_exposure_us: int | None = None
         self._desired_gain: float | None = None
@@ -1227,7 +2056,13 @@ class ControlServer:
             f"fps={self._config.target_fps} "
             f"debug_preview={'on' if self._config.debug_preview else 'off'}"
         )
-        self._start_preview_loop()
+        if self._config.debug_preview:
+            try:
+                self._ensure_pipeline_started()
+            except BackendUnavailableError as exc:
+                self._log(f"preview pipeline unavailable: {exc}")
+            except Exception as exc:  # noqa: BLE001
+                self._log(f"preview pipeline start failed: {exc}")
 
         try:
             while self._running:
@@ -1249,23 +2084,51 @@ class ControlServer:
     def shutdown(self) -> None:
         self._running = False
         self._log("shutdown")
-        self._stop_preview_loop()
-        emitter = self._udp_emitter
-        self._udp_emitter = None
-        if emitter is not None:
-            emitter.stop()
+        pipeline = self._pipeline
+        self._pipeline = None
+        if pipeline is not None:
+            pipeline.stop()
         if self._debug_preview is not None:
             self._debug_preview.close()
-        backend = self._backend
-        self._backend = None
-        if backend is not None:
-            backend.stop()
         if self._server_socket is not None:
             try:
                 self._server_socket.close()
             except OSError:
                 pass
             self._server_socket = None
+
+    def _ensure_pipeline_started(self) -> _CapturePipeline:
+        with self._state_lock:
+            pipeline = self._pipeline
+        if pipeline is not None:
+            return pipeline
+
+        pipeline = _CapturePipeline(
+            camera_id=self._config.camera_id,
+            udp_host=self._config.udp_host,
+            udp_port=self._config.udp_port,
+            backend_factory=self._make_backend,
+            debug_preview=self._debug_preview,
+            log_fn=self._log,
+        )
+        pipeline.set_backend_controls(
+            exposure_us=self._desired_exposure_us,
+            gain=self._desired_gain,
+            fps=self._desired_fps,
+            focus=self._desired_focus,
+        )
+        pipeline.set_detection_settings(
+            threshold=self._desired_threshold,
+            min_diameter_px=self._desired_blob_min_diameter_px,
+            max_diameter_px=self._desired_blob_max_diameter_px,
+            circularity_min=self._desired_circularity_min,
+        )
+        pipeline.set_mask(self._static_mask)
+        pipeline.set_state_label(self._state)
+        pipeline.start()
+        with self._state_lock:
+            self._pipeline = pipeline
+        return pipeline
 
     def _start_preview_loop(self) -> None:
         if not self._config.debug_preview:
@@ -1845,30 +2708,13 @@ class ControlServer:
             self._state = STATE_MASK_INIT
 
         self._log(f"mask init started frames={frames} threshold={threshold}")
-        backend: FrameBackend | None = None
         mask: np.ndarray | None = None
         mask_pixels = 0
         mask_ratio = 0.0
         warning: str | None = None
         try:
-            backend = self._take_preview_backend_for_mask()
-            if backend is None:
-                self._log("mask init backend source=fresh")
-                if not self._stop_preview_loop():
-                    self._cancel_mask_state()
-                    self._log("mask init aborted: preview backend did not stop cleanly")
-                    return self._error_response(
-                        request_id=request_id,
-                        request_camera_id=request_camera_id,
-                        error_code=ERROR_INTERNAL,
-                        error_message="internal_error: mask_start_failed: preview_stop_timeout",
-                    )
-                backend = self._ensure_backend()
-                self._apply_backend_settings(backend)
-                backend.start()
-                self._log("mask init backend started source=fresh")
-            else:
-                self._log("mask init backend source=preview_handoff")
+            pipeline = self._ensure_pipeline_started()
+            pipeline.set_state_label(STATE_MASK_INIT)
             with self._state_lock:
                 fps_for_timeout = float(self._desired_fps or self._config.target_fps or 1.0)
             estimated_capture_s = float(frames) / max(1.0, fps_for_timeout)
@@ -1881,14 +2727,13 @@ class ControlServer:
                 f"frames={frames} timeout={mask_timeout_s:.1f}s hit_ratio={float(hit_ratio):.2f} "
                 f"min_area={min_area} dilate={dilate}"
             )
-            mask, mask_pixels = self._build_static_mask(
-                backend,
-                frames,
-                threshold,
-                float(hit_ratio),
-                min_area,
-                dilate,
-                deadline_monotonic=time.perf_counter() + mask_timeout_s,
+            mask, mask_pixels = pipeline.build_mask(
+                frames=frames,
+                threshold=threshold,
+                hit_ratio=float(hit_ratio),
+                min_area=min_area,
+                dilate=dilate,
+                timeout_s=mask_timeout_s,
             )
             mask_ratio = mask_pixels / float(mask.size)
             self._log(
@@ -1899,7 +2744,9 @@ class ControlServer:
                 warning = f"mask_ratio_high ({mask_ratio:.3f})"
         except TimeoutError as exc:
             self._cancel_mask_state()
-            self._start_preview_loop()
+            if self._pipeline is not None:
+                self._pipeline.set_mask(None)
+                self._pipeline.set_state_label(STATE_IDLE)
             self._log(f"mask init timed out: {exc}")
             return self._error_response(
                 request_id=request_id,
@@ -1909,7 +2756,9 @@ class ControlServer:
             )
         except BackendUnavailableError as exc:
             self._cancel_mask_state()
-            self._start_preview_loop()
+            if self._pipeline is not None:
+                self._pipeline.set_mask(None)
+                self._pipeline.set_state_label(STATE_IDLE)
             self._log(f"mask init backend unavailable: {exc}")
             return self._error_response(
                 request_id=request_id,
@@ -1919,7 +2768,9 @@ class ControlServer:
             )
         except Exception as exc:
             self._cancel_mask_state()
-            self._start_preview_loop()
+            if self._pipeline is not None:
+                self._pipeline.set_mask(None)
+                self._pipeline.set_state_label(STATE_IDLE)
             self._log(f"mask init failed: {exc}")
             return self._error_response(
                 request_id=request_id,
@@ -1927,11 +2778,6 @@ class ControlServer:
                 error_code=ERROR_INTERNAL,
                 error_message=f"internal_error: mask_start_failed: {exc}",
             )
-        finally:
-            if backend is not None:
-                self._log("mask init backend stopping")
-                backend.stop()
-                self._log("mask init backend stopped")
 
         with self._state_lock:
             self._static_mask = mask
@@ -1939,13 +2785,14 @@ class ControlServer:
             self._mask_ratio = mask_ratio
             self._mask_warning = warning
             self._state = STATE_READY
+        if self._pipeline is not None:
+            self._pipeline.set_mask(mask)
+            self._pipeline.set_state_label(STATE_READY)
         self._log(
             "mask init completed "
             f"pixels={mask_pixels} ratio={mask_ratio:.3f}"
             + (f" warning={warning}" if warning else "")
         )
-
-        self._start_preview_loop()
 
         result: dict[str, object] = {
             "mask_pixels": mask_pixels,
@@ -1980,10 +2827,9 @@ class ControlServer:
             self._state = STATE_IDLE
             self._clear_mask()
 
-        emitter = self._udp_emitter
-        if emitter is not None:
-            emitter.set_mask(None)
-        self._start_preview_loop()
+        if self._pipeline is not None:
+            self._pipeline.set_mask(None)
+            self._pipeline.set_state_label(STATE_IDLE)
 
         return self._ok_response(
             request_id=request_id,
@@ -2033,59 +2879,19 @@ class ControlServer:
                 )
             self._state = STATE_RUNNING
 
-        backend: FrameBackend | None = None
-        emitter: UDPFrameEmitter | None = None
         mask_to_apply = self._static_mask
         try:
-            backend = self._take_preview_backend_for_mask()
-            if backend is None:
-                if self._config.debug_preview:
-                    with self._state_lock:
-                        self._state = prev_state
-                    self._start_preview_loop()
-                    return self._error_response(
-                        request_id=request_id,
-                        request_camera_id=camera_id,
-                        error_code=ERROR_INTERNAL,
-                        error_message=(
-                            "internal_error: start_failed: preview_handoff_required "
-                            "(rebuild mask or check preview/backend state)"
-                        ),
-                    )
-                self._log("capture backend source=fresh")
-                backend = self._ensure_backend()
-                self._apply_backend_settings(backend)
-                backend.start()
-                self._log(f"capture backend started mode={mode} source=fresh")
-            else:
-                self._log(f"capture backend started mode={mode} source=preview_handoff")
-
-            emitter = UDPFrameEmitter(
-                camera_id=self._config.camera_id,
-                udp_host=self._config.udp_host,
-                udp_port=self._config.udp_port,
-                target_fps=float(self._config.target_fps),
-                backend=backend,
-                threshold=int(self._desired_threshold),
-                min_diameter_px=self._desired_blob_min_diameter_px,
-                max_diameter_px=self._desired_blob_max_diameter_px,
-                circularity_min=self._desired_circularity_min,
-                debug_preview=self._debug_preview,
-                capture_mode=mode,
-            )
-            emitter.set_mask(mask_to_apply)
-            emitter.start()
-            self._log(f"udp emitter started mode={mode}")
+            pipeline = self._ensure_pipeline_started()
+            pipeline.set_mask(mask_to_apply)
+            pipeline.set_state_label(STATE_RUNNING)
+            pipeline.start_stream(mode)
+            self._log(f"capture pipeline started mode={mode}")
         except BackendUnavailableError as exc:
-            if emitter is not None:
-                emitter.stop()
-            if backend is not None:
-                backend.stop()
             with self._state_lock:
                 self._state = prev_state
-                self._udp_emitter = None
-                self._backend = None
-            self._start_preview_loop()
+            if self._pipeline is not None:
+                self._pipeline.stop_stream()
+                self._pipeline.set_state_label(prev_state)
             return self._error_response(
                 request_id=request_id,
                 request_camera_id=camera_id,
@@ -2093,25 +2899,17 @@ class ControlServer:
                 error_message=f"backend_unavailable: {exc}",
             )
         except Exception as exc:
-            if emitter is not None:
-                emitter.stop()
-            if backend is not None:
-                backend.stop()
             with self._state_lock:
                 self._state = prev_state
-                self._udp_emitter = None
-                self._backend = None
-            self._start_preview_loop()
+            if self._pipeline is not None:
+                self._pipeline.stop_stream()
+                self._pipeline.set_state_label(prev_state)
             return self._error_response(
                 request_id=request_id,
                 request_camera_id=camera_id,
                 error_code=ERROR_INTERNAL,
                 error_message=f"internal_error: udp_start_failed: {exc}",
             )
-
-        with self._state_lock:
-            self._backend = backend
-            self._udp_emitter = emitter
 
         result: dict[str, object] = {
             "mode": mode,
@@ -2138,17 +2936,12 @@ class ControlServer:
             self._state = STATE_IDLE
 
         try:
-            emitter = self._udp_emitter
-            self._udp_emitter = None
-            if emitter is not None:
-                self._record_timestamping_diagnostics(emitter.get_last_timestamping_status())
-                emitter.stop()
-                self._log("udp emitter stopped")
-            backend = self._backend
-            self._backend = None
-            if backend is not None:
-                backend.stop()
-                self._log("capture backend stopped")
+            pipeline = self._pipeline
+            if pipeline is not None:
+                self._record_blob_diagnostics(pipeline.get_last_detection_stats())
+                self._record_timestamping_diagnostics(pipeline.get_last_timestamping_status())
+                pipeline.stop_stream()
+                self._log("capture pipeline stopped")
         except Exception as exc:
             return self._error_response(
                 request_id=request_id,
@@ -2159,7 +2952,8 @@ class ControlServer:
 
         with self._state_lock:
             self._state = STATE_READY if self._static_mask is not None else STATE_IDLE
-        self._start_preview_loop()
+        if self._pipeline is not None:
+            self._pipeline.set_state_label(self._state)
 
         return self._ok_response(request_id, request_camera_id)
 
@@ -2282,63 +3076,49 @@ class ControlServer:
         with self._state_lock:
             self._config.target_fps = fps_value
             self._desired_fps = fps_value
-            emitter = self._udp_emitter
-            backend = self._backend
-            preview_backend = self._preview_backend
-        if emitter is not None:
-            emitter.set_target_fps(float(fps_value))
-        for active_backend in {item for item in (backend, preview_backend) if item is not None}:
-            try:
-                active_backend.set_fps(fps_value)
-            except Exception:
-                pass
+            pipeline = self._pipeline
+        if pipeline is not None:
+            pipeline.set_backend_controls(fps=fps_value)
 
     def _set_exposure_us(self, value_us: int) -> None:
         value = int(value_us)
         with self._state_lock:
             self._desired_exposure_us = value
-            backend = self._backend
-            preview_backend = self._preview_backend
-        for active_backend in {item for item in (backend, preview_backend) if item is not None}:
-            try:
-                active_backend.set_exposure_us(value)
-            except Exception:
-                pass
+            pipeline = self._pipeline
+        if pipeline is not None:
+            pipeline.set_backend_controls(exposure_us=value)
 
     def _set_gain(self, value: float) -> None:
         gain_value = float(value)
         with self._state_lock:
             self._desired_gain = gain_value
-            backend = self._backend
-            preview_backend = self._preview_backend
-        for active_backend in {item for item in (backend, preview_backend) if item is not None}:
-            try:
-                active_backend.set_gain(gain_value)
-            except Exception:
-                pass
+            pipeline = self._pipeline
+        if pipeline is not None:
+            pipeline.set_backend_controls(gain=gain_value)
 
     def _set_focus(self, value: float) -> None:
         focus_value = float(value)
         with self._state_lock:
             self._desired_focus = focus_value
-            backend = self._backend
-            preview_backend = self._preview_backend
-        for active_backend in {item for item in (backend, preview_backend) if item is not None}:
-            try:
-                active_backend.set_focus(focus_value)
-            except Exception:
-                pass
+            pipeline = self._pipeline
+        if pipeline is not None:
+            pipeline.set_backend_controls(focus=focus_value)
 
     def _set_threshold(self, value: int) -> None:
         threshold_value = max(0, min(255, int(value)))
         with self._state_lock:
             self._desired_threshold = threshold_value
-            emitter = self._udp_emitter
-        if emitter is not None:
-            try:
-                emitter.set_threshold(threshold_value)
-            except Exception:
-                pass
+            pipeline = self._pipeline
+            min_diameter_px = self._desired_blob_min_diameter_px
+            max_diameter_px = self._desired_blob_max_diameter_px
+            circularity_min = self._desired_circularity_min
+        if pipeline is not None:
+            pipeline.set_detection_settings(
+                threshold=threshold_value,
+                min_diameter_px=min_diameter_px,
+                max_diameter_px=max_diameter_px,
+                circularity_min=circularity_min,
+            )
 
     def _set_blob_diameter(
         self,
@@ -2348,23 +3128,32 @@ class ControlServer:
         with self._state_lock:
             self._desired_blob_min_diameter_px = min_diameter_px
             self._desired_blob_max_diameter_px = max_diameter_px
-            emitter = self._udp_emitter
-        if emitter is not None:
-            try:
-                emitter.set_blob_diameter(min_diameter_px, max_diameter_px)
-            except Exception:
-                pass
+            pipeline = self._pipeline
+            threshold = self._desired_threshold
+            circularity_min = self._desired_circularity_min
+        if pipeline is not None:
+            pipeline.set_detection_settings(
+                threshold=threshold,
+                min_diameter_px=min_diameter_px,
+                max_diameter_px=max_diameter_px,
+                circularity_min=circularity_min,
+            )
 
     def _set_circularity_min(self, value: float) -> None:
         circularity_value = max(0.0, min(1.0, float(value)))
         with self._state_lock:
             self._desired_circularity_min = circularity_value
-            emitter = self._udp_emitter
-        if emitter is not None:
-            try:
-                emitter.set_circularity_min(circularity_value)
-            except Exception:
-                pass
+            pipeline = self._pipeline
+            threshold = self._desired_threshold
+            min_diameter_px = self._desired_blob_min_diameter_px
+            max_diameter_px = self._desired_blob_max_diameter_px
+        if pipeline is not None:
+            pipeline.set_detection_settings(
+                threshold=threshold,
+                min_diameter_px=min_diameter_px,
+                max_diameter_px=max_diameter_px,
+                circularity_min=circularity_value,
+            )
 
     def _handle_ping(self, request_id: str, request_camera_id: str) -> dict[str, object]:
         with self._state_lock:
@@ -2383,21 +3172,36 @@ class ControlServer:
                 "mask_warning": self._mask_warning,
                 "debug_preview_enabled": bool(self._debug_preview is not None and self._debug_preview.enabled),
             }
-            emitter = self._udp_emitter
-            preview_thread = self._preview_thread
+            pipeline = self._pipeline
             blob_diagnostics = dict(self._last_blob_diagnostics)
             timestamping = dict(self._last_timestamping_diagnostics)
         diagnostics["debug_preview_active"] = bool(
-            emitter is not None
-            or (preview_thread is not None and preview_thread.is_alive())
+            (pipeline is not None and pipeline.debug_preview_active())
             or (self._debug_preview is not None and self._debug_preview.window_open)
         )
         diagnostics["blob_diagnostics"] = (
-            emitter.get_last_detection_stats() if emitter is not None else blob_diagnostics
+            pipeline.get_last_detection_stats() if pipeline is not None else blob_diagnostics
         )
         diagnostics["clock_sync"] = self._get_clock_sync_diagnostics()
         diagnostics["timestamping"] = (
-            emitter.get_last_timestamping_status() if emitter is not None else timestamping
+            pipeline.get_last_timestamping_status() if pipeline is not None else timestamping
+        )
+        diagnostics["runtime"] = (
+            pipeline.get_runtime_diagnostics() if pipeline is not None else {
+                "capture_fps": 0.0,
+                "processing_fps": 0.0,
+                "preview_fps": 0.0,
+                "processing_queue_depth": 0,
+                "preview_queue_depth": 0,
+                "frames_dropped_processing": 0,
+                "frames_dropped_preview": 0,
+                "capture_to_process_ms_p50": 0.0,
+                "capture_to_process_ms_p90": 0.0,
+                "capture_to_send_ms_p50": 0.0,
+                "capture_to_send_ms_p90": 0.0,
+                "send_fps": 0.0,
+                "stream_active": False,
+            }
         )
         return self._ok_response(request_id, request_camera_id, result=diagnostics)
 

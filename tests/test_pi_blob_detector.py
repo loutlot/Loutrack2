@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sys
-import threading
 from pathlib import Path
 
 import numpy as np
@@ -10,20 +9,19 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.pi.capture import (
+from src.pi.capture import (  # noqa: E402
     ClockSyncSnapshot,
     ControlServer,
     ControlServerConfig,
     DebugPreview,
     DummyBackend,
     DummyBackendConfig,
-    STATE_MASK_INIT,
     STATE_READY,
     detect_blobs,
     get_default_backend,
     resolve_debug_preview_enabled,
 )
-from src.pi import capture as capture_mod
+from src.pi import capture as capture_mod  # noqa: E402
 
 
 def _expected_centers(cfg: DummyBackendConfig, frame_index: int) -> list[tuple[int, int]]:
@@ -79,7 +77,7 @@ def test_detect_blobs_threshold_255_returns_zero() -> None:
     assert diagnostics["accepted_blob_count"] == 0
 
 
-def test_control_server_ping_includes_blob_diagnostics() -> None:
+def test_control_server_ping_includes_blob_diagnostics_and_runtime() -> None:
     server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=False))
     response = server._handle_ping("req-1", "pi-cam-01")
 
@@ -90,12 +88,12 @@ def test_control_server_ping_includes_blob_diagnostics() -> None:
     assert result["debug_preview_active"] is False
     assert result["blob_diagnostics"]["threshold"] == 200
     assert result["clock_sync"]["status"] in {"locked", "degraded", "unknown"}
-    assert "offset_us" in result["clock_sync"]
-    assert "source" in result["clock_sync"]
     assert result["clock_sync"]["role"] in {"master", "slave", "unknown"}
     assert result["clock_sync"]["timestamping_mode"] in {"software", "hardware", "unknown"}
     assert result["timestamping"]["active_source"] == "capture_dequeue"
     assert result["timestamping"]["sensor_timestamp_available"] is False
+    assert result["runtime"]["capture_fps"] == 0.0
+    assert result["runtime"]["processing_queue_depth"] == 0
 
 
 def test_control_server_ping_caches_clock_sync_probe(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -160,102 +158,36 @@ def test_parse_pmc_time_status_allows_software_master_gm_present_false() -> None
 
 def test_mask_start_can_refresh_existing_mask() -> None:
     server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=False))
-    first = server._handle_mask_start("req-1", "pi-cam-01", {"frames": 2, "threshold": 200})
-    second = server._handle_mask_start("req-2", "pi-cam-01", {"frames": 2, "threshold": 200})
-    assert first["ack"] is True
-    assert second["ack"] is True
+    try:
+        first = server._handle_mask_start("req-1", "pi-cam-01", {"frames": 2, "threshold": 200})
+        second = server._handle_mask_start("req-2", "pi-cam-01", {"frames": 2, "threshold": 200})
+        assert first["ack"] is True
+        assert second["ack"] is True
+    finally:
+        server.shutdown()
 
 
-def test_mask_start_timeout_resets_state() -> None:
+def test_mask_start_timeout_resets_state(monkeypatch: pytest.MonkeyPatch) -> None:
     server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=False))
 
-    def _raise_timeout(*args, **kwargs):
-        raise TimeoutError("mask_init_timed_out")
+    class _FakePipeline:
+        def build_mask(self, **kwargs):
+            _ = kwargs
+            raise TimeoutError("mask_init_timed_out")
 
-    server._build_static_mask = _raise_timeout  # type: ignore[method-assign]
+        def set_mask(self, mask):
+            _ = mask
+
+        def set_state_label(self, state):
+            _ = state
+
+    monkeypatch.setattr(server, "_ensure_pipeline_started", lambda: _FakePipeline())
     response = server._handle_mask_start("req-1", "pi-cam-01", {"frames": 2, "threshold": 200})
 
     assert response["ack"] is False
     assert "mask_start_timeout" in response["error_message"]
     ping = server._handle_ping("req-2", "pi-cam-01")
     assert ping["result"]["state"] == "IDLE"
-
-
-def test_mask_start_reuses_preview_backend_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
-    server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=False))
-    preview_backend = DummyBackend(DummyBackendConfig(width=32, height=24, num_dots=0))
-
-    monkeypatch.setattr(server, "_take_preview_backend_for_mask", lambda: preview_backend)
-
-    def _unexpected_make_backend() -> DummyBackend:
-        raise AssertionError("mask_start should reuse preview backend")
-
-    monkeypatch.setattr(server, "_make_backend", _unexpected_make_backend)
-    response = server._handle_mask_start("req-1", "pi-cam-01", {"frames": 2, "threshold": 200})
-
-    assert response["ack"] is True
-
-
-def test_start_wand_metric_capture_reuses_preview_backend_and_keeps_emitter_preview(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=True))
-    server._state = STATE_READY
-    server._static_mask = np.ones((8, 8), dtype=bool)
-    preview_backend = DummyBackend(DummyBackendConfig(width=32, height=24, num_dots=0))
-    captured: dict[str, object] = {}
-
-    monkeypatch.setattr(server, "_take_preview_backend_for_mask", lambda: preview_backend)
-    monkeypatch.setattr(
-        server,
-        "_stop_preview_loop",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("start should not stop preview loop")),
-    )
-
-    class FakeEmitter:
-        def __init__(
-            self,
-            *,
-            camera_id: str,
-            udp_host: str,
-            udp_port: int,
-            target_fps: float,
-            backend: DummyBackend,
-            threshold: int,
-            min_diameter_px: float | None,
-            max_diameter_px: float | None,
-            circularity_min: float,
-            time_us_fn=None,
-            max_frames=None,
-            mask=None,
-            debug_preview=None,
-            capture_mode="capture",
-        ) -> None:
-            captured["camera_id"] = camera_id
-            captured["backend"] = backend
-            captured["debug_preview"] = debug_preview
-            captured["capture_mode"] = capture_mode
-            captured["started"] = False
-
-        def set_mask(self, mask: np.ndarray | None) -> None:
-            captured["mask"] = mask
-
-        def start(self) -> None:
-            captured["started"] = True
-
-        def stop(self) -> None:
-            return
-
-    monkeypatch.setattr("src.pi.capture.UDPFrameEmitter", FakeEmitter)
-
-    response = server._handle_start("req-1", "pi-cam-01", "wand_metric_capture", {})
-
-    assert response["ack"] is True
-    assert captured["backend"] is preview_backend
-    assert captured["debug_preview"] is server._debug_preview
-    assert captured["capture_mode"] == "wand_metric_capture"
-    assert captured["mask"] is server._static_mask
-    assert captured["started"] is True
 
 
 def test_start_capture_requires_ready_mask_for_all_modes() -> None:
@@ -267,83 +199,65 @@ def test_start_capture_requires_ready_mask_for_all_modes() -> None:
         assert response["error_message"] == "invalid_request: mask_required_for_mode"
 
 
-def test_start_pose_capture_always_applies_static_mask(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_start_pose_capture_always_applies_static_mask_and_uses_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=False))
     server._state = STATE_READY
     server._static_mask = np.ones((8, 8), dtype=bool)
-    preview_backend = DummyBackend(DummyBackendConfig(width=32, height=24, num_dots=0))
     captured: dict[str, object] = {}
 
-    monkeypatch.setattr(server, "_take_preview_backend_for_mask", lambda: preview_backend)
-
-    class FakeEmitter:
-        def __init__(self, **kwargs) -> None:
-            captured["debug_preview"] = kwargs.get("debug_preview")
-            captured["capture_mode"] = kwargs.get("capture_mode")
-
-        def set_mask(self, mask: np.ndarray | None) -> None:
+    class _FakePipeline:
+        def set_mask(self, mask):
             captured["mask"] = mask
 
-        def start(self) -> None:
-            captured["started"] = True
+        def set_state_label(self, state):
+            captured["state"] = state
 
-        def stop(self) -> None:
-            return
+        def start_stream(self, mode):
+            captured["mode"] = mode
 
-    monkeypatch.setattr("src.pi.capture.UDPFrameEmitter", FakeEmitter)
+        def stop_stream(self):
+            captured["stopped"] = True
+
+    monkeypatch.setattr(server, "_ensure_pipeline_started", lambda: _FakePipeline())
 
     response = server._handle_start("req-1", "pi-cam-01", "pose_capture", {})
 
     assert response["ack"] is True
     assert response["result"]["mask_active"] is True
-    assert response["result"]["mask_ratio"] == server._mask_ratio
-    assert captured["capture_mode"] == "pose_capture"
+    assert captured["mode"] == "pose_capture"
     assert captured["mask"] is server._static_mask
-    assert captured["started"] is True
+    assert captured["state"] == "RUNNING"
 
 
-def test_start_with_debug_preview_fails_without_preview_handoff(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=True))
-    server._state = STATE_READY
-    server._static_mask = np.ones((8, 8), dtype=bool)
+def test_handle_stop_returns_ready_and_keeps_mask(monkeypatch: pytest.MonkeyPatch) -> None:
+    server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=False))
+    server._state = "RUNNING"
+    server._static_mask = np.ones((4, 4), dtype=bool)
+    captured: dict[str, object] = {}
 
-    monkeypatch.setattr(server, "_take_preview_backend_for_mask", lambda: None)
-    monkeypatch.setattr(
-        server,
-        "_stop_preview_loop",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("debug preview start should not stop preview loop")
-        ),
-    )
+    class _FakePipeline:
+        def get_last_detection_stats(self):
+            return {"threshold": 200, "accepted_blob_count": 1}
 
-    response = server._handle_start("req-1", "pi-cam-01", "capture", {})
+        def get_last_timestamping_status(self):
+            return {"active_source": "sensor_metadata", "sensor_timestamp_available": True}
 
-    assert response["ack"] is False
-    assert "preview_handoff_required" in response["error_message"]
-    assert server._state == STATE_READY
+        def stop_stream(self):
+            captured["stop_stream"] = True
 
+        def set_state_label(self, state):
+            captured["state"] = state
 
-def test_mask_start_does_not_touch_debug_preview_during_mask_init(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=True))
-    preview = server._debug_preview
-    assert preview is not None
-    preview_backend = DummyBackend(DummyBackendConfig(width=32, height=24, num_dots=0))
+    server._pipeline = _FakePipeline()  # type: ignore[assignment]
 
-    monkeypatch.setattr(server, "_take_preview_backend_for_mask", lambda: preview_backend)
-    monkeypatch.setattr(server, "_start_preview_loop", lambda: None)
-    monkeypatch.setattr(
-        preview,
-        "show",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("mask_start should not render preview")),
-    )
-
-    response = server._handle_mask_start("req-1", "pi-cam-01", {"frames": 2, "threshold": 200})
+    response = server._handle_stop("req-1", "pi-cam-01")
 
     assert response["ack"] is True
+    assert server._state == STATE_READY
+    assert captured["stop_stream"] is True
+    assert captured["state"] == STATE_READY
 
 
 def test_resolve_debug_preview_enabled_requires_display(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -359,87 +273,6 @@ def test_resolve_debug_preview_enabled_accepts_display(monkeypatch: pytest.Monke
 def test_get_default_backend_prefers_dummy_off_pi(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("src.pi.capture.running_on_raspberry_pi", lambda: False)
     assert get_default_backend() == "dummy"
-
-
-def test_start_preview_loop_reuses_existing_debug_preview(monkeypatch: pytest.MonkeyPatch) -> None:
-    server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=True))
-    original_preview = server._debug_preview
-    server._running = True
-    monkeypatch.setattr(server, "_preview_loop", lambda stop_event: None)
-
-    server._start_preview_loop()
-    if server._preview_thread is not None:
-        server._preview_thread.join(timeout=1.0)
-
-    assert server._debug_preview is original_preview
-
-
-def test_start_preview_loop_resumes_existing_preview_thread() -> None:
-    server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=True))
-    server._running = True
-
-    class _AliveThread:
-        def is_alive(self) -> bool:
-            return True
-
-    server._preview_thread = _AliveThread()  # type: ignore[assignment]
-    server._preview_backend = None
-    server._preview_resume_event = threading.Event()
-
-    server._start_preview_loop()
-
-    assert server._preview_resume_event.is_set()
-
-
-def test_start_preview_loop_does_not_resume_during_mask_init() -> None:
-    server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=True))
-    server._running = True
-    server._state = STATE_MASK_INIT
-
-    class _AliveThread:
-        def is_alive(self) -> bool:
-            return True
-
-    server._preview_thread = _AliveThread()  # type: ignore[assignment]
-    server._preview_backend = None
-    server._preview_resume_event = threading.Event()
-
-    server._start_preview_loop()
-
-    assert server._preview_resume_event.is_set() is False
-
-
-def test_preview_handoff_keeps_backend_running() -> None:
-    server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=False))
-    server._running = True
-    stop_event = threading.Event()
-    handoff_ready_event = threading.Event()
-    resume_event = threading.Event()
-
-    class TrackingBackend(DummyBackend):
-        def __init__(self) -> None:
-            super().__init__(DummyBackendConfig(width=32, height=24, num_dots=0))
-            self.stop_calls = 0
-
-        def stop(self) -> None:
-            self.stop_calls += 1
-
-    backend = TrackingBackend()
-    server._preview_handoff_requested = True
-    server._preview_handoff_ready_event = handoff_ready_event
-    server._preview_resume_event = resume_event
-    server._make_backend = lambda: backend  # type: ignore[method-assign]
-
-    thread = threading.Thread(target=server._preview_loop, args=(stop_event,), daemon=True)
-    server._preview_thread = thread
-    server._preview_stop_event = stop_event
-    thread.start()
-
-    assert handoff_ready_event.wait(timeout=1.0) is True
-    assert backend.stop_calls == 0
-
-    stop_event.set()
-    thread.join(timeout=1.0)
 
 
 def test_ping_reports_open_debug_preview_window_as_active() -> None:

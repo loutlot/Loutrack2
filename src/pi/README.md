@@ -46,9 +46,11 @@ export DISPLAY=:0
 export XAUTHORITY=/home/pi/.Xauthority
 ```
 
-プレビューはデバッグ用のみです。サービスがアイドル状態とフレームをストリーミング中に同じウィンドウを継続利用し、受理されたブロブ、アクティブなマスク、現在の検出パラメータがオーバーレイされます。`mask_start` がマスクを構築中だけは preview backend を専有するため、一時的にプレビュー描画が止まります。`DISPLAY` が設定されていない場合、サービスはウィンドウを表示しないようにプレビューを無効化し、OpenCV HighGUI に触れずに実行を続行します。
+プレビューはデバッグ用のみです。サービスは single camera pipeline で動き、idle / mask build / capture のすべてが同じ backend から処理されます。OpenCV HighGUI は専用 preview thread だけが触り、preview は同じウィンドウを継続利用します。高負荷時は preview frame を drop して capture を優先します。`DISPLAY` が設定されていない場合、サービスはウィンドウを表示しないようにプレビューを無効化し、OpenCV HighGUI に触れずに実行を続行します。
 
-`start` は `capture` / `pose_capture` / `wand_metric_capture` の全 mode で static mask を必須にします。つまり `Build Mask` 実行後に `READY` へ入っていることが開始条件です。debug preview が有効な場合は preview backend handoff に成功したときだけ capture を開始し、handoff できない場合は preview を閉じずに `start` を失敗させます。
+`start` は `capture` / `pose_capture` / `wand_metric_capture` の全 mode で static mask を必須にします。つまり `Build Mask` 実行後に `READY` へ入っていることが開始条件です。mask は `mask_start` 中の生成処理を除き常時適用されます。
+
+`pose_capture` は full detection を維持し、UDP payload でも full blobs をそのまま送ります。`blob_count` と `quality` は additive metadata として付与し、single-blob row の採否は host 側が `blob_count` と `len(blobs)` を見て判断します。
 
 `picamera2` が利用できない環境でも、サービスは動作し続けます（例: `ping` は引き続き機能）。`start` は `ack:false` と `error_code=6` を返します。
 

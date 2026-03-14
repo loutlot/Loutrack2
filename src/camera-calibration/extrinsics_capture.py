@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+"""Legacy pose/wand capture readers kept for older sample utilities.
+
+The supported v2 extrinsics flow is `calibrate_extrinsics.py`, which consumes
+full-blobs `pose_capture` rows and rejects non-single-blob observations on the
+host side. This module remains for compatibility with older sample-building
+tools that still collapse pose rows to a single best blob.
+"""
+
 import json
 from dataclasses import dataclass
 from pathlib import Path

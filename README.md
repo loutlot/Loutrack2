@@ -81,6 +81,7 @@ Pi ごとに `camera_id` を分けて起動します。
 - UDP は既定で `5000`
 - UDP frame には既存キーに加えて `timestamp_source` が入り、`timestamp` は露光寄りの時刻を優先して出力します
 - `--debug-preview` は通常運用で ON にして、blob 調整や mask 構築の見え方を Pi 側画面で確認します
+- Pi 側 runtime は single pipeline 化され、camera backend は原則 1 本だけを維持します
 - `ping` diagnostics では `clock_sync` と `timestamping` を返し、PTP 健全性と timestamp source を確認できます
 
 Pi 側の詳細は [`/src/pi/README.md`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/pi/README.md) を参照してください。
@@ -162,9 +163,9 @@ python src/camera-calibration/calibrate_extrinsics.py \
 `pose.solve_summary` には reprojection 指標に加えて、非 anchor 観測の timestamp 差分統計
 `matched_delta_us_p50` / `matched_delta_us_p90` / `matched_delta_us_max` も保存されます。
 
-Pi 側の debug preview は `Build Mask` 中だけ capture backend へ切り替わるため、一時的に止まることがあります。
-それ以外の capture 開始では preview handoff に成功した場合のみ開始し、preview は同じウィンドウのまま継続します。
+Pi 側の debug preview は camera pipeline と分離された best-effort 描画です。capture backend の再起動や preview handoff は行わず、同じ camera stream から idle / mask build / capture を処理します。高負荷時は preview frame を drop して capture を優先します。
 また、`capture` / `pose_capture` / `wand_metric_capture` の全 mode で static mask が必須です。`Build Mask` 後に `READY` へ入っていないカメラは `start` できません。
+`pose_capture` の UDP payload は full blobs を保持し、Pi 側では best blob 1 点に潰しません。single-blob row 判定は host 側 `calibrate_extrinsics.py` の reader が `blob_count` と `len(blobs)` を見て行います。
 
 ## 5. tracking を起動して表示確認
 

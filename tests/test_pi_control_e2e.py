@@ -1,6 +1,7 @@
 import os
 import sys
 import socket
+import json
 import subprocess
 import threading
 import time
@@ -236,6 +237,17 @@ def test_pi_dummy_control_e2e(pi_capture_server: PiCaptureServerInfo) -> None:
         assert resp.get("ack") is True
         assert isinstance(resp.get("result"), dict)
 
+        resp = control.mask_start(
+            ip,
+            tcp_port,
+            camera_id=camera_id,
+            threshold=200,
+            seconds=0.1,
+            hit_ratio=0.6,
+            timeout=2.0,
+        )
+        assert resp.get("ack") is True
+
         resp = control.start(ip, tcp_port, camera_id=camera_id, mode="capture", timeout=1.0)
         assert resp.get("ack") is True
 
@@ -247,11 +259,65 @@ def test_pi_dummy_control_e2e(pi_capture_server: PiCaptureServerInfo) -> None:
         resp = control.stop(ip, tcp_port, camera_id=camera_id, timeout=1.0)
         assert resp.get("ack") is True
 
+        resp = control.mask_stop(ip, tcp_port, camera_id=camera_id, timeout=1.0)
+        assert resp.get("ack") is True
+
         count0 = frame_count()
+        time.sleep(0.1)
+        count1 = frame_count()
         time.sleep(0.3)
-        assert frame_count() == count0
+        assert frame_count() == count1
     finally:
         receiver.stop()
+
+
+def test_pi_pose_capture_sends_full_blobs(pi_capture_server: PiCaptureServerInfo) -> None:
+    ip = pi_capture_server["ip"]
+    tcp_port = pi_capture_server["tcp_port"]
+    udp_port = pi_capture_server["udp_port"]
+    camera_id = pi_capture_server["camera_id"]
+
+    recv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    recv_sock.bind(("127.0.0.1", udp_port))
+    recv_sock.settimeout(2.0)
+    try:
+        resp = control.mask_start(
+            ip,
+            tcp_port,
+            camera_id=camera_id,
+            threshold=200,
+            seconds=0.1,
+            hit_ratio=0.6,
+            timeout=2.0,
+        )
+        assert resp.get("ack") is True
+
+        resp = control.start(ip, tcp_port, camera_id=camera_id, mode="pose_capture", timeout=1.0)
+        assert resp.get("ack") is True
+
+        payload = {}
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            data, _addr = recv_sock.recvfrom(65536)
+            message = json.loads(data.decode("utf-8"))
+            if message.get("capture_mode") == "pose_capture":
+                payload = message
+                break
+
+        assert payload["camera_id"] == camera_id
+        assert payload["capture_mode"] == "pose_capture"
+        assert isinstance(payload["blobs"], list)
+        assert payload["blob_count"] == len(payload["blobs"])
+        assert len(payload["blobs"]) >= 1
+        assert "quality" in payload
+
+        resp = control.stop(ip, tcp_port, camera_id=camera_id, timeout=1.0)
+        assert resp.get("ack") is True
+
+        resp = control.mask_stop(ip, tcp_port, camera_id=camera_id, timeout=1.0)
+        assert resp.get("ack") is True
+    finally:
+        recv_sock.close()
 
 
 def test_pi_control_wrong_camera_id_returns_error(pi_capture_server: PiCaptureServerInfo) -> None:

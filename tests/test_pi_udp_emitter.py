@@ -70,3 +70,38 @@ def test_udp_frame_emitter_sends_three_frames() -> None:
         assert isinstance(msg["blobs"], list)
 
     assert frame_indices[0] < frame_indices[1] < frame_indices[2]
+
+
+def test_udp_frame_emitter_pose_capture_keeps_full_blobs() -> None:
+    recv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    recv_sock.bind(("127.0.0.1", 0))
+    recv_sock.settimeout(1.0)
+    _host, port = cast(tuple[str, int], recv_sock.getsockname())
+
+    backend = DummyBackend(DummyBackendConfig(width=80, height=60, num_dots=3, seed=2, dot_radius=2))
+    emitter = UDPFrameEmitter(
+        camera_id="pi-cam-test",
+        udp_host="127.0.0.1",
+        udp_port=int(port),
+        target_fps=200.0,
+        backend=backend,
+        threshold=200,
+        max_frames=1,
+        capture_mode="pose_capture",
+    )
+
+    try:
+        emitter.start()
+        data, _addr = cast(tuple[bytes, tuple[str, int]], recv_sock.recvfrom(65536))
+    finally:
+        emitter.stop()
+        recv_sock.close()
+
+    msg_obj = cast(object, json.loads(data.decode("utf-8")))
+    assert isinstance(msg_obj, dict)
+    msg = cast(dict[str, object], msg_obj)
+    assert msg["capture_mode"] == "pose_capture"
+    assert isinstance(msg["blobs"], list)
+    assert int(cast(object, msg["blob_count"])) == len(cast(list[object], msg["blobs"]))
+    assert len(cast(list[object], msg["blobs"])) >= 1
+    assert "quality" in msg
