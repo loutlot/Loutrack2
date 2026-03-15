@@ -45,199 +45,340 @@ STATIC_DIR_CANDIDATES = (
 
 
 HTML_PAGE = """<!doctype html>
-<html lang="ja">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Loutrack2 Wand Control</title>
   <style>
     :root {
-      --bg: #f3efe5;
-      --panel: rgba(255, 251, 245, 0.92);
-      --panel-strong: #fffdf8;
-      --ink: #1f2a30;
-      --muted: #66747c;
-      --line: rgba(79, 71, 59, 0.14);
-      --warm: #c15b31;
+      --bg: #0F172A;
+      --sidebar-bg: #0B1120;
+      --panel: #1E293B;
+      --border: rgba(148,163,184,0.12);
+      --ink: #E2E8F0;
+      --ink-muted: #64748B;
+      --accent: #22C55E;
       --teal: #1f6b70;
-      --olive: #647447;
-      --danger: #9e3f33;
-      --shadow: 0 18px 40px rgba(31, 42, 48, 0.09);
+      --warm: #F97316;
+      --danger: #EF4444;
+      --sidebar-w: 220px;
     }
-    * { box-sizing: border-box; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      margin: 0;
+      background: var(--bg);
       color: var(--ink);
-      font-family: "Avenir Next", "Helvetica Neue", sans-serif;
-      background:
-        radial-gradient(circle at top left, rgba(255, 248, 230, 0.95), transparent 32%),
-        radial-gradient(circle at top right, rgba(203, 234, 236, 0.42), transparent 28%),
-        linear-gradient(180deg, #f8f3e8 0%, #f0ebe0 100%);
+      font-family: "Inter", "Avenir Next", "Helvetica Neue", sans-serif;
+      font-size: 13px;
+      overflow: hidden;
+      width: 1300px;
+      height: 900px;
     }
-    main {
-      max-width: 1240px;
-      margin: 0 auto;
-      padding: 28px 20px 40px;
-    }
-    h1 {
-      margin: 0;
-      font-size: clamp(34px, 5vw, 52px);
-      line-height: 1;
-      letter-spacing: -0.03em;
-    }
-    h2, h3 {
-      margin: 0;
-      letter-spacing: -0.02em;
-    }
-    p {
-      margin: 0;
-      color: var(--muted);
-      line-height: 1.55;
-    }
-    .hero,
-    .card,
-    .step-card {
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 24px;
-      box-shadow: var(--shadow);
-      backdrop-filter: blur(10px);
-    }
-    .hero {
-      padding: 24px;
-      display: grid;
-      gap: 18px;
-    }
-    .hero-top {
-      display: grid;
-      gap: 12px;
-      align-items: start;
-    }
-    .hero-actions,
-    .button-row {
+    .app-shell {
       display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
+      flex-direction: row;
+      width: 1300px;
+      height: 900px;
+      overflow: hidden;
     }
-    .page-nav {
-      display: inline-flex;
-      flex-wrap: wrap;
-      gap: 10px;
+
+    /* ── Sidebar ─────────────────────────────────────── */
+    .sidebar {
+      width: var(--sidebar-w);
+      min-width: var(--sidebar-w);
+      max-width: var(--sidebar-w);
+      background: var(--sidebar-bg);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
     }
-    .page-tab {
-      background: rgba(31, 42, 48, 0.08);
+    .sidebar-logo {
+      padding: 16px 14px 12px;
+      font-size: 15px;
+      font-weight: 800;
       color: var(--ink);
+      letter-spacing: -0.02em;
+      border-bottom: 1px solid var(--border);
     }
-    .page-tab.active {
-      background: var(--teal);
-      color: #fff;
+    .sidebar-logo span { color: var(--accent); }
+    .sidebar-nav {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
     }
-    .page {
-      display: none;
+    .sidebar-divider {
+      height: 1px;
+      background: var(--border);
+      margin: 6px 4px;
     }
-    .page.active {
-      display: block;
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 10px;
+      border-radius: 8px;
+      background: none;
+      border: none;
+      color: var(--ink-muted);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      text-align: left;
+      width: 100%;
+      transition: background 0.12s, color 0.12s;
     }
-    .tracking-empty {
-      margin-bottom: 14px;
-      padding: 12px 14px;
-      border-radius: 16px;
-      border: 1px solid var(--line);
-      background: rgba(193, 91, 49, 0.10);
-      color: var(--warm);
+    .nav-item:hover { background: rgba(148,163,184,0.08); color: var(--ink); }
+    .nav-item.active { background: rgba(34,197,94,0.12); color: var(--accent); font-weight: 700; }
+    .nav-item.done { color: var(--accent); }
+    .nav-item.disabled { opacity: 0.4; cursor: not-allowed; }
+    .step-icon { font-size: 12px; min-width: 14px; text-align: center; }
+    .nav-badge {
+      margin-left: auto;
+      font-size: 10px;
       font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 999px;
+      background: rgba(148,163,184,0.15);
+      color: var(--ink-muted);
     }
-    .hero-note {
-      padding: 14px 16px;
-      border-radius: 18px;
-      background: linear-gradient(135deg, rgba(31, 107, 112, 0.12), rgba(193, 91, 49, 0.10));
-      color: var(--ink);
-    }
-    .step-rail {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-      gap: 10px;
-    }
-    .step-pill {
-      padding: 14px 16px;
-      border-radius: 18px;
-      border: 1px solid var(--line);
-      background: rgba(255, 255, 255, 0.66);
-      min-height: 88px;
-      display: grid;
+    .nav-item.active .nav-badge { background: rgba(34,197,94,0.2); color: var(--accent); }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .nav-item.inprogress .step-icon { display: inline-block; animation: spin 1.2s linear infinite; }
+    .sidebar-bottom {
+      padding: 10px 8px;
+      border-top: 1px solid var(--border);
+      display: flex;
       gap: 6px;
     }
-    .step-pill small,
-    .eyebrow {
-      text-transform: uppercase;
-      letter-spacing: 0.14em;
+
+    /* ── Main area ────────────────────────────────────── */
+    .main-area {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* ── Views ────────────────────────────────────────── */
+    .view {
+      position: absolute;
+      inset: 0;
+      display: none;
+      flex-direction: column;
+      padding: 16px;
+      overflow: hidden;
+    }
+    .view.active { display: flex; }
+    .view-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--ink);
+      margin-bottom: 12px;
+    }
+    .view-sub {
       font-size: 11px;
-      color: var(--muted);
+      color: var(--ink-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: 4px;
     }
-    .step-pill[data-status="current"] {
-      border-color: rgba(193, 91, 49, 0.38);
-      background: rgba(255, 242, 235, 0.92);
-    }
-    .step-pill[data-status="done"] {
-      border-color: rgba(100, 116, 71, 0.30);
-      background: rgba(244, 249, 236, 0.92);
-    }
-    .hero-metrics,
-    .camera-summary {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-      gap: 10px;
-    }
-    .metric {
-      padding: 14px 16px;
-      border-radius: 18px;
-      background: rgba(255, 255, 255, 0.7);
-      border: 1px solid var(--line);
-    }
-    .metric strong {
-      display: block;
-      font-size: 26px;
-      line-height: 1.1;
-      margin-top: 6px;
-    }
-    .grid {
-      display: grid;
-      grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.95fr);
-      gap: 18px;
-      margin-top: 18px;
-      align-items: start;
-    }
-    .grid > * {
-      min-width: 0;
-    }
-    .tracking-grid {
-      display: grid;
-      grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.8fr);
-      gap: 18px;
-      margin-top: 18px;
-      align-items: stretch;
-    }
-    .tracking-main {
-      display: grid;
+
+    /* ── Split layout ─────────────────────────────────── */
+    .split {
+      display: flex;
+      flex-direction: row;
       gap: 12px;
+      flex: 1;
+      min-height: 0;
     }
-    .tracking-viewer-card {
+    .split-left { display: flex; flex-direction: column; min-width: 0; }
+    .split-right { display: flex; flex-direction: column; min-width: 0; }
+
+    /* ── Panels / Cards ───────────────────────────────── */
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px;
+    }
+    .panel + .panel { margin-top: 10px; }
+    .panel-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--ink);
+      margin-bottom: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    /* ── Buttons ──────────────────────────────────────── */
+    button {
+      border: none;
+      border-radius: 8px;
+      padding: 7px 14px;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      background: var(--warm);
+      color: #fff;
+      transition: opacity 0.12s;
+    }
+    button:hover { opacity: 0.85; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    button.btn-green { background: var(--accent); color: #000; }
+    button.btn-teal { background: var(--teal); color: #fff; }
+    button.btn-ghost {
+      background: rgba(148,163,184,0.12);
+      color: var(--ink);
+    }
+    button.btn-danger { background: var(--danger); color: #fff; }
+    button.btn-sm { padding: 5px 10px; font-size: 11px; }
+    .btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+
+    /* ── Tables ───────────────────────────────────────── */
+    .tbl-wrap { overflow: auto; flex: 1; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th {
+      text-align: left;
+      padding: 6px 8px;
+      color: var(--ink-muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      border-bottom: 1px solid var(--border);
+      position: sticky; top: 0;
+      background: var(--panel);
+      z-index: 1;
+    }
+    td {
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: middle;
+    }
+    tr:last-child td { border-bottom: none; }
+
+    /* ── Badge ────────────────────────────────────────── */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 11px;
+      font-weight: 700;
+      background: rgba(148,163,184,0.15);
+      color: var(--ink-muted);
+    }
+    .badge.ok { background: rgba(34,197,94,0.15); color: var(--accent); }
+    .badge.warn { background: rgba(249,115,22,0.15); color: var(--warm); }
+    .badge.muted { background: rgba(148,163,184,0.1); color: var(--ink-muted); }
+    .badge.live { background: var(--accent); color: #000; }
+
+    /* ── Sliders ──────────────────────────────────────── */
+    .slider-grid {
       display: grid;
-      gap: 10px;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px 16px;
     }
+    .slider-label {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .slider-label span {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--ink-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .slider-value { color: var(--ink); font-weight: 700; }
+    input[type="range"] { width: 100%; accent-color: var(--accent); }
+    input[type="text"], input[type="number"] {
+      width: 100%;
+      background: rgba(15,23,42,0.6);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 8px;
+      color: var(--ink);
+      font: inherit;
+      font-size: 12px;
+    }
+    label {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--ink-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    /* ── Stat cards ───────────────────────────────────── */
+    .stat-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .stat-card {
+      flex: 1;
+      background: rgba(15,23,42,0.5);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+    }
+    .stat-label { font-size: 10px; color: var(--ink-muted); text-transform: uppercase; letter-spacing: 0.07em; }
+    .stat-value { font-size: 20px; font-weight: 700; color: var(--ink); line-height: 1.2; }
+
+    /* ── Console ──────────────────────────────────────── */
+    .console {
+      background: #0d1117;
+      color: #c9d1d9;
+      padding: 10px 12px;
+      border-radius: 8px;
+      overflow: auto;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font-size: 11px;
+      font-family: "JetBrains Mono", "Fira Mono", monospace;
+      flex: 1;
+    }
+
+    /* ── Mini bar ─────────────────────────────────────── */
+    .mini-bar-wrap { display: flex; align-items: center; gap: 6px; }
+    .mini-bar { width: 60px; height: 6px; background: rgba(148,163,184,0.15); border-radius: 3px; overflow: hidden; }
+    .mini-bar-fill { height: 100%; background: var(--accent); border-radius: 3px; }
+
+    /* ── Quality badges ───────────────────────────────── */
+    .quality-badge {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 6px;
+      padding: 3px 8px;
+      font-size: 11px;
+      font-weight: 600;
+      background: rgba(148,163,184,0.1);
+      color: var(--ink-muted);
+      margin: 2px;
+    }
+    .quality-badge.ok { background: rgba(34,197,94,0.15); color: var(--accent); }
+    .quality-badge.warn { background: rgba(249,115,22,0.15); color: var(--warm); }
+    .quality-badge.error { background: rgba(239,68,68,0.15); color: var(--danger); }
+
+    /* ── Tracking viewer ──────────────────────────────── */
     .tracking-viewer-inner {
       position: relative;
-      min-height: 360px;
-      border-radius: 20px;
-      border: 1px solid var(--line);
+      border-radius: 10px;
+      border: 1px solid var(--border);
       overflow: hidden;
-      background: #fff;
+      background: #060d19;
+      flex: 1;
     }
-    .tracking-viewer-inner canvas {
-      width: 100%;
-      height: 100%;
-      display: block;
-    }
+    .tracking-viewer-inner canvas { width: 100%; height: 100%; display: block; }
     .tracking-viewer-empty {
       position: absolute;
       inset: 0;
@@ -248,734 +389,511 @@ HTML_PAGE = """<!doctype html>
       padding: 16px;
       font-weight: 700;
       color: var(--warm);
-      background: rgba(255, 255, 255, 0.85);
+      background: rgba(6,13,25,0.85);
       pointer-events: none;
-      font-size: 15px;
+      font-size: 14px;
     }
-    .tracking-empty-sm {
-      padding: 10px 14px;
-      border-radius: 12px;
-      border: 1px dashed var(--line);
-      background: rgba(255, 255, 255, 0.8);
-      text-align: center;
-      color: var(--muted);
-      font-size: 13px;
-    }
-    .tracking-viewer-footer {
-      color: var(--muted);
-      font-size: 13px;
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-    }
-    .tracking-viewer-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 12px;
-    }
-    .tracking-state-badge {
-      border-radius: 999px;
-      padding: 6px 14px;
-      background: rgba(31, 42, 48, 0.12);
-      font-size: 12px;
-      font-weight: 700;
-    }
-    .tracking-state-badge[data-state="running"] {
-      background: var(--teal);
-      color: #fff;
-    }
-    .tracking-state-badge[data-state="error"] {
-      background: var(--danger);
-      color: #fff;
-    }
-    .tracking-side {
-      display: grid;
-      gap: 16px;
-    }
-    .tracking-controls-row {
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: space-between;
-      gap: 16px;
-      align-items: center;
-    }
-    .tracking-control-buttons {
-      display: flex;
-      gap: 8px;
-    }
-    .tracking-control-footer {
-      margin-top: 10px;
-      font-size: 13px;
-    }
-    .tracking-health-card,
-    .tracking-rigid-card {
-      display: grid;
-      gap: 10px;
-    }
-    .tracking-health-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 10px;
-    }
-    .tracking-health-grid {
-      display: grid;
-      gap: 10px;
-    }
+
+    /* ── Tracking cards ───────────────────────────────── */
     .tracking-camera-card {
-      padding: 12px;
-      border-radius: 16px;
-      background: var(--panel-strong);
-      border: 1px solid var(--line);
-      display: grid;
-      gap: 6px;
-    }
-    .tracking-camera-card strong {
-      font-size: 16px;
-    }
-    .tracking-card-metrics {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-      gap: 6px;
-      font-size: 13px;
-      color: var(--muted);
+      background: rgba(15,23,42,0.6);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      margin-bottom: 6px;
     }
     .tracking-card-title {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      gap: 8px;
-    }
-    .tracking-card-badge {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      padding: 4px 10px;
-      border-radius: 999px;
       font-size: 12px;
       font-weight: 700;
+      margin-bottom: 4px;
     }
-    .tracking-card-badge.ok {
-      background: rgba(100, 116, 71, 0.16);
-      color: var(--olive);
+    .tracking-card-badge {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: rgba(148,163,184,0.15);
+      color: var(--ink-muted);
     }
-    .tracking-card-badge.warn {
-      background: rgba(193, 91, 49, 0.12);
-      color: var(--warm);
-    }
-    .tracking-rigid-list {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
+    .tracking-card-badge.ok { background: rgba(34,197,94,0.15); color: var(--accent); }
+    .tracking-card-badge.warn { background: rgba(249,115,22,0.15); color: var(--warm); }
+    .tracking-card-metrics { display: flex; gap: 10px; font-size: 11px; color: var(--ink-muted); flex-wrap: wrap; }
     .tracking-rigid-row {
-      border-radius: 16px;
-      border: 1px solid var(--line);
-      padding: 12px;
-      background: var(--panel-strong);
-      display: grid;
-      gap: 6px;
+      background: rgba(15,23,42,0.6);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      margin-bottom: 6px;
     }
-    .tracking-rigid-row.invalid {
-      border-color: rgba(158, 63, 51, 0.4);
-    }
+    .tracking-rigid-row.invalid { border-color: rgba(239,68,68,0.3); }
     .tracking-rigid-row header {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      gap: 8px;
-    }
-    .tracking-rigid-row small {
-      color: var(--muted);
-    }
-    .tracking-json-stack {
-      display: grid;
-      gap: 12px;
-    }
-    .stack {
-      display: grid;
-      gap: 18px;
-      min-width: 0;
-      align-content: start;
-    }
-    .card,
-    .step-card {
-      padding: 22px;
-      min-width: 0;
-      overflow: hidden;
-    }
-    .step-card {
-      position: relative;
-    }
-    .step-card::after {
-      content: "";
-      position: absolute;
-      inset: auto -40px -40px auto;
-      width: 140px;
-      height: 140px;
-      border-radius: 999px;
-      opacity: 0.12;
-      background: radial-gradient(circle, var(--step-accent, var(--warm)), transparent 70%);
-      pointer-events: none;
-    }
-    .step-card[data-status="current"] {
-      border-color: rgba(193, 91, 49, 0.32);
-    }
-    .step-card[data-status="done"] {
-      border-color: rgba(100, 116, 71, 0.30);
-    }
-    .step-card[data-step="blob"] { --step-accent: var(--warm); }
-    .step-card[data-step="mask"] { --step-accent: var(--teal); }
-    .step-card[data-step="wand"] { --step-accent: var(--olive); }
-    .step-card[data-step="extrinsics"] { --step-accent: var(--danger); }
-    .step-head {
-      display: flex;
-      justify-content: space-between;
-      gap: 16px;
-      align-items: start;
-      margin-bottom: 12px;
-    }
-    .step-title {
-      display: grid;
-      gap: 6px;
-    }
-    .step-status {
-      display: inline-flex;
-      align-items: center;
-      border-radius: 999px;
-      padding: 8px 12px;
       font-size: 12px;
       font-weight: 700;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      background: rgba(31, 42, 48, 0.06);
-      color: var(--muted);
-      white-space: nowrap;
+      margin-bottom: 4px;
     }
-    .step-card[data-status="current"] .step-status {
-      background: rgba(193, 91, 49, 0.14);
-      color: var(--warm);
-    }
-    .step-card[data-status="done"] .step-status {
-      background: rgba(100, 116, 71, 0.16);
-      color: var(--olive);
-    }
-    .step-summary {
-      margin-bottom: 14px;
-      padding: 12px 14px;
-      border-radius: 16px;
-      background: rgba(255, 255, 255, 0.74);
-      border: 1px solid var(--line);
-      color: var(--ink);
-    }
-    .controls-grid {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 14px 18px;
-    }
-    label {
-      display: grid;
-      gap: 6px;
-      font-weight: 700;
-      font-size: 14px;
-      color: var(--ink);
-    }
-    input[type="range"],
-    input[type="text"] {
-      width: 100%;
-    }
-    input[type="text"] {
-      border: 1px solid var(--line);
-      border-radius: 14px;
-      padding: 12px 14px;
-      background: rgba(255, 255, 255, 0.82);
-      color: var(--ink);
-      font: inherit;
-    }
-    .hint {
-      font-size: 12px;
-      color: var(--muted);
-      font-weight: 500;
-    }
-    button {
-      border: 0;
+    .tracking-state-badge {
+      padding: 3px 10px;
       border-radius: 999px;
-      padding: 11px 16px;
-      background: var(--warm);
-      color: white;
-      cursor: pointer;
-      font: inherit;
+      font-size: 11px;
       font-weight: 700;
-      letter-spacing: 0.01em;
+      background: rgba(148,163,184,0.12);
+      color: var(--ink-muted);
     }
-    button.secondary { background: var(--teal); }
-    button.ghost {
-      background: rgba(31, 42, 48, 0.08);
-      color: var(--ink);
-    }
-    .selection-list {
-      margin-top: 14px;
-      overflow-x: auto;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 14px;
-      min-width: 760px;
-    }
-    th, td {
-      text-align: left;
-      padding: 12px 10px;
-      border-bottom: 1px solid var(--line);
-      vertical-align: middle;
-    }
-    th {
+    .tracking-state-badge[data-state="running"] { background: var(--accent); color: #000; }
+    .tracking-state-badge[data-state="error"] { background: var(--danger); color: #fff; }
+    .tracking-empty-sm {
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px dashed var(--border);
+      text-align: center;
+      color: var(--ink-muted);
       font-size: 12px;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: var(--muted);
     }
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      border-radius: 999px;
-      padding: 5px 10px;
-      font-size: 12px;
-      font-weight: 700;
-      background: rgba(31, 42, 48, 0.08);
-      color: var(--ink);
-    }
-    .badge.ok {
-      background: rgba(100, 116, 71, 0.16);
-      color: var(--olive);
-    }
-    .badge.warn {
-      background: rgba(193, 91, 49, 0.14);
-      color: var(--warm);
-    }
-    .badge.muted {
-      background: rgba(31, 42, 48, 0.06);
-      color: var(--muted);
-    }
-    .console {
-      background: #202a31;
-      color: #f5efe2;
-      padding: 14px;
-      border-radius: 18px;
-      overflow: auto;
-      min-height: 240px;
-      max-width: 100%;
-      max-height: min(70vh, 960px);
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
-      word-break: break-word;
-    }
-    .intrinsics-grid {
-      display: grid;
-      grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.95fr);
-      gap: 18px;
-      margin-top: 18px;
-      align-items: start;
-    }
+
+    /* ── Intrinsics ───────────────────────────────────── */
     .intrinsics-viewer {
       aspect-ratio: 16/9;
-      background: #1a1a1a;
-      border-radius: 20px;
-      border: 1px solid var(--line);
+      background: #0d1117;
+      border-radius: 8px;
+      border: 1px solid var(--border);
       overflow: hidden;
-      width: 100%;
       display: flex;
       align-items: center;
       justify-content: center;
+      margin-bottom: 8px;
     }
-    .intrinsics-viewer img {
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
-    }
+    .intrinsics-viewer img { width: 100%; height: 100%; object-fit: contain; }
     .int-grid {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
-      gap: 4px;
-      margin-top: 8px;
+      gap: 3px;
+      margin-top: 6px;
     }
     .int-cell {
       aspect-ratio: 1;
-      border-radius: 8px;
-      background: rgba(255,255,255,0.05);
-      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: rgba(148,163,184,0.06);
+      border: 1px solid var(--border);
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 13px;
+      font-size: 11px;
       font-weight: 700;
-      color: var(--muted);
+      color: var(--ink-muted);
     }
-    .int-cell.covered {
-      background: rgba(100,116,71,0.22);
-      color: var(--olive);
-    }
-    .int-progress {
-      display: grid;
-      gap: 6px;
-      font-size: 14px;
-    }
-    .int-stat { color: var(--muted); }
+    .int-cell.covered { background: rgba(34,197,94,0.18); color: var(--accent); }
+    .int-stat { font-size: 12px; color: var(--ink-muted); margin-bottom: 4px; }
     .int-stat strong { color: var(--ink); }
-    .int-camera-list {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      margin-top: 10px;
-      min-height: 0;
+    .int-camera-list { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+
+    /* ── Floor / countdown ────────────────────────────── */
+    .floor-card {
+      max-width: 400px;
+      margin: auto;
+      text-align: center;
     }
-    @media (max-width: 980px) {
-      .grid {
-        grid-template-columns: 1fr;
-      }
-      .tracking-grid {
-        grid-template-columns: 1fr;
-      }
-      .intrinsics-grid {
-        grid-template-columns: 1fr;
-      }
+    .floor-countdown {
+      font-size: 48px;
+      font-weight: 800;
+      color: var(--accent);
+      margin: 16px 0;
+      min-height: 60px;
     }
-    @media (max-width: 720px) {
-      main {
-        padding: 20px 14px 32px;
-      }
-      .controls-grid {
-        grid-template-columns: 1fr;
-      }
-      .tracking-grid {
-        grid-template-columns: 1fr;
-      }
-      .tracking-controls-row {
-        flex-direction: column;
-        align-items: flex-start;
-      }
-    }
+
+    /* ── Hidden compat elements ───────────────────────── */
+    .hidden-compat { display: none !important; }
+
+    /* Step pills (hidden compat, kept for JS references) */
+    #stepBlob, #stepMask, #stepWand, #stepFloor, #stepExtrinsics { display: none; }
+    #blobSummary, #maskSummary, #wandSummary, #floorSummary, #extrinsicsSummary { display: none; }
+    #cameraSummary, #workflowRail, #selectionMetric, #selectionSummary,
+    #blobMetric, #blobMetricSummary, #maskMetric, #maskMetricSummary,
+    #previewMetric, #previewMetricSummary { display: none; }
+    #tabIntrinsics, #tabCalibration, #tabTracking { display: none; }
+    #pageCalibration { display: none; }
+    #trackingStatus, #trackingScene { display: none; }
   </style>
 </head>
 <body>
-  <main>
-    <section class="hero">
-      <div class="hero-top">
-        <div>
-          <div class="eyebrow">Loutrack2 Wand Workflow</div>
-          <h1>Blob -> Mask -> Wand -> Extrinsics</h1>
+
+  <!-- Hidden compat elements (JS reads/writes to these) -->
+  <div style="display:none">
+    <div id="workflowRail"></div>
+    <div id="cameraSummary"></div>
+    <strong id="selectionMetric"></strong><p id="selectionSummary"></p>
+    <strong id="blobMetric"></strong><p id="blobMetricSummary"></p>
+    <strong id="maskMetric"></strong><p id="maskMetricSummary"></p>
+    <strong id="previewMetric"></strong><p id="previewMetricSummary"></p>
+    <div id="stepBlob" data-step="blob"><span id="stepBlobStatus"></span><div id="blobSummary"></div></div>
+    <div id="stepMask" data-step="mask"><span id="stepMaskStatus"></span><div id="maskSummary"></div></div>
+    <div id="stepWand" data-step="wand"><span id="stepWandStatus"></span><div id="wandSummary"></div></div>
+    <div id="stepFloor" data-step="floor"><span id="stepFloorStatus"></span><div id="floorSummary"></div></div>
+    <div id="stepExtrinsics" data-step="extrinsics"><span id="stepExtrinsicsStatus"></span><div id="extrinsicsSummary"></div></div>
+    <button id="tabIntrinsics" type="button"></button>
+    <button id="tabCalibration" type="button"></button>
+    <button id="tabTracking" type="button"></button>
+    <div id="pageCalibration"></div>
+    <pre id="trackingStatus"></pre>
+    <pre id="trackingScene"></pre>
+  </div>
+
+  <div class="app-shell">
+
+    <!-- ── Sidebar ─────────────────────────────────────── -->
+    <nav class="sidebar">
+      <div class="sidebar-logo">LT<span>2</span></div>
+      <div class="sidebar-nav" id="sidebarNav">
+        <!-- populated by renderSidebar() -->
+        <button class="nav-item active" data-view="cameras"><span class="step-icon">⊞</span>Cameras</button>
+        <div class="sidebar-divider"></div>
+        <button class="nav-item" data-view="blob"><span class="step-icon">○</span>Blob Detection</button>
+        <button class="nav-item" data-view="mask"><span class="step-icon">○</span>Mask Build</button>
+        <button class="nav-item" data-view="pose"><span class="step-icon">○</span>Pose Capture</button>
+        <button class="nav-item" data-view="floor"><span class="step-icon">○</span>Floor / Metric</button>
+        <button class="nav-item" data-view="extrinsics"><span class="step-icon">○</span>Extrinsics</button>
+        <div class="sidebar-divider"></div>
+        <button class="nav-item" data-view="tracking"><span class="step-icon">○</span>Tracking</button>
+        <div class="sidebar-divider"></div>
+        <button class="nav-item" data-view="intrinsics"><span class="step-icon">◎</span>Intrinsics</button>
+      </div>
+      <div class="sidebar-bottom">
+        <button class="btn-ghost btn-sm" data-command="refresh" style="flex:1">Refresh</button>
+        <button class="btn-ghost btn-sm" data-command="ping" style="flex:1">Ping</button>
+      </div>
+    </nav>
+
+    <!-- ── Main area ───────────────────────────────────── -->
+    <div class="main-area">
+
+      <!-- VIEW: Cameras (default) -->
+      <div class="view active" id="viewCameras">
+        <div class="view-title">Camera Fleet</div>
+        <div class="stat-row" id="camerasSummaryBar">
+          <div class="stat-card"><div class="stat-label">Selected</div><div class="stat-value">0</div></div>
+          <div class="stat-card"><div class="stat-label">Healthy</div><div class="stat-value">0</div></div>
+          <div class="stat-card"><div class="stat-label">Running</div><div class="stat-value">0</div></div>
+          <div class="stat-card"><div class="stat-label">Mask Ready</div><div class="stat-value">0</div></div>
         </div>
-        <p>操作を 4 セグメントに固定し、選択中カメラの状態を段階ごとに確認しながら外部較正まで進める。</p>
-      </div>
-      <div class="hero-note">
-        Pi を <code>--debug-preview</code> 付きで起動していれば、blob 調整、mask 結果、wand 収録中の OpenCV preview が Pi デスクトップに継続表示されます。
-      </div>
-      <div class="hero-actions">
-        <div class="page-nav" aria-label="page navigation">
-          <button id="tabIntrinsics" class="page-tab" type="button">Intrinsics</button>
-          <button id="tabCalibration" class="page-tab active" type="button">Calibration</button>
-          <button id="tabTracking" class="page-tab" type="button">Tracking</button>
-        </div>
-        <button class="secondary" data-command="refresh">Refresh</button>
-        <button class="ghost" data-command="ping">Ping</button>
-      </div>
-      <div class="step-rail" id="workflowRail"></div>
-      <div class="hero-metrics">
-        <div class="metric"><span class="eyebrow">Selection</span><strong id="selectionMetric">0 / 0</strong><p id="selectionSummary"></p></div>
-        <div class="metric"><span class="eyebrow">Blob Ready</span><strong id="blobMetric">0</strong><p id="blobMetricSummary"></p></div>
-        <div class="metric"><span class="eyebrow">Mask Ready</span><strong id="maskMetric">0</strong><p id="maskMetricSummary"></p></div>
-        <div class="metric"><span class="eyebrow">Preview</span><strong id="previewMetric">0</strong><p id="previewMetricSummary"></p></div>
-      </div>
-    </section>
-
-    <section id="pageIntrinsics" class="page">
-      <div class="intrinsics-grid">
-        <div class="stack">
-          <section class="step-card" data-step="blob">
-            <div class="step-head">
-              <div class="step-title">
-                <div class="eyebrow">Step 01</div>
-                <h2>Camera &amp; Board Setup</h2>
-              </div>
-              <span class="step-status" id="intPhaseStatus">Idle</span>
-            </div>
-            <div class="controls-grid">
-              <label for="intCameraId">Camera ID<input id="intCameraId" type="text" value="pi-cam-01" placeholder="pi-cam-01"></label>
-              <label for="intMjpegUrl">MJPEG URL<input id="intMjpegUrl" type="text" value="http://192.168.1.10:8555/mjpeg" placeholder="http://PI_IP:8555/mjpeg"></label>
-              <label for="intSquareMm">Square Length (mm)<input id="intSquareMm" type="number" min="1" max="500" step="1" value="30"></label>
-              <label for="intMarkerMm">Marker Length (mm) <span class="hint">blank = auto</span><input id="intMarkerMm" type="number" min="1" max="500" step="0.5" placeholder="auto"></label>
-              <label for="intSquaresX">Squares X<input id="intSquaresX" type="number" min="2" max="20" step="1" value="6"></label>
-              <label for="intSquaresY">Squares Y<input id="intSquaresY" type="number" min="2" max="20" step="1" value="8"></label>
-              <label for="intMinFrames">Min Frames<input id="intMinFrames" type="number" min="5" max="200" step="1" value="25"></label>
-              <label for="intCooldown">Cooldown (s)<input id="intCooldown" type="number" min="0.1" max="10" step="0.1" value="1.5"></label>
-            </div>
-            <div id="intCameraList" class="int-camera-list"></div>
-            <div class="button-row" style="margin-top:14px">
-              <button id="intStart">Start Capture</button>
-              <button id="intStop" class="ghost">Stop</button>
-              <button id="intClear" class="ghost">Clear Frames</button>
-              <button id="intDiscard" class="ghost">Discard Session</button>
-            </div>
-          </section>
-
-          <section class="card" style="padding:16px">
-            <div class="step-head" style="margin-bottom:10px">
-              <div class="step-title"><div class="eyebrow">Live Feed</div><h2>Charuco Preview</h2></div>
-            </div>
-            <div class="intrinsics-viewer">
-              <img id="intFrame" alt="Charuco preview" style="display:none">
-              <span id="intFrameEmpty" style="color:var(--muted);font-size:14px">Start capture to preview</span>
-            </div>
-          </section>
-        </div>
-
-        <div class="stack">
-          <section class="card">
-            <div class="step-head"><div class="step-title"><div class="eyebrow">Progress</div><h2>Frame Collection</h2></div></div>
-            <div class="int-progress">
-              <div class="int-stat">Captured: <strong id="intCaptured">0</strong> / <strong id="intNeeded">25</strong></div>
-              <div class="int-stat">Rejected (cooldown): <strong id="intRejCool">0</strong></div>
-              <div class="int-stat">Rejected (spatial): <strong id="intRejSpat">0</strong></div>
-              <div class="int-stat">Rejected (no detect): <strong id="intRejDet">0</strong></div>
-            </div>
-            <div style="margin-top:12px"><p class="eyebrow">3×3 Coverage Grid</p></div>
-            <div class="int-grid" id="intCoverageGrid"></div>
-            <div class="button-row" style="margin-top:14px">
-              <button id="intCalibrate" class="secondary">Calibrate</button>
-            </div>
-          </section>
-
-          <section class="card">
-            <div class="step-head"><div class="step-title"><div class="eyebrow">Result</div><h2>Calibration Output</h2></div></div>
-            <pre class="console" id="intResult" style="min-height:120px">Waiting...</pre>
-          </section>
-        </div>
-      </div>
-    </section>
-
-    <section id="pageCalibration" class="page active">
-    <div class="grid">
-      <div class="stack">
-        <section class="card">
-          <div class="step-head">
-            <div class="step-title">
-              <div class="eyebrow">Selection</div>
-              <h2>Camera Fleet</h2>
-            </div>
-          </div>
-          <div class="camera-summary" id="cameraSummary"></div>
-          <div class="selection-list">
+        <div class="panel" style="flex:1;display:flex;flex-direction:column;min-height:0">
+          <div class="tbl-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Select</th>
-                  <th>Camera</th>
-                  <th>IP</th>
-                  <th>State</th>
-                  <th>Blobs</th>
-                  <th>Reject</th>
-                  <th>Mask</th>
-                  <th>Clock</th>
-                  <th>Timestamp</th>
-                  <th>Preview</th>
-                  <th>Healthy</th>
-                  <th>Last Error</th>
+                  <th>☑</th><th>ID</th><th>IP</th><th>State</th><th>Blobs</th><th>Mask%</th><th>Health</th><th>Clock</th>
                 </tr>
               </thead>
               <tbody id="cameraRows"></tbody>
             </table>
           </div>
-        </section>
-
-        <section class="step-card" id="stepBlob" data-step="blob">
-          <div class="step-head">
-            <div class="step-title">
-              <div class="eyebrow">Step 01</div>
-              <h2>Blob Detection Adjustment</h2>
-            </div>
-            <span class="step-status" id="stepBlobStatus">Pending</span>
-          </div>
-          <div class="step-summary" id="blobSummary"></div>
-          <div class="controls-grid">
-            <label for="exposure">Exposure <span class="hint"><span id="exposureValue"></span> us</span><input id="exposure" type="range" min="100" max="30000" step="100" value="12000"></label>
-            <label for="gain">Gain <span class="hint"><span id="gainValue"></span></span><input id="gain" type="range" min="1" max="16" step="0.1" value="8"></label>
-            <label for="fps">FPS <span class="hint"><span id="fpsValue"></span></span><input id="fps" type="range" min="15" max="120" step="1" value="56"></label>
-            <label for="focus">Focus <span class="hint"><span id="focusValue"></span></span><input id="focus" type="range" min="0.0" max="10.0" step="0.001" value="5.215"></label>
-            <label for="threshold">Threshold <span class="hint"><span id="thresholdValue"></span></span><input id="threshold" type="range" min="0" max="255" step="1" value="200"></label>
-            <label for="circularity">Circularity Min <span class="hint"><span id="circularityValue"></span></span><input id="circularity" type="range" min="0.0" max="1.0" step="0.01" value="0.0"></label>
-            <label for="blobMin">Blob Min Diameter <span class="hint"><span id="blobMinValue"></span> px</span><input id="blobMin" type="range" min="0" max="100" step="0.5" value="0"></label>
-            <label for="blobMax">Blob Max Diameter <span class="hint"><span id="blobMaxValue"></span> px</span><input id="blobMax" type="range" min="0" max="100" step="0.5" value="0"></label>
-          </div>
-          <div class="button-row">
-            <button id="applyConfig">Apply Blob Settings</button>
-          </div>
-        </section>
-
-        <section class="step-card" id="stepMask" data-step="mask">
-          <div class="step-head">
-            <div class="step-title">
-              <div class="eyebrow">Step 02</div>
-              <h2>Mask Adjustment</h2>
-            </div>
-            <span class="step-status" id="stepMaskStatus">Pending</span>
-          </div>
-          <div class="step-summary" id="maskSummary"></div>
-          <div class="controls-grid">
-            <label for="maskThreshold">Mask Threshold <span class="hint"><span id="maskThresholdValue"></span></span><input id="maskThreshold" type="range" min="0" max="255" step="1" value="200"></label>
-            <label for="maskSeconds">Mask Seconds <span class="hint"><span id="maskSecondsValue"></span> s</span><input id="maskSeconds" type="range" min="0.1" max="5.0" step="0.1" value="0.5"></label>
-          </div>
-          <div class="button-row">
-            <button class="secondary" data-command="mask_start">Build Mask</button>
-            <button class="ghost" data-command="mask_stop">Clear Mask</button>
-          </div>
-        </section>
-
-        <section class="step-card" id="stepWand" data-step="wand">
-          <div class="step-head">
-            <div class="step-title">
-              <div class="eyebrow">Step 03</div>
-              <h2>Pose Capture</h2>
-            </div>
-            <span class="step-status" id="stepWandStatus">Pending</span>
-          </div>
-          <div class="step-summary" id="wandSummary"></div>
-          <div class="button-row">
-            <button class="secondary" data-command="start">Start Pose Capture</button>
-            <button class="ghost" data-command="stop">Stop Pose Capture</button>
-          </div>
-        </section>
-
-        <section class="step-card" id="stepFloor" data-step="floor">
-          <div class="step-head">
-            <div class="step-title">
-              <div class="eyebrow">Step 04</div>
-              <h2>Floor / Metric Capture</h2>
-            </div>
-            <span class="step-status" id="stepFloorStatus">Pending</span>
-          </div>
-          <div class="step-summary" id="floorSummary"></div>
-          <div class="controls-grid">
-            <label for="wandMetricSeconds">Capture Seconds<input id="wandMetricSeconds" type="number" min="0.5" max="10" step="0.5" value="3.0"></label>
-            <label for="wandMetricLogPath">Wand Metric Log Path<input id="wandMetricLogPath" type="text" value="logs/extrinsics_wand_metric.jsonl"></label>
-          </div>
-          <div class="button-row">
-            <button id="captureWandMetric" class="secondary">Capture Floor / Metric</button>
-            <button class="ghost" data-command="stop_wand_metric_capture">Stop Floor / Metric</button>
-          </div>
-        </section>
-
-        <section class="step-card" id="stepExtrinsics" data-step="extrinsics">
-          <div class="step-head">
-            <div class="step-title">
-              <div class="eyebrow">Step 05</div>
-              <h2>Extrinsics Generation</h2>
-            </div>
-            <span class="step-status" id="stepExtrinsicsStatus">Pending</span>
-          </div>
-          <div class="step-summary" id="extrinsicsSummary"></div>
-          <div class="controls-grid">
-            <label for="intrinsicsPath">Intrinsics Dir<input id="intrinsicsPath" type="text" value="calibration"></label>
-            <label for="logPath">Pose Log Path<input id="logPath" type="text" value="logs/extrinsics_pose_capture.jsonl"></label>
-            <label for="generateWandMetricLogPath">Wand Metric Log Path<input id="generateWandMetricLogPath" type="text" value="logs/extrinsics_wand_metric.jsonl"></label>
-            <label for="outputPath">Output Path<input id="outputPath" type="text" value="calibration/extrinsics_pose_v2.json"></label>
-            <label for="pairWindowUs">Pair Window (us)<input id="pairWindowUs" type="number" min="1" step="100" value="2000"></label>
-            <label for="minPairs">Min Pairs<input id="minPairs" type="number" min="1" step="1" value="8"></label>
-            <label for="wandPairWindowUs">Wand Pair Window (us)<input id="wandPairWindowUs" type="number" min="1" step="100" value="8000"></label>
-          </div>
-          <div class="button-row">
-            <button id="generateExtrinsics">Generate Extrinsics</button>
-          </div>
-        </section>
+        </div>
       </div>
 
-      <div class="stack">
-        <section class="card">
-          <div class="step-head">
-            <div class="step-title">
-              <div class="eyebrow">Console</div>
-              <h2>Last Result</h2>
-            </div>
-          </div>
-          <pre class="console" id="status"></pre>
-        </section>
-      </div>
-    </div>
-    </section>
-
-    <section id="pageTracking" class="page">
-      <div class="tracking-grid">
-        <div class="tracking-main">
-          <section class="card tracking-viewer-card">
-            <div class="tracking-viewer-header">
-              <div class="tracking-viewer-title">
-                <div class="eyebrow">Tracking Scene</div>
-                <h2>3D Monitoring</h2>
+      <!-- VIEW: Blob Detection -->
+      <div class="view" id="viewBlob">
+        <div class="view-title">Blob Detection Adjustment</div>
+        <div class="split">
+          <div class="split-left" style="flex:1.4">
+            <div class="panel" style="flex:1;display:flex;flex-direction:column;min-height:0">
+              <div class="panel-title">Camera Status</div>
+              <div class="tbl-wrap">
+                <table>
+                  <thead>
+                    <tr><th>☑</th><th>ID</th><th>State</th><th>Blobs</th><th>Reject</th><th>Mask%</th><th>Health</th></tr>
+                  </thead>
+                  <tbody id="blobCameraRows"></tbody>
+                </table>
               </div>
-              <span class="tracking-state-badge" id="trackingStatusBadge">Idle</span>
             </div>
-            <div class="tracking-viewer-inner">
+          </div>
+          <div class="split-right" style="width:340px;min-width:280px">
+            <div class="panel">
+              <div class="panel-title">Detection Settings</div>
+              <div class="slider-grid">
+                <div class="slider-label">
+                  <span>Exposure <span class="slider-value" id="exposureValue"></span> us</span>
+                  <input id="exposure" type="range" min="100" max="30000" step="100" value="12000">
+                </div>
+                <div class="slider-label">
+                  <span>Gain <span class="slider-value" id="gainValue"></span></span>
+                  <input id="gain" type="range" min="1" max="16" step="0.1" value="8">
+                </div>
+                <div class="slider-label">
+                  <span>FPS <span class="slider-value" id="fpsValue"></span></span>
+                  <input id="fps" type="range" min="15" max="120" step="1" value="56">
+                </div>
+                <div class="slider-label">
+                  <span>Focus <span class="slider-value" id="focusValue"></span></span>
+                  <input id="focus" type="range" min="0.0" max="10.0" step="0.001" value="5.215">
+                </div>
+                <div class="slider-label">
+                  <span>Threshold <span class="slider-value" id="thresholdValue"></span></span>
+                  <input id="threshold" type="range" min="0" max="255" step="1" value="200">
+                </div>
+                <div class="slider-label">
+                  <span>Circularity <span class="slider-value" id="circularityValue"></span></span>
+                  <input id="circularity" type="range" min="0.0" max="1.0" step="0.01" value="0.0">
+                </div>
+                <div class="slider-label">
+                  <span>Blob Min Dia <span class="slider-value" id="blobMinValue"></span> px</span>
+                  <input id="blobMin" type="range" min="0" max="100" step="0.5" value="0">
+                </div>
+                <div class="slider-label">
+                  <span>Blob Max Dia <span class="slider-value" id="blobMaxValue"></span> px</span>
+                  <input id="blobMax" type="range" min="0" max="100" step="0.5" value="0">
+                </div>
+              </div>
+              <div class="btn-row">
+                <button id="applyConfig">Apply Blob Settings</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- VIEW: Mask Build -->
+      <div class="view" id="viewMask">
+        <div class="view-title">Mask Build</div>
+        <div class="split">
+          <div class="split-left" style="flex:1.4">
+            <div class="panel" style="flex:1;display:flex;flex-direction:column;min-height:0">
+              <div class="panel-title">Camera Mask Status</div>
+              <div class="tbl-wrap">
+                <table>
+                  <thead>
+                    <tr><th>☑</th><th>ID</th><th>State</th><th>Mask%</th><th>Blobs</th><th>Health</th></tr>
+                  </thead>
+                  <tbody id="maskCameraRows"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <div class="split-right" style="width:300px;min-width:240px">
+            <div class="panel">
+              <div class="panel-title">Mask Settings</div>
+              <div class="slider-grid" style="grid-template-columns:1fr">
+                <div class="slider-label">
+                  <span>Mask Threshold <span class="slider-value" id="maskThresholdValue"></span></span>
+                  <input id="maskThreshold" type="range" min="0" max="255" step="1" value="200">
+                </div>
+                <div class="slider-label">
+                  <span>Mask Seconds <span class="slider-value" id="maskSecondsValue"></span> s</span>
+                  <input id="maskSeconds" type="range" min="0.1" max="5.0" step="0.1" value="0.5">
+                </div>
+              </div>
+              <div class="btn-row">
+                <button class="btn-teal" data-command="mask_start">Build Mask</button>
+                <button class="btn-ghost" data-command="mask_stop">Clear Mask</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- VIEW: Pose Capture -->
+      <div class="view" id="viewPose">
+        <div class="view-title">Pose Capture</div>
+        <div class="split">
+          <div class="split-left" style="flex:1.4">
+            <div class="panel" style="flex:1;display:flex;flex-direction:column;min-height:0">
+              <div class="panel-title">Camera Capture Status</div>
+              <div class="tbl-wrap">
+                <table>
+                  <thead>
+                    <tr><th>☑</th><th>ID</th><th>State</th><th>Blobs</th><th>Mask%</th><th>Health</th></tr>
+                  </thead>
+                  <tbody id="poseCameraRows"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <div class="split-right" style="width:280px;min-width:240px">
+            <div class="panel">
+              <div class="panel-title">Capture Control</div>
+              <div class="stat-card" style="margin-bottom:10px">
+                <div class="stat-label">Running Cameras</div>
+                <div class="stat-value" id="poseRunningCount">0</div>
+              </div>
+              <div class="stat-card" style="margin-bottom:10px">
+                <div class="stat-label">State</div>
+                <div class="stat-value" style="font-size:14px" id="poseCaptureState">Idle</div>
+              </div>
+              <div class="btn-row">
+                <button class="btn-teal" data-command="start">Start Pose Capture</button>
+                <button class="btn-ghost" data-command="stop">Stop</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- VIEW: Floor / Metric -->
+      <div class="view" id="viewFloor" style="align-items:center;justify-content:center">
+        <div class="panel floor-card">
+          <div class="panel-title" style="text-align:center">Floor / Metric Capture</div>
+          <p style="color:var(--ink-muted);font-size:12px;text-align:center;margin-top:6px">
+            Place the wand flat on the floor, then start capture. It will auto-stop.
+          </p>
+          <div class="floor-countdown" id="floorCountdown"></div>
+          <div style="margin-bottom:10px">
+            <label>Capture Seconds
+              <input id="wandMetricSeconds" type="number" min="0.5" max="10" step="0.5" value="3.0">
+            </label>
+          </div>
+          <div style="margin-bottom:10px">
+            <label>Wand Metric Log Path
+              <input id="wandMetricLogPath" type="text" value="logs/extrinsics_wand_metric.jsonl">
+            </label>
+          </div>
+          <div class="btn-row" style="justify-content:center">
+            <button id="captureWandMetric" class="btn-teal">Capture Floor / Metric</button>
+            <button class="btn-ghost" data-command="stop_wand_metric_capture">Stop</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- VIEW: Extrinsics -->
+      <div class="view" id="viewExtrinsics">
+        <div class="view-title">Extrinsics Generation</div>
+        <div class="split">
+          <div class="split-left" style="flex:1.1;overflow-y:auto">
+            <div class="panel">
+              <div class="panel-title">Generation Parameters</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 14px">
+                <label>Intrinsics Dir<input id="intrinsicsPath" type="text" value="calibration"></label>
+                <label>Pose Log Path<input id="logPath" type="text" value="logs/extrinsics_pose_capture.jsonl"></label>
+                <label>Wand Metric Log<input id="generateWandMetricLogPath" type="text" value="logs/extrinsics_wand_metric.jsonl"></label>
+                <label>Output Path<input id="outputPath" type="text" value="calibration/extrinsics_pose_v2.json"></label>
+                <label>Pair Window (us)<input id="pairWindowUs" type="number" min="1" step="100" value="2000"></label>
+                <label>Min Pairs<input id="minPairs" type="number" min="1" step="1" value="8"></label>
+                <label>Wand Pair Window (us)<input id="wandPairWindowUs" type="number" min="1" step="100" value="8000"></label>
+              </div>
+              <div class="btn-row">
+                <button id="generateExtrinsics">Generate Extrinsics</button>
+              </div>
+            </div>
+          </div>
+          <div class="split-right" style="flex:1;display:flex;flex-direction:column;min-height:0">
+            <div class="panel" style="margin-bottom:10px">
+              <div class="panel-title">Quality</div>
+              <div id="extrinsicsQualityBadges"><span class="quality-badge">No extrinsics yet</span></div>
+              <div id="extrinsicsDetailSummary" style="font-size:11px;color:var(--ink-muted);margin-top:6px"></div>
+            </div>
+            <div class="panel" style="flex:1;display:flex;flex-direction:column;min-height:0">
+              <div class="panel-title">Console</div>
+              <pre class="console" id="status"></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- VIEW: Tracking (keeps legacy ID pageTracking) -->
+      <div class="view" id="pageTracking">
+        <div class="view-title" style="display:flex;align-items:center;gap:10px">
+          3D Tracking
+          <span class="tracking-state-badge" id="trackingStatusBadge">Idle</span>
+        </div>
+        <div class="split" style="flex:1;min-height:0">
+          <div class="split-left" style="flex:1.8;display:flex;flex-direction:column;min-height:0">
+            <div class="tracking-viewer-inner" style="flex:1;min-height:0">
               <canvas id="trackingViewerCanvas" aria-label="Tracking scene viewport"></canvas>
               <div class="tracking-viewer-empty" id="trackingViewerEmpty">Waiting for scene data</div>
             </div>
-            <div class="tracking-viewer-footer">
+            <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--ink-muted);margin-top:6px;padding:0 2px">
               <span id="trackingSceneTimestamp">Last scene: --</span>
               <span id="trackingSceneHint"></span>
             </div>
-          </section>
-          <div class="tracking-json-stack">
-            <section class="card">
-              <div class="step-head">
-                <div class="step-title">
-                  <h2>Status JSON</h2>
-                </div>
+          </div>
+          <div class="split-right" style="width:300px;min-width:240px;display:flex;flex-direction:column;gap:8px;overflow-y:auto">
+            <div class="panel">
+              <div class="panel-title">Tracking Control</div>
+              <div style="font-size:11px;color:var(--ink-muted);margin-bottom:8px" id="trackingExtrinsicsPath"></div>
+              <div class="btn-row" style="margin-top:0">
+                <button id="trackingStart" class="btn-teal btn-sm" type="button">Start</button>
+                <button id="trackingStop" class="btn-ghost btn-sm" type="button">Stop</button>
               </div>
-              <pre class="console" id="trackingStatus"></pre>
-            </section>
-            <section class="card">
-              <div class="step-head">
-                <div class="step-title">
-                  <h2>Scene Snapshot JSON</h2>
-                </div>
+              <div style="font-size:11px;color:var(--ink-muted);margin-top:8px" id="trackingLastUpdate">waiting for data</div>
+            </div>
+            <div class="panel">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                <div class="panel-title" style="margin-bottom:0">Camera Health</div>
+                <span style="font-size:11px;color:var(--ink-muted)" id="trackingSyncCoverage"></span>
               </div>
-              <pre class="console" id="trackingScene"></pre>
-            </section>
+              <div id="trackingCameraHealth"></div>
+            </div>
+            <div class="panel">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                <div class="panel-title" style="margin-bottom:0">Rigid Bodies</div>
+                <span style="font-size:11px;color:var(--ink-muted)" id="trackingRigidCount">0 tracked</span>
+              </div>
+              <div id="trackingRigidList"></div>
+            </div>
           </div>
         </div>
-        <div class="tracking-side">
-          <section class="card tracking-controls">
-            <div class="tracking-controls-row">
-              <div>
-                <p class="eyebrow">Tracking Control</p>
-                <p id="trackingExtrinsicsPath"></p>
+      </div>
+
+      <!-- VIEW: Intrinsics (keeps legacy ID pageIntrinsics) -->
+      <div class="view" id="pageIntrinsics">
+        <div class="view-title">Intrinsics Calibration</div>
+        <div class="split" style="flex:1;min-height:0">
+          <div class="split-left" style="flex:1;display:flex;flex-direction:column;gap:8px;overflow-y:auto">
+            <div class="panel">
+              <div class="panel-title">Camera &amp; Board Setup <span class="badge" id="intPhaseStatus">Idle</span></div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 14px">
+                <label>Camera ID<input id="intCameraId" type="text" value="pi-cam-01"></label>
+                <label>MJPEG URL<input id="intMjpegUrl" type="text" value="http://192.168.1.10:8555/mjpeg" placeholder="http://PI_IP:8555/mjpeg"></label>
+                <label>Square Length (mm)<input id="intSquareMm" type="number" min="1" max="500" step="1" value="30"></label>
+                <label>Marker Length (mm)<input id="intMarkerMm" type="number" min="1" max="500" step="0.5" placeholder="auto"></label>
+                <label>Squares X<input id="intSquaresX" type="number" min="2" max="20" step="1" value="6"></label>
+                <label>Squares Y<input id="intSquaresY" type="number" min="2" max="20" step="1" value="8"></label>
+                <label>Min Frames<input id="intMinFrames" type="number" min="5" max="200" step="1" value="25"></label>
+                <label>Cooldown (s)<input id="intCooldown" type="number" min="0.1" max="10" step="0.1" value="1.5"></label>
               </div>
-              <div class="tracking-control-buttons">
-                <button id="trackingStart" class="secondary" type="button">Start Tracking</button>
-                <button id="trackingStop" class="ghost" type="button">Stop Tracking</button>
+              <div id="intCameraList" class="int-camera-list"></div>
+              <div class="btn-row">
+                <button id="intStart" class="btn-teal btn-sm">Start Capture</button>
+                <button id="intStop" class="btn-ghost btn-sm">Stop</button>
+                <button id="intClear" class="btn-ghost btn-sm">Clear Frames</button>
+                <button id="intDiscard" class="btn-ghost btn-sm">Discard Session</button>
               </div>
             </div>
-            <div class="tracking-control-footer">
-              <span id="trackingLastUpdate">waiting for data</span>
+            <div class="panel" style="flex:1">
+              <div class="panel-title">Live Feed</div>
+              <div class="intrinsics-viewer">
+                <img id="intFrame" alt="Charuco preview" style="display:none">
+                <span id="intFrameEmpty" style="color:var(--ink-muted);font-size:13px">Start capture to preview</span>
+              </div>
             </div>
-          </section>
-          <section class="card tracking-health-card">
-            <div class="tracking-health-header">
-              <div class="eyebrow">Camera Health</div>
-              <span id="trackingSyncCoverage"></span>
+          </div>
+          <div class="split-right" style="flex:1;display:flex;flex-direction:column;gap:8px;overflow-y:auto">
+            <div class="panel">
+              <div class="panel-title">Frame Collection</div>
+              <div class="int-stat">Captured: <strong id="intCaptured">0</strong> / <strong id="intNeeded">25</strong></div>
+              <div class="int-stat">Rejected (cooldown): <strong id="intRejCool">0</strong></div>
+              <div class="int-stat">Rejected (spatial): <strong id="intRejSpat">0</strong></div>
+              <div class="int-stat">Rejected (no detect): <strong id="intRejDet">0</strong></div>
+              <p style="font-size:11px;color:var(--ink-muted);margin-top:8px;text-transform:uppercase;letter-spacing:.07em">3x3 Coverage Grid</p>
+              <div class="int-grid" id="intCoverageGrid"></div>
+              <div class="btn-row">
+                <button id="intCalibrate" class="btn-sm">Calibrate</button>
+              </div>
             </div>
-            <div id="trackingCameraHealth" class="tracking-health-grid"></div>
-          </section>
-          <section class="card tracking-rigid-card">
-            <div class="tracking-health-header">
-              <div class="eyebrow">Rigid Bodies</div>
-              <span id="trackingRigidCount">0 tracked</span>
+            <div class="panel" style="flex:1;display:flex;flex-direction:column;min-height:0">
+              <div class="panel-title">Calibration Output</div>
+              <pre class="console" id="intResult">Waiting...</pre>
             </div>
-            <div id="trackingRigidList" class="tracking-rigid-list"></div>
-          </section>
+          </div>
         </div>
       </div>
-    </section>
-  </main>
+
+    </div><!-- /.main-area -->
+  </div><!-- /.app-shell -->
+
   <script type="module">
     let THREE = null;
     async function ensureThreeLoaded() {
@@ -985,7 +903,7 @@ HTML_PAGE = """<!doctype html>
       THREE = await import("/static/vendor/three.module.min.js");
       return THREE;
     }
-    const sliders = ["exposure", "gain", "fps", "focus", "threshold", "circularity", "blobMin", "blobMax", "maskThreshold", "maskSeconds"];  
+    const sliders = ["exposure", "gain", "fps", "focus", "threshold", "circularity", "blobMin", "blobMax", "maskThreshold", "maskSeconds"];
     const sliderNames = new Set(sliders);
     const stepOrder = ["blob", "mask", "wand", "floor", "extrinsics"];
     const stepLabels = {
@@ -1581,22 +1499,16 @@ HTML_PAGE = """<!doctype html>
     }
 
     function renderCameraRows(cameras) {
+      // Main cameras view table (compact)
       elements.rows.innerHTML = cameras.map((camera) => {
         const diagnostics = camera.diagnostics || {};
         const blob = diagnostics.blob_diagnostics || {};
-        const rejectCount = Number(blob.rejected_by_diameter || 0) + Number(blob.rejected_by_circularity || 0);
         const maskRatio = diagnostics.mask_ratio != null ? `${(Number(diagnostics.mask_ratio) * 100).toFixed(1)}%` : "-";
         const clockSync = diagnostics.clock_sync || {};
-        const timestamping = diagnostics.timestamping || {};
         const offsetUs = Number(clockSync.offset_us);
         const offsetLabel = Number.isFinite(offsetUs) ? `${Math.round(offsetUs)}us` : "n/a";
         const clockVariant = clockSync.status === "locked" ? "ok" : (clockSync.status === "degraded" ? "warn" : "muted");
-        const clockLabel = clockSync.status || "unknown";
-        const timestampSource = timestamping.active_source || "-";
-        const timestampHint = timestamping.sensor_timestamp_available ? "sensor" : "fallback";
-        const previewState = diagnostics.debug_preview_enabled
-          ? diagnostics.debug_preview_active ? badge("Active", "ok") : badge("Enabled", "warn")
-          : badge("Off", "muted");
+        const clockLabel = clockSync.status || "?";
         return `
           <tr>
             <td><input type="checkbox" data-camera="${escapeHtml(camera.camera_id)}" ${camera.selected ? "checked" : ""}></td>
@@ -1604,16 +1516,71 @@ HTML_PAGE = """<!doctype html>
             <td>${escapeHtml(camera.ip)}</td>
             <td>${escapeHtml(diagnostics.state || "")}</td>
             <td>${escapeHtml(blob.last_blob_count ?? "")}</td>
+            <td>${escapeHtml(maskRatio)}</td>
+            <td>${camera.healthy ? badge("OK", "ok") : badge("No Ack", "warn")}</td>
+            <td>${badge(clockLabel, clockVariant)} ${escapeHtml(offsetLabel)}</td>
+          </tr>
+        `;
+      }).join("");
+
+      // Blob view table
+      const blobRows = document.getElementById("blobCameraRows");
+      if (blobRows) {
+        blobRows.innerHTML = cameras.map(camera => {
+          const d = camera.diagnostics || {};
+          const blob = d.blob_diagnostics || {};
+          const maskRatio = d.mask_ratio != null ? `${(Number(d.mask_ratio)*100).toFixed(1)}%` : "-";
+          const rejectCount = Number(blob.rejected_by_diameter||0) + Number(blob.rejected_by_circularity||0);
+          return `<tr>
+            <td><input type="checkbox" data-camera="${escapeHtml(camera.camera_id)}" ${camera.selected?"checked":""}></td>
+            <td>${escapeHtml(camera.camera_id)}</td>
+            <td>${escapeHtml(d.state||"")}</td>
+            <td>${escapeHtml(blob.last_blob_count??"")}</td>
             <td>${escapeHtml(rejectCount)}</td>
             <td>${escapeHtml(maskRatio)}</td>
-            <td>${badge(`${clockLabel}`, clockVariant)} <span class="hint">${escapeHtml(offsetLabel)}</span></td>
-            <td>${escapeHtml(timestampSource)} <span class="hint">${escapeHtml(timestampHint)}</span></td>
-            <td>${previewState}</td>
-            <td>${camera.healthy ? badge("OK", "ok") : badge("No Ack", "warn")}</td>
-            <td>${escapeHtml(camera.last_error || "")}</td>
-        </tr>
-      `;
-      }).join("");
+            <td>${camera.healthy ? badge("OK","ok") : badge("No Ack","warn")}</td>
+          </tr>`;
+        }).join("");
+      }
+
+      // Mask view table
+      const maskRows = document.getElementById("maskCameraRows");
+      if (maskRows) {
+        maskRows.innerHTML = cameras.map(camera => {
+          const d = camera.diagnostics || {};
+          const blob = d.blob_diagnostics || {};
+          const maskRatio = d.mask_ratio != null ? Number(d.mask_ratio) : null;
+          const maskPct = maskRatio != null ? `${(maskRatio*100).toFixed(1)}%` : "-";
+          const barWidth = maskRatio != null ? Math.min(100, maskRatio*100).toFixed(0) : 0;
+          return `<tr>
+            <td><input type="checkbox" data-camera="${escapeHtml(camera.camera_id)}" ${camera.selected?"checked":""}></td>
+            <td>${escapeHtml(camera.camera_id)}</td>
+            <td>${escapeHtml(d.state||"")}</td>
+            <td><div class="mini-bar-wrap"><div class="mini-bar"><div class="mini-bar-fill" style="width:${barWidth}%"></div></div>${escapeHtml(maskPct)}</div></td>
+            <td>${escapeHtml(blob.last_blob_count??"")}</td>
+            <td>${camera.healthy ? badge("OK","ok") : badge("No Ack","warn")}</td>
+          </tr>`;
+        }).join("");
+      }
+
+      // Pose view table
+      const poseRows = document.getElementById("poseCameraRows");
+      if (poseRows) {
+        poseRows.innerHTML = cameras.map(camera => {
+          const d = camera.diagnostics || {};
+          const blob = d.blob_diagnostics || {};
+          const maskRatio = d.mask_ratio != null ? `${(Number(d.mask_ratio)*100).toFixed(1)}%` : "-";
+          const isRunning = d.state === "RUNNING";
+          return `<tr>
+            <td><input type="checkbox" data-camera="${escapeHtml(camera.camera_id)}" ${camera.selected?"checked":""}></td>
+            <td>${escapeHtml(camera.camera_id)}</td>
+            <td>${isRunning ? badge("RUNNING","ok") : escapeHtml(d.state||"")}</td>
+            <td>${escapeHtml(blob.last_blob_count??"")}</td>
+            <td>${escapeHtml(maskRatio)}</td>
+            <td>${camera.healthy ? badge("OK","ok") : badge("No Ack","warn")}</td>
+          </tr>`;
+        }).join("");
+      }
     }
 
     function formatTrackingAge(timestampUs) {
@@ -1710,29 +1677,139 @@ HTML_PAGE = """<!doctype html>
         .join("");
     }
 
-    function setActivePage(pageName) {
-      if (pageName === "tracking") {
-        activePage = "tracking";
-      } else if (pageName === "intrinsics") {
-        activePage = "intrinsics";
+    let activeView = "cameras";
+
+    function setActiveView(viewName) {
+      document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
+      const target = document.getElementById(
+        viewName === "tracking" ? "pageTracking" :
+        viewName === "intrinsics" ? "pageIntrinsics" :
+        "view" + viewName.charAt(0).toUpperCase() + viewName.slice(1)
+      );
+      if (target) target.classList.add("active");
+      activeView = viewName;
+      document.querySelectorAll(".nav-item[data-view]").forEach(item => {
+        item.classList.toggle("active", item.dataset.view === viewName);
+      });
+      if (viewName === "intrinsics") {
+        intStartFramePoller();
+        intStartStatusPoller();
       } else {
-        activePage = "calibration";
+        intStopPollers();
       }
+      if (viewName === "tracking") {
+        trackingViewer.resize();
+      }
+    }
+
+    function setActivePage(pageName) {
+      if (pageName === "tracking") setActiveView("tracking");
+      else if (pageName === "intrinsics") setActiveView("intrinsics");
+      else setActiveView("cameras");
+      activePage = pageName === "tracking" ? "tracking" : pageName === "intrinsics" ? "intrinsics" : "calibration";
       elements.pageCalibration.classList.toggle("active", activePage === "calibration");
       elements.pageTracking.classList.toggle("active", activePage === "tracking");
       elements.pageIntrinsics.classList.toggle("active", activePage === "intrinsics");
       elements.tabCalibration.classList.toggle("active", activePage === "calibration");
       elements.tabTracking.classList.toggle("active", activePage === "tracking");
       elements.tabIntrinsics.classList.toggle("active", activePage === "intrinsics");
-      if (activePage === "tracking") {
-        trackingViewer.resize();
+    }
+
+    function renderSidebar(state) {
+      const wf = state.workflow || {};
+      const statuses = segmentStatuses(wf);
+      const activeCaptureKind = wf.active_capture_kind || null;
+      const selectedCount = wf.selected_count || 0;
+      const maskReadyCount = wf.mask_ready_count || 0;
+
+      function navItem(viewName, icon, label, extraClass, badge) {
+        const isActive = activeView === viewName ? " active" : "";
+        const cls = (extraClass ? " " + extraClass : "");
+        const badgeHtml = badge ? `<span class="nav-badge">${badge}</span>` : "";
+        return `<button class="nav-item${isActive}${cls}" data-view="${viewName}">
+          <span class="step-icon">${icon}</span>${label}${badgeHtml}
+        </button>`;
       }
-      if (activePage === "intrinsics") {
-        intStartFramePoller();
-        intStartStatusPoller();
-      } else {
-        intStopPollers();
+
+      function stepIcon(step) {
+        const isPose = step === "wand";
+        const isFloor = step === "floor";
+        if (isPose && activeCaptureKind === "pose_capture") return "⟳";
+        if (isFloor && activeCaptureKind === "wand_metric_capture") return "⟳";
+        if (statuses[step] === "done") return "✓";
+        if (statuses[step] === "current") return "●";
+        return "○";
       }
+
+      function stepClass(step) {
+        const isPose = step === "wand" && activeCaptureKind === "pose_capture";
+        const isFloor = step === "floor" && activeCaptureKind === "wand_metric_capture";
+        if (isPose || isFloor) return "inprogress";
+        if (statuses[step] === "done") return "done";
+        return "";
+      }
+
+      const maskBadge = selectedCount > 0 ? `${maskReadyCount}/${selectedCount}` : null;
+      const trackingClass = !wf.extrinsics_ready ? "disabled" : "";
+      const trackingBadge = state.tracking?.running ? "LIVE" : null;
+
+      const navHtml = [
+        navItem("cameras", "⊞", "Cameras", "", null),
+        `<div class="sidebar-divider"></div>`,
+        navItem("blob", stepIcon("blob"), "Blob Detection", stepClass("blob"), null),
+        navItem("mask", stepIcon("mask"), "Mask Build", stepClass("mask"), maskBadge),
+        navItem("pose", stepIcon("wand"), "Pose Capture", stepClass("wand"), null),
+        navItem("floor", stepIcon("floor"), "Floor / Metric", stepClass("floor"), null),
+        navItem("extrinsics", stepIcon("extrinsics"), "Extrinsics", stepClass("extrinsics"), null),
+        `<div class="sidebar-divider"></div>`,
+        navItem("tracking", state.tracking?.running ? "▶" : "○", "Tracking", trackingClass, trackingBadge),
+        `<div class="sidebar-divider"></div>`,
+        navItem("intrinsics", "◎", "Intrinsics", "", null),
+      ].join("");
+
+      document.getElementById("sidebarNav").innerHTML = navHtml;
+      document.querySelectorAll(".nav-item[data-view]").forEach(item => {
+        item.addEventListener("click", () => {
+          if (!item.classList.contains("disabled")) setActiveView(item.dataset.view);
+        });
+      });
+    }
+
+    function renderExtrinsicsQuality(workflow) {
+      const q = workflow.latest_extrinsics_quality || {};
+      const el = document.getElementById("extrinsicsQualityBadges");
+      if (!el) return;
+      if (!workflow.extrinsics_ready) {
+        el.innerHTML = '<span class="quality-badge">No extrinsics yet</span>';
+        return;
+      }
+      const usable = q.usable_rows;
+      const median = q.median_reproj_error_px;
+      const p90 = q.p90_reproj_error_px;
+      const matchP90 = q.matched_delta_us_p90;
+      const medianClass = median != null ? (median < 1.5 ? "ok" : median < 3 ? "warn" : "error") : "";
+      el.innerHTML = [
+        usable != null ? `<span class="quality-badge ok">✓ usable=${usable}</span>` : "",
+        median != null ? `<span class="quality-badge ${medianClass}">median ${Number(median).toFixed(2)}px</span>` : "",
+        p90 != null ? `<span class="quality-badge">p90 ${Number(p90).toFixed(2)}px</span>` : "",
+        matchP90 != null ? `<span class="quality-badge">match p90 ${matchP90}µs</span>` : "",
+      ].join("");
+      const detailEl = document.getElementById("extrinsicsDetailSummary");
+      if (detailEl) {
+        detailEl.textContent = elements.extrinsicsSummary.textContent || "—";
+      }
+    }
+
+    function renderCamerasSummaryBar(state) {
+      const el = document.getElementById("camerasSummaryBar");
+      if (!el) return;
+      const wf = state.workflow || {};
+      el.innerHTML = [
+        `<div class="stat-card"><div class="stat-label">Selected</div><div class="stat-value">${wf.selected_count??0}</div></div>`,
+        `<div class="stat-card"><div class="stat-label">Healthy</div><div class="stat-value">${wf.healthy_count??0}</div></div>`,
+        `<div class="stat-card"><div class="stat-label">Running</div><div class="stat-value">${wf.running_count??0}</div></div>`,
+        `<div class="stat-card"><div class="stat-label">Mask Ready</div><div class="stat-value">${wf.mask_ready_count??0}</div></div>`,
+      ].join("");
     }
 
     async function loadTracking() {
@@ -1799,6 +1876,18 @@ HTML_PAGE = """<!doctype html>
       renderCameraSummary(state.cameras || []);
       renderWorkflow(state);
       elements.status.textContent = JSON.stringify(state.last_result, null, 2);
+      // Update pose view counters
+      const workflow = state.workflow || {};
+      const poseRunEl = document.getElementById("poseRunningCount");
+      if (poseRunEl) poseRunEl.textContent = workflow.running_count ?? 0;
+      const poseCaptureStateEl = document.getElementById("poseCaptureState");
+      if (poseCaptureStateEl) {
+        poseCaptureStateEl.textContent = workflow.active_capture_kind === "pose_capture" ? "Capturing" :
+          workflow.pose_capture_complete ? "Done ✓" : "Idle";
+      }
+      renderSidebar(state);
+      renderExtrinsicsQuality(state.workflow || {});
+      renderCamerasSummaryBar(state);
       await loadTracking();
       // Restore intrinsics form fields from saved settings
       const is = state.intrinsics_settings;
@@ -2073,7 +2162,7 @@ HTML_PAGE = """<!doctype html>
     });
     // ── end Intrinsics tab ────────────────────────────────────────────
 
-    setActivePage(activePage);
+    setActiveView("cameras");
     initTrackingViewer();
     safeLoadState();
     setInterval(safeLoadState, 3000);
