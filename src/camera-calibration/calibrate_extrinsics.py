@@ -228,16 +228,16 @@ def _scaled_intrinsic_matrix(camera: CameraParams, focal_scale: float) -> np.nda
 
 
 def _triangulate_multiview_point(
-    observations: Sequence[tuple[np.ndarray, np.ndarray, np.ndarray]],
+    observations: Sequence[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]],
 ) -> np.ndarray | None:
     if len(observations) < 2:
         return None
     rows: List[np.ndarray] = []
-    for intrinsic, projection, image_point in observations:
+    for intrinsic, distortion, projection, image_point in observations:
         normalized = cv2.undistortPoints(
             np.asarray(image_point, dtype=np.float64).reshape(1, 1, 2),
             intrinsic.astype(np.float64),
-            np.zeros(5, dtype=np.float64),
+            distortion.astype(np.float64),
         ).reshape(2)
         rows.append(normalized[0] * projection[2] - projection[0])
         rows.append(normalized[1] * projection[2] - projection[1])
@@ -272,8 +272,22 @@ def _select_relative_motion(
     points_b: np.ndarray,
     intrinsic_a: np.ndarray,
     intrinsic_b: np.ndarray,
+    distortion_a: np.ndarray,
+    distortion_b: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
-    fundamental, mask = cv2.findFundamentalMat(points_a, points_b, cv2.FM_RANSAC, 1.0, 0.99999)
+    pts_a_undist = cv2.undistortPoints(
+        points_a.reshape(-1, 1, 2).astype(np.float64),
+        intrinsic_a.astype(np.float64),
+        distortion_a.astype(np.float64),
+        P=intrinsic_a.astype(np.float64),
+    ).reshape(-1, 2)
+    pts_b_undist = cv2.undistortPoints(
+        points_b.reshape(-1, 1, 2).astype(np.float64),
+        intrinsic_b.astype(np.float64),
+        distortion_b.astype(np.float64),
+        P=intrinsic_b.astype(np.float64),
+    ).reshape(-1, 2)
+    fundamental, mask = cv2.findFundamentalMat(pts_a_undist, pts_b_undist, cv2.FM_RANSAC, 1.0, 0.99999)
     if fundamental is None:
         raise ValueError("findFundamentalMat failed for an adjacent camera pair")
     fundamental = np.asarray(fundamental, dtype=np.float64).reshape(-1, 3, 3)[0]
@@ -283,9 +297,9 @@ def _select_relative_motion(
 
     if mask is not None:
         inliers = mask.reshape(-1) > 0
-        points_a = points_a[inliers]
-        points_b = points_b[inliers]
-    if len(points_a) < 2:
+        pts_a_undist = pts_a_undist[inliers]
+        pts_b_undist = pts_b_undist[inliers]
+    if len(pts_a_undist) < 2:
         raise ValueError("not enough inliers after RANSAC for adjacent camera initialization")
 
     best_rotation = None
@@ -297,8 +311,8 @@ def _select_relative_motion(
         points4d = cv2.triangulatePoints(
             projection_a,
             projection_b,
-            points_a.T.astype(np.float64),
-            points_b.T.astype(np.float64),
+            pts_a_undist.T.astype(np.float64),
+            pts_b_undist.T.astype(np.float64),
         )
         points3d = (points4d[:3] / points4d[3]).T
         depth_a = points3d[:, 2]
@@ -343,6 +357,8 @@ def initialize_camera_poses_chain(
             np.asarray(pair_points_curr, dtype=np.float64),
             camera_params[previous_camera].intrinsic_matrix,
             camera_params[current_camera].intrinsic_matrix,
+            camera_params[previous_camera].distortion_coeffs,
+            camera_params[current_camera].distortion_coeffs,
         )
         rotation_prev, translation_prev = poses[previous_camera]
         rotation_curr = rotation_rel @ rotation_prev
@@ -416,8 +432,8 @@ def bundle_adjust_camera_poses(
     x0 = _pack_parameters(camera_order, camera_poses_init, focal_scales_init)
     lower = np.full_like(x0, -np.inf, dtype=np.float64)
     upper = np.full_like(x0, np.inf, dtype=np.float64)
-    lower[: len(camera_order)] = 0.9
-    upper[: len(camera_order)] = 1.1
+    lower[: len(camera_order)] = 0.8
+    upper[: len(camera_order)] = 1.2
 
     def residuals(params: np.ndarray) -> np.ndarray:
         focal_scales, camera_poses = _unpack_parameters(params, camera_order)
@@ -431,7 +447,7 @@ def bundle_adjust_camera_poses(
             for camera_id, image_point in observations:
                 rotation, translation = camera_poses[camera_id]
                 projection = np.hstack([rotation, translation.reshape(3, 1)])
-                triangulation_rows.append((scaled_intrinsics[camera_id], projection, image_point))
+                triangulation_rows.append((scaled_intrinsics[camera_id], camera_params[camera_id].distortion_coeffs, projection, image_point))
             point_world = _triangulate_multiview_point(triangulation_rows)
             if point_world is None or not np.all(np.isfinite(point_world)):
                 residual_values.extend([_LARGE_RESIDUAL_PX, _LARGE_RESIDUAL_PX] * len(observations))
@@ -496,6 +512,7 @@ def _compute_reprojection_statistics(
             [
                 (
                     scaled_intrinsics[camera_id],
+                    camera_params[camera_id].distortion_coeffs,
                     np.hstack([camera_poses[camera_id][0], camera_poses[camera_id][1].reshape(3, 1)]),
                     image_point,
                 )
@@ -763,6 +780,7 @@ def solve_extrinsics(
             wand_observations_by_camera=wand_observations,
             wand_points_mm=WAND_POINTS_MM,
             pair_window_us=wand_pair_window_us,
+            focal_scales=focal_scales,
         )
         if scale_meta.get("scale_source") != "none":
             metric_validation = validate_wand_metric_extrinsics(
@@ -771,6 +789,8 @@ def solve_extrinsics(
                 wand_observations_by_camera=wand_observations,
                 wand_points_mm=WAND_POINTS_MM,
                 pair_window_us=wand_pair_window_us,
+                focal_scales=focal_scales,
+                to_world_matrix=to_world_coords_matrix,
             )
             metric_payload = _resolved_metric_payload(
                 camera_order=camera_order,

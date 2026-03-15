@@ -23,11 +23,13 @@ if __package__ in (None, ""):
     from host.logger import FrameLogger
     from host.tracking_runtime import TrackingRuntime
     from host.wand_session import SessionConfig, WandSession
+    from host.intrinsics_capture import IntrinsicsCapture, IntrinsicsConfig
 else:
     from .receiver import UDPReceiver
     from .logger import FrameLogger
     from .tracking_runtime import TrackingRuntime
     from .wand_session import SessionConfig, WandSession
+    from .intrinsics_capture import IntrinsicsCapture, IntrinsicsConfig
 
 
 DEFAULT_SETTINGS_PATH = Path("logs") / "wand_gui_settings.json"
@@ -569,11 +571,73 @@ HTML_PAGE = """<!doctype html>
       overflow-wrap: anywhere;
       word-break: break-word;
     }
+    .intrinsics-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.95fr);
+      gap: 18px;
+      margin-top: 18px;
+      align-items: start;
+    }
+    .intrinsics-viewer {
+      aspect-ratio: 16/9;
+      background: #1a1a1a;
+      border-radius: 20px;
+      border: 1px solid var(--line);
+      overflow: hidden;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .intrinsics-viewer img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+    .int-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 4px;
+      margin-top: 8px;
+    }
+    .int-cell {
+      aspect-ratio: 1;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--muted);
+    }
+    .int-cell.covered {
+      background: rgba(100,116,71,0.22);
+      color: var(--olive);
+    }
+    .int-progress {
+      display: grid;
+      gap: 6px;
+      font-size: 14px;
+    }
+    .int-stat { color: var(--muted); }
+    .int-stat strong { color: var(--ink); }
+    .int-camera-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 10px;
+      min-height: 0;
+    }
     @media (max-width: 980px) {
       .grid {
         grid-template-columns: 1fr;
       }
       .tracking-grid {
+        grid-template-columns: 1fr;
+      }
+      .intrinsics-grid {
         grid-template-columns: 1fr;
       }
     }
@@ -609,6 +673,7 @@ HTML_PAGE = """<!doctype html>
       </div>
       <div class="hero-actions">
         <div class="page-nav" aria-label="page navigation">
+          <button id="tabIntrinsics" class="page-tab" type="button">Intrinsics</button>
           <button id="tabCalibration" class="page-tab active" type="button">Calibration</button>
           <button id="tabTracking" class="page-tab" type="button">Tracking</button>
         </div>
@@ -621,6 +686,71 @@ HTML_PAGE = """<!doctype html>
         <div class="metric"><span class="eyebrow">Blob Ready</span><strong id="blobMetric">0</strong><p id="blobMetricSummary"></p></div>
         <div class="metric"><span class="eyebrow">Mask Ready</span><strong id="maskMetric">0</strong><p id="maskMetricSummary"></p></div>
         <div class="metric"><span class="eyebrow">Preview</span><strong id="previewMetric">0</strong><p id="previewMetricSummary"></p></div>
+      </div>
+    </section>
+
+    <section id="pageIntrinsics" class="page">
+      <div class="intrinsics-grid">
+        <div class="stack">
+          <section class="step-card" data-step="blob">
+            <div class="step-head">
+              <div class="step-title">
+                <div class="eyebrow">Step 01</div>
+                <h2>Camera &amp; Board Setup</h2>
+              </div>
+              <span class="step-status" id="intPhaseStatus">Idle</span>
+            </div>
+            <div class="controls-grid">
+              <label for="intCameraId">Camera ID<input id="intCameraId" type="text" value="pi-cam-01" placeholder="pi-cam-01"></label>
+              <label for="intMjpegUrl">MJPEG URL<input id="intMjpegUrl" type="text" value="http://192.168.1.10:8555/mjpeg" placeholder="http://PI_IP:8555/mjpeg"></label>
+              <label for="intSquareMm">Square Length (mm)<input id="intSquareMm" type="number" min="1" max="500" step="1" value="30"></label>
+              <label for="intMarkerMm">Marker Length (mm) <span class="hint">blank = auto</span><input id="intMarkerMm" type="number" min="1" max="500" step="0.5" placeholder="auto"></label>
+              <label for="intSquaresX">Squares X<input id="intSquaresX" type="number" min="2" max="20" step="1" value="6"></label>
+              <label for="intSquaresY">Squares Y<input id="intSquaresY" type="number" min="2" max="20" step="1" value="8"></label>
+              <label for="intMinFrames">Min Frames<input id="intMinFrames" type="number" min="5" max="200" step="1" value="25"></label>
+              <label for="intCooldown">Cooldown (s)<input id="intCooldown" type="number" min="0.1" max="10" step="0.1" value="1.5"></label>
+            </div>
+            <div id="intCameraList" class="int-camera-list"></div>
+            <div class="button-row" style="margin-top:14px">
+              <button id="intStart">Start Capture</button>
+              <button id="intStop" class="ghost">Stop</button>
+              <button id="intClear" class="ghost">Clear Frames</button>
+              <button id="intDiscard" class="ghost">Discard Session</button>
+            </div>
+          </section>
+
+          <section class="card" style="padding:16px">
+            <div class="step-head" style="margin-bottom:10px">
+              <div class="step-title"><div class="eyebrow">Live Feed</div><h2>Charuco Preview</h2></div>
+            </div>
+            <div class="intrinsics-viewer">
+              <img id="intFrame" alt="Charuco preview" style="display:none">
+              <span id="intFrameEmpty" style="color:var(--muted);font-size:14px">Start capture to preview</span>
+            </div>
+          </section>
+        </div>
+
+        <div class="stack">
+          <section class="card">
+            <div class="step-head"><div class="step-title"><div class="eyebrow">Progress</div><h2>Frame Collection</h2></div></div>
+            <div class="int-progress">
+              <div class="int-stat">Captured: <strong id="intCaptured">0</strong> / <strong id="intNeeded">25</strong></div>
+              <div class="int-stat">Rejected (cooldown): <strong id="intRejCool">0</strong></div>
+              <div class="int-stat">Rejected (spatial): <strong id="intRejSpat">0</strong></div>
+              <div class="int-stat">Rejected (no detect): <strong id="intRejDet">0</strong></div>
+            </div>
+            <div style="margin-top:12px"><p class="eyebrow">3×3 Coverage Grid</p></div>
+            <div class="int-grid" id="intCoverageGrid"></div>
+            <div class="button-row" style="margin-top:14px">
+              <button id="intCalibrate" class="secondary">Calibrate</button>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="step-head"><div class="step-title"><div class="eyebrow">Result</div><h2>Calibration Output</h2></div></div>
+            <pre class="console" id="intResult" style="min-height:120px">Waiting...</pre>
+          </section>
+        </div>
       </div>
     </section>
 
@@ -924,10 +1054,36 @@ HTML_PAGE = """<!doctype html>
       stepWandStatus: document.getElementById("stepWandStatus"),
       stepFloorStatus: document.getElementById("stepFloorStatus"),
       stepExtrinsicsStatus: document.getElementById("stepExtrinsicsStatus"),
+      tabIntrinsics: document.getElementById("tabIntrinsics"),
       tabCalibration: document.getElementById("tabCalibration"),
       tabTracking: document.getElementById("tabTracking"),
+      pageIntrinsics: document.getElementById("pageIntrinsics"),
       pageCalibration: document.getElementById("pageCalibration"),
       pageTracking: document.getElementById("pageTracking"),
+      intCameraId: document.getElementById("intCameraId"),
+      intMjpegUrl: document.getElementById("intMjpegUrl"),
+      intSquareMm: document.getElementById("intSquareMm"),
+      intMarkerMm: document.getElementById("intMarkerMm"),
+      intSquaresX: document.getElementById("intSquaresX"),
+      intSquaresY: document.getElementById("intSquaresY"),
+      intMinFrames: document.getElementById("intMinFrames"),
+      intCooldown: document.getElementById("intCooldown"),
+      intStart: document.getElementById("intStart"),
+      intStop: document.getElementById("intStop"),
+      intClear: document.getElementById("intClear"),
+      intDiscard: document.getElementById("intDiscard"),
+      intCalibrate: document.getElementById("intCalibrate"),
+      intPhaseStatus: document.getElementById("intPhaseStatus"),
+      intCaptured: document.getElementById("intCaptured"),
+      intNeeded: document.getElementById("intNeeded"),
+      intRejCool: document.getElementById("intRejCool"),
+      intRejSpat: document.getElementById("intRejSpat"),
+      intRejDet: document.getElementById("intRejDet"),
+      intCameraList: document.getElementById("intCameraList"),
+      intCoverageGrid: document.getElementById("intCoverageGrid"),
+      intResult: document.getElementById("intResult"),
+      intFrame: document.getElementById("intFrame"),
+      intFrameEmpty: document.getElementById("intFrameEmpty"),
       trackingViewerCanvas: document.getElementById("trackingViewerCanvas"),
       trackingViewerEmpty: document.getElementById("trackingViewerEmpty"),
       trackingStatusBadge: document.getElementById("trackingStatusBadge"),
@@ -1555,14 +1711,27 @@ HTML_PAGE = """<!doctype html>
     }
 
     function setActivePage(pageName) {
-      activePage = pageName === "tracking" ? "tracking" : "calibration";
-      const calibrationActive = activePage === "calibration";
-      elements.pageCalibration.classList.toggle("active", calibrationActive);
-      elements.pageTracking.classList.toggle("active", !calibrationActive);
-      elements.tabCalibration.classList.toggle("active", calibrationActive);
-      elements.tabTracking.classList.toggle("active", !calibrationActive);
-      if (!calibrationActive) {
+      if (pageName === "tracking") {
+        activePage = "tracking";
+      } else if (pageName === "intrinsics") {
+        activePage = "intrinsics";
+      } else {
+        activePage = "calibration";
+      }
+      elements.pageCalibration.classList.toggle("active", activePage === "calibration");
+      elements.pageTracking.classList.toggle("active", activePage === "tracking");
+      elements.pageIntrinsics.classList.toggle("active", activePage === "intrinsics");
+      elements.tabCalibration.classList.toggle("active", activePage === "calibration");
+      elements.tabTracking.classList.toggle("active", activePage === "tracking");
+      elements.tabIntrinsics.classList.toggle("active", activePage === "intrinsics");
+      if (activePage === "tracking") {
         trackingViewer.resize();
+      }
+      if (activePage === "intrinsics") {
+        intStartFramePoller();
+        intStartStatusPoller();
+      } else {
+        intStopPollers();
       }
     }
 
@@ -1631,6 +1800,26 @@ HTML_PAGE = """<!doctype html>
       renderWorkflow(state);
       elements.status.textContent = JSON.stringify(state.last_result, null, 2);
       await loadTracking();
+      // Restore intrinsics form fields from saved settings
+      const is = state.intrinsics_settings;
+      if (is) {
+        const fields = [
+          ["intCameraId", is.camera_id],
+          ["intMjpegUrl", is.mjpeg_url],
+          ["intSquareMm", is.square_length_mm],
+          ["intMarkerMm", is.marker_length_mm != null ? is.marker_length_mm : ""],
+          ["intSquaresX", is.squares_x],
+          ["intSquaresY", is.squares_y],
+          ["intMinFrames", is.min_frames],
+          ["intCooldown", is.cooldown_s],
+        ];
+        for (const [id, val] of fields) {
+          const el = elements[id];
+          if (el && document.activeElement !== el && val != null && val !== "") {
+            el.value = val;
+          }
+        }
+      }
     }
 
     async function postJson(url, payload) {
@@ -1727,6 +1916,7 @@ HTML_PAGE = """<!doctype html>
 
     elements.tabCalibration.addEventListener("click", () => setActivePage("calibration"));
     elements.tabTracking.addEventListener("click", () => setActivePage("tracking"));
+    elements.tabIntrinsics.addEventListener("click", () => setActivePage("intrinsics"));
 
     elements.trackingStart.addEventListener("click", async () => {
       try {
@@ -1772,6 +1962,117 @@ HTML_PAGE = """<!doctype html>
       });
     });
 
+    // ── Intrinsics tab ────────────────────────────────────────────────
+    let intFrameIntervalId = null;
+    let intStatusIntervalId = null;
+    let intCurrentBlobUrl = null;
+
+    function intStopPollers() {
+      if (intFrameIntervalId) { clearInterval(intFrameIntervalId); intFrameIntervalId = null; }
+      if (intStatusIntervalId) { clearInterval(intStatusIntervalId); intStatusIntervalId = null; }
+    }
+
+    function intStartFramePoller() {
+      if (intFrameIntervalId) return;
+      intFrameIntervalId = setInterval(async () => {
+        try {
+          const resp = await fetch("/api/intrinsics/frame.jpg", { cache: "no-store" });
+          if (resp.status === 204) return;
+          if (!resp.ok) return;
+          const blob = await resp.blob();
+          const url = URL.createObjectURL(blob);
+          if (intCurrentBlobUrl) URL.revokeObjectURL(intCurrentBlobUrl);
+          intCurrentBlobUrl = url;
+          elements.intFrame.src = url;
+          elements.intFrame.style.display = "block";
+          elements.intFrameEmpty.style.display = "none";
+        } catch (_) {}
+      }, 500);
+    }
+
+    function intStartStatusPoller() {
+      if (intStatusIntervalId) return;
+      intStatusIntervalId = setInterval(async () => {
+        try {
+          const resp = await fetch("/api/intrinsics/status");
+          if (!resp.ok) return;
+          const s = await resp.json();
+          elements.intPhaseStatus.textContent = s.phase ?? "idle";
+          elements.intCaptured.textContent = s.frames_captured ?? 0;
+          elements.intNeeded.textContent = s.frames_needed ?? 25;
+          elements.intRejCool.textContent = s.frames_rejected_cooldown ?? 0;
+          elements.intRejSpat.textContent = s.frames_rejected_spatial ?? 0;
+          elements.intRejDet.textContent = s.frames_rejected_detection ?? 0;
+          // 3x3 coverage grid
+          const grid = s.grid_coverage || [[0,0,0],[0,0,0],[0,0,0]];
+          if (elements.intCoverageGrid) {
+            elements.intCoverageGrid.innerHTML = grid.flat().map(v =>
+              `<div class="int-cell${v > 0 ? ' covered' : ''}">${v}</div>`
+            ).join("");
+          }
+          if (s.phase === "done" && s.calibration_result) {
+            elements.intResult.textContent = JSON.stringify(s.calibration_result, null, 2);
+          } else if (s.last_error) {
+            elements.intResult.textContent = JSON.stringify({ error: s.last_error }, null, 2);
+          }
+          // Render discovered cameras as quick-fill buttons for MJPEG URL
+          if (elements.intCameraList) {
+            const cams = Array.isArray(s.cameras) ? s.cameras : [];
+            if (cams.length > 0) {
+              elements.intCameraList.innerHTML = cams.map(c => {
+                const url = `http://${c.ip}:8555/mjpeg`;
+                return `<button type="button" class="ghost" style="font-size:12px;padding:4px 10px" data-cam="${escapeHtml(c.camera_id)}" data-url="${escapeHtml(url)}">${escapeHtml(c.camera_id)} <span style="color:var(--muted)">${escapeHtml(c.ip)}</span></button>`;
+              }).join("");
+              elements.intCameraList.querySelectorAll("button[data-cam]").forEach(btn => {
+                btn.onclick = () => {
+                  if (elements.intCameraId) elements.intCameraId.value = btn.dataset.cam;
+                  if (elements.intMjpegUrl) elements.intMjpegUrl.value = btn.dataset.url;
+                };
+              });
+            } else {
+              elements.intCameraList.innerHTML = "";
+            }
+          }
+        } catch (_) {}
+      }, 1000);
+    }
+
+    function intPayload() {
+      const markerVal = elements.intMarkerMm ? elements.intMarkerMm.value.trim() : "";
+      return {
+        camera_id: elements.intCameraId?.value.trim() || "pi-cam-01",
+        mjpeg_url: elements.intMjpegUrl?.value.trim() || "",
+        square_length_mm: Number(elements.intSquareMm?.value ?? 30),
+        marker_length_mm: markerVal !== "" ? Number(markerVal) : null,
+        squares_x: Number(elements.intSquaresX?.value ?? 6),
+        squares_y: Number(elements.intSquaresY?.value ?? 8),
+        min_frames: Number(elements.intMinFrames?.value ?? 25),
+        cooldown_s: Number(elements.intCooldown?.value ?? 1.5),
+      };
+    }
+
+    elements.intStart?.addEventListener("click", async () => {
+      try { await postJson("/api/intrinsics/start", intPayload()); } catch (e) { reportUiError("int_start", e); }
+    });
+    elements.intStop?.addEventListener("click", async () => {
+      try { await postJson("/api/intrinsics/stop", {}); } catch (e) { reportUiError("int_stop", e); }
+    });
+    elements.intClear?.addEventListener("click", async () => {
+      try { await postJson("/api/intrinsics/clear", {}); } catch (e) { reportUiError("int_clear", e); }
+    });
+    elements.intDiscard?.addEventListener("click", async () => {
+      try {
+        await postJson("/api/intrinsics/discard", {});
+        elements.intResult.textContent = "Waiting...";
+        elements.intFrame.style.display = "none";
+        elements.intFrameEmpty.style.display = "";
+      } catch (e) { reportUiError("int_discard", e); }
+    });
+    elements.intCalibrate?.addEventListener("click", async () => {
+      try { await postJson("/api/intrinsics/calibrate", {}); } catch (e) { reportUiError("int_calibrate", e); }
+    });
+    // ── end Intrinsics tab ────────────────────────────────────────────
+
     setActivePage(activePage);
     initTrackingViewer();
     safeLoadState();
@@ -1814,6 +2115,8 @@ class WandGuiState:
         self.latest_extrinsics_path: Path | None = None
         self.latest_extrinsics_quality: Dict[str, Any] | None = None
         self._restore_latest_extrinsics(DEFAULT_EXTRINSICS_OUTPUT_PATH)
+        self._intrinsics: Optional[IntrinsicsCapture] = None
+        self._intrinsics_lock = threading.Lock()
 
     def _default_config(self) -> SessionConfig:
         return SessionConfig(exposure_us=12000, gain=8.0, fps=56, duration_s=DEFAULT_WAND_METRIC_DURATION_S)
@@ -1835,8 +2138,15 @@ class WandGuiState:
         payload = self._config_payload()
         path = self.settings_path
         try:
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                existing = {}
+            if not isinstance(existing, dict):
+                existing = {}
+            existing.update(payload)
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception:
             return
 
@@ -2149,6 +2459,154 @@ class WandGuiState:
         self.last_result = {"tracking_stop": response}
         return response
 
+    # ── Intrinsics capture ─────────────────────────────────────────────
+
+    def start_intrinsics_capture(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        camera_id = str(payload.get("camera_id", "pi-cam-01")).strip()
+        mjpeg_url = str(payload.get("mjpeg_url", "")).strip()
+        square_length_mm = float(payload.get("square_length_mm", 30.0))
+        marker_length_mm_raw = payload.get("marker_length_mm")
+        marker_length_mm = float(marker_length_mm_raw) if marker_length_mm_raw is not None else None
+        squares_x = int(payload.get("squares_x", 6))
+        squares_y = int(payload.get("squares_y", 8))
+        min_frames = int(payload.get("min_frames", 25))
+        cooldown_s = float(payload.get("cooldown_s", 1.5))
+
+        if not mjpeg_url:
+            raise ValueError("mjpeg_url is required")
+        if square_length_mm <= 0:
+            raise ValueError("square_length_mm must be > 0")
+
+        config = IntrinsicsConfig(
+            camera_id=camera_id,
+            mjpeg_url=mjpeg_url,
+            square_length_mm=square_length_mm,
+            marker_length_mm=marker_length_mm,
+            squares_x=squares_x,
+            squares_y=squares_y,
+            min_frames=min_frames,
+            cooldown_s=cooldown_s,
+            output_dir=PROJECT_ROOT / "calibration",
+        )
+        with self._intrinsics_lock:
+            if self._intrinsics is not None:
+                self._intrinsics.stop()
+            self._intrinsics = IntrinsicsCapture(config)
+            self._intrinsics.start()
+        self._persist_intrinsics_settings(payload)
+        return {"ok": True, "camera_id": camera_id}
+
+    def stop_intrinsics_capture(self) -> Dict[str, Any]:
+        with self._intrinsics_lock:
+            cap = self._intrinsics
+        if cap is not None:
+            cap.stop()
+        return {"ok": True}
+
+    def clear_intrinsics_frames(self) -> Dict[str, Any]:
+        with self._intrinsics_lock:
+            cap = self._intrinsics
+        if cap is not None:
+            cap.clear()
+        return {"ok": True}
+
+    def trigger_intrinsics_calibration(self) -> Dict[str, Any]:
+        with self._intrinsics_lock:
+            cap = self._intrinsics
+        if cap is None:
+            raise ValueError("No active intrinsics capture session")
+        cap.trigger_calibration()
+        return {"ok": True}
+
+    def discard_intrinsics_capture(self) -> Dict[str, Any]:
+        with self._intrinsics_lock:
+            if self._intrinsics is not None:
+                self._intrinsics.stop()
+                self._intrinsics = None
+        return {"ok": True}
+
+    def get_intrinsics_status(self) -> Dict[str, Any]:
+        with self._intrinsics_lock:
+            cap = self._intrinsics
+        if cap is None:
+            targets = self.session.discover_targets(None)
+            camera_list = [{"camera_id": t.camera_id, "ip": t.ip} for t in targets]
+            return {
+                "phase": "idle",
+                "camera_id": None,
+                "frames_captured": 0,
+                "frames_needed": 25,
+                "frames_target": 50,
+                "frames_rejected_cooldown": 0,
+                "frames_rejected_spatial": 0,
+                "frames_rejected_detection": 0,
+                "grid_coverage": [[0, 0, 0], [0, 0, 0], [0, 0, 0]],
+                "last_error": None,
+                "calibration_result": None,
+                "output_path": None,
+                "cameras": camera_list,
+            }
+        status = cap.get_status()
+        targets = self.session.discover_targets(None)
+        status["cameras"] = [{"camera_id": t.camera_id, "ip": t.ip} for t in targets]
+        return status
+
+    def get_intrinsics_jpeg(self) -> Optional[bytes]:
+        with self._intrinsics_lock:
+            cap = self._intrinsics
+        if cap is None:
+            return None
+        return cap.get_latest_jpeg()
+
+    def _persist_intrinsics_settings(self, payload: Dict[str, Any]) -> None:
+        path = self.settings_path
+        try:
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                existing = {}
+            if not isinstance(existing, dict):
+                existing = {}
+            marker_mm_raw = payload.get("marker_length_mm")
+            existing["intrinsics"] = {
+                "camera_id": str(payload.get("camera_id", "pi-cam-01")),
+                "mjpeg_url": str(payload.get("mjpeg_url", "")),
+                "square_length_mm": float(payload.get("square_length_mm", 30.0)),
+                "marker_length_mm": float(marker_mm_raw) if marker_mm_raw is not None else None,
+                "squares_x": int(payload.get("squares_x", 6)),
+                "squares_y": int(payload.get("squares_y", 8)),
+                "min_frames": int(payload.get("min_frames", 25)),
+                "cooldown_s": float(payload.get("cooldown_s", 1.5)),
+            }
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _load_intrinsics_settings(self) -> Dict[str, Any]:
+        defaults: Dict[str, Any] = {
+            "camera_id": "pi-cam-01",
+            "mjpeg_url": "",
+            "square_length_mm": 30.0,
+            "marker_length_mm": None,
+            "squares_x": 6,
+            "squares_y": 8,
+            "min_frames": 25,
+            "cooldown_s": 1.5,
+        }
+        try:
+            payload = json.loads(self.settings_path.read_text(encoding="utf-8"))
+            saved = payload.get("intrinsics", {}) if isinstance(payload, dict) else {}
+            if isinstance(saved, dict):
+                for k in defaults:
+                    if k in saved:
+                        defaults[k] = saved[k]
+        except Exception:
+            pass
+        return defaults
+
+    # ── end Intrinsics capture ─────────────────────────────────────────
+
     def get_state(self) -> Dict[str, Any]:
         cameras = self.refresh_targets()
         return {
@@ -2158,6 +2616,7 @@ class WandGuiState:
             "last_result": self.last_result,
             "receiver": self.receiver.stats,
             "tracking": self.get_tracking_status(),
+            "intrinsics_settings": self._load_intrinsics_settings(),
         }
 
     def _sync_selected_camera_ids(self, payload: Dict[str, Any]) -> None:
@@ -2481,8 +2940,11 @@ class WandGuiState:
             self._capture_log_active = True
             self._active_capture_kind = capture_kind
             self._capture_completed[capture_kind] = False
-            self.pose_capture_log_path = Path(log_file)
-            return self.pose_capture_log_path
+            if capture_kind == "pose_capture":
+                self.pose_capture_log_path = Path(log_file)
+            else:
+                self.wand_metric_log_path = Path(log_file)
+            return Path(log_file)
 
     def _stop_capture_log(self) -> Dict[str, Any] | None:
         with self.lock:
@@ -2562,6 +3024,22 @@ class WandGuiHandler(BaseHTTPRequestHandler):
         if path == "/api/tracking/scene":
             self._send_json(self.state.get_tracking_scene())
             return
+        if path == "/api/intrinsics/status":
+            self._send_json(self.state.get_intrinsics_status())
+            return
+        if path == "/api/intrinsics/frame.jpg":
+            jpeg = self.state.get_intrinsics_jpeg()
+            if jpeg is None:
+                self.send_response(HTTPStatus.NO_CONTENT)
+                self.end_headers()
+            else:
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Content-Length", str(len(jpeg)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(jpeg)
+            return
         self.send_error(HTTPStatus.NOT_FOUND)
 
     def do_POST(self) -> None:
@@ -2587,6 +3065,21 @@ class WandGuiHandler(BaseHTTPRequestHandler):
             if self.path == "/api/tracking/stop":
                 self._debug_log("POST /api/tracking/stop")
                 self._send_json(self.state.stop_tracking())
+                return
+            if self.path == "/api/intrinsics/start":
+                self._send_json(self.state.start_intrinsics_capture(payload))
+                return
+            if self.path == "/api/intrinsics/stop":
+                self._send_json(self.state.stop_intrinsics_capture())
+                return
+            if self.path == "/api/intrinsics/clear":
+                self._send_json(self.state.clear_intrinsics_frames())
+                return
+            if self.path == "/api/intrinsics/calibrate":
+                self._send_json(self.state.trigger_intrinsics_calibration())
+                return
+            if self.path == "/api/intrinsics/discard":
+                self._send_json(self.state.discard_intrinsics_capture())
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
         except ValueError as exc:

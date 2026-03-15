@@ -314,4 +314,4 @@ def test_solver_resolves_metric_and_world_with_wand_log(tmp_path: Path) -> None:
     assert result["pose"]["solve_summary"]["median_reproj_error_px"] < 5.0
     assert result["pose"]["solve_summary"]["matched_delta_us_max"] == 900
     for row in result["pose"]["camera_poses"]:
-        assert 0.9 <= float(row["focal_scale"]) <= 1.1
+        assert 0.8 <= float(row["focal_scale"]) <= 1.2

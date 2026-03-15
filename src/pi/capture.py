@@ -17,6 +17,9 @@ import time
 from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer as _ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Literal, Optional, Protocol, cast
 
@@ -1399,6 +1402,7 @@ class _CameraWorker:
         self._frames_captured = 0
         self._frames_dropped_processing = 0
         self._started_monotonic = 0.0
+        self._frame_buffer: deque[np.ndarray] = deque(maxlen=1)
 
     def start(self) -> None:
         with self._lock:
@@ -1450,6 +1454,10 @@ class _CameraWorker:
             return
         fn(backend)
 
+    def get_frame_snapshot(self) -> np.ndarray | None:
+        buf = self._frame_buffer
+        return buf[-1].copy() if buf else None
+
     def _loop(self) -> None:
         with self._lock:
             backend = self._backend
@@ -1465,6 +1473,7 @@ class _CameraWorker:
                 self._log(f"camera worker capture failed: {exc}")
                 self._stop_event.wait(0.05)
                 continue
+            self._frame_buffer.append(captured_frame.image)
             dropped = _latest_queue_put(
                 self._frame_queue,
                 _FramePacket(
@@ -1746,6 +1755,7 @@ class _CapturePipeline:
         self._started = False
         self._stream_mode: str | None = None
         self._mask_build_active = False
+        self._mjpeg_enabled: bool = False
         self._desired_fps = float(DEFAULT_TARGET_FPS)
         self._desired_exposure_us: int | None = None
         self._desired_gain: float | None = None
@@ -1899,6 +1909,14 @@ class _CapturePipeline:
     def get_last_timestamping_status(self) -> dict[str, object]:
         return self._processing_worker.get_last_timestamping_status()
 
+    def get_frame_snapshot(self) -> np.ndarray | None:
+        return self._camera_worker.get_frame_snapshot()
+
+    def set_mjpeg_enabled(self, enabled: bool) -> None:
+        with self._lock:
+            self._mjpeg_enabled = enabled
+        self._refresh_activity()
+
     def get_runtime_diagnostics(self) -> dict[str, object]:
         runtime = {}
         runtime.update(self._camera_worker.get_runtime_diagnostics())
@@ -1942,9 +1960,10 @@ class _CapturePipeline:
             stream_mode = self._stream_mode
             mask_build_active = self._mask_build_active
             preview_enabled = self._preview_worker is not None
+            mjpeg_enabled = self._mjpeg_enabled
         if stream_mode is not None or mask_build_active:
             return desired_fps
-        if preview_enabled:
+        if preview_enabled or mjpeg_enabled:
             return min(desired_fps, IDLE_PREVIEW_FPS)
         return desired_fps
 
@@ -1954,11 +1973,111 @@ class _CapturePipeline:
                 self._stream_mode is not None
                 or self._mask_build_active
                 or self._preview_worker is not None
+                or self._mjpeg_enabled
             )
         if should_run:
             self._active_event.set()
         else:
             self._active_event.clear()
+
+
+class MJPEGStreamer:
+    """
+    Serves a low-framerate MJPEG preview stream over HTTP for GUI-side intrinsics
+    calibration.  Runs two daemon threads: one encodes frames, one serves HTTP.
+    """
+
+    def __init__(
+        self,
+        *,
+        port: int,
+        fps: float = 2.0,
+        jpeg_quality: int = 75,
+        get_frame_fn: Callable[[], np.ndarray | None],
+    ) -> None:
+        self._port = port
+        self._fps = fps
+        self._quality = jpeg_quality
+        self._get_frame_fn = get_frame_fn
+        self._latest_jpeg: bytes | None = None
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+
+    def start(self) -> None:
+        t_encode = threading.Thread(target=self._encode_loop, daemon=True)
+        t_serve = threading.Thread(target=self._serve_loop, daemon=True)
+        t_encode.start()
+        t_serve.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _get_latest_jpeg(self) -> bytes | None:
+        with self._lock:
+            return self._latest_jpeg
+
+    def _encode_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                frame = self._get_frame_fn()
+                if frame is not None:
+                    if frame.ndim == 2:
+                        frame_bgr = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+                    else:
+                        frame_bgr = frame
+                    ok, buf = cv2.imencode(
+                        ".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, self._quality]
+                    )
+                    if ok:
+                        with self._lock:
+                            self._latest_jpeg = buf.tobytes()
+            except Exception:
+                pass
+            self._stop.wait(1.0 / max(0.1, self._fps))
+
+    def _serve_loop(self) -> None:
+        streamer = self
+
+        class _MJPEGHandler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                if self.path != "/mjpeg":
+                    self.send_error(HTTPStatus.NOT_FOUND)
+                    return
+                self.send_response(HTTPStatus.OK)
+                self.send_header(
+                    "Content-Type",
+                    "multipart/x-mixed-replace; boundary=frame",
+                )
+                self.end_headers()
+                interval = 1.0 / max(0.1, streamer._fps)
+                try:
+                    while not streamer._stop.is_set():
+                        jpeg = streamer._get_latest_jpeg()
+                        if jpeg is not None:
+                            header = (
+                                b"--frame\r\n"
+                                b"Content-Type: image/jpeg\r\n"
+                                b"Content-Length: "
+                                + str(len(jpeg)).encode()
+                                + b"\r\n\r\n"
+                            )
+                            self.wfile.write(header + jpeg + b"\r\n")
+                            self.wfile.flush()
+                        streamer._stop.wait(interval)
+                except Exception:
+                    pass
+
+            def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+                pass
+
+        try:
+            server = _ThreadingHTTPServer(("0.0.0.0", self._port), _MJPEGHandler)
+            server.timeout = 0.5
+            while not self._stop.is_set():
+                server.handle_request()
+            server.server_close()
+        except Exception as exc:
+            print(f"[mjpeg] serve_loop failed: {exc}", file=sys.stderr, flush=True)
 
 
 @dataclass
@@ -1980,6 +2099,7 @@ class ControlServerConfig:
     mask_max_ratio_warning: float = MASK_MAX_RATIO_WARNING
     mask_init_timeout_s: float = MASK_INIT_TIMEOUT_SECONDS
     debug_preview: bool = False
+    mjpeg_port: int = 0
 
 
 class ControlServer:
@@ -2000,6 +2120,7 @@ class ControlServer:
         self._preview_handoff_ready_event: threading.Event | None = None
         self._preview_resume_event: threading.Event | None = None
         self._pipeline: _CapturePipeline | None = None
+        self._mjpeg: MJPEGStreamer | None = None
 
         self._desired_exposure_us: int | None = None
         self._desired_gain: float | None = None
@@ -2064,6 +2185,27 @@ class ControlServer:
             except Exception as exc:  # noqa: BLE001
                 self._log(f"preview pipeline start failed: {exc}")
 
+        if self._config.mjpeg_port > 0:
+            try:
+                pipeline = self._ensure_pipeline_started()
+                pipeline.set_mjpeg_enabled(True)
+
+                def _get_frame_for_mjpeg() -> np.ndarray | None:
+                    with self._state_lock:
+                        p = self._pipeline
+                    return p.get_frame_snapshot() if p is not None else None
+
+                self._mjpeg = MJPEGStreamer(
+                    port=self._config.mjpeg_port,
+                    get_frame_fn=_get_frame_for_mjpeg,
+                )
+                self._mjpeg.start()
+                self._log(f"MJPEG streamer started on port {self._config.mjpeg_port}")
+            except BackendUnavailableError as exc:
+                self._log(f"mjpeg pipeline unavailable: {exc}")
+            except Exception as exc:  # noqa: BLE001
+                self._log(f"mjpeg pipeline start failed: {exc}")
+
         try:
             while self._running:
                 try:
@@ -2084,6 +2226,9 @@ class ControlServer:
     def shutdown(self) -> None:
         self._running = False
         self._log("shutdown")
+        if self._mjpeg is not None:
+            self._mjpeg.stop()
+            self._mjpeg = None
         pipeline = self._pipeline
         self._pipeline = None
         if pipeline is not None:
@@ -3408,6 +3553,12 @@ def parse_args() -> ControlServerConfig:
         action="store_true",
         help="Show OpenCV debug preview on the Pi during idle, mask init, and streaming",
     )
+    _ = parser.add_argument(
+        "--mjpeg-port",
+        type=int,
+        default=0,
+        help="Port for MJPEG preview stream (0 = disabled, recommended: 8555)",
+    )
 
     namespace = parser.parse_args()
     camera_id = getattr(namespace, "camera_id", None)
@@ -3416,6 +3567,7 @@ def parse_args() -> ControlServerConfig:
     backend = getattr(namespace, "backend", default_backend)
     udp_dest = getattr(namespace, "udp_dest", "255.255.255.255:5000")
     debug_preview = getattr(namespace, "debug_preview", False)
+    mjpeg_port = getattr(namespace, "mjpeg_port", 0)
 
     if camera_id is None:
         camera_id = get_default_camera_id()
@@ -3449,6 +3601,7 @@ def parse_args() -> ControlServerConfig:
         udp_port=udp_port,
         backend=backend,
         debug_preview=resolve_debug_preview_enabled(debug_preview),
+        mjpeg_port=int(mjpeg_port) if isinstance(mjpeg_port, int) else 0,
     )
 
 

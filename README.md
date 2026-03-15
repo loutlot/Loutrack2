@@ -178,6 +178,15 @@ GUI の workflow は、当該 log ファイルがすでに存在する場合も 
 `pose.solve_summary` には reprojection 指標に加えて、非 anchor 観測の timestamp 差分統計
 `matched_delta_us_p50` / `matched_delta_us_p90` / `matched_delta_us_max` も保存されます。
 
+`calibration/extrinsics_pose_v2.json` を `matplotlib` で 3D 可視化したい場合は、次で PNG 出力できます。
+
+```bash
+.venv/bin/python src/host/view_extrinsics_3d.py \
+  --extrinsics calibration/extrinsics_pose_v2.json \
+  --intrinsics-dir calibration \
+  --save logs/extrinsics_pose_v2_view.png
+```
+
 pose log の「悪化が時間起因か、位置起因か」を切り分けたい場合は、次の分析 CLI を使えます。
 
 ```bash

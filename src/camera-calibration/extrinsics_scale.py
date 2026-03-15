@@ -89,16 +89,16 @@ def _build_wand_metric_multiview(
 
 
 def _triangulate_point_ls(
-    observations: Sequence[Tuple[np.ndarray, Any, np.ndarray]],
+    observations: Sequence[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]],
 ) -> np.ndarray | None:
     if len(observations) < 2:
         return None
     rows: List[np.ndarray] = []
-    for pmat, camera, uv in observations:
+    for pmat, intrinsic, distortion, uv in observations:
         norm = cv2.undistortPoints(
             uv.reshape(1, 1, 2).astype(np.float64),
-            camera.intrinsic_matrix.astype(np.float64),
-            camera.distortion_coeffs.astype(np.float64),
+            intrinsic.astype(np.float64),
+            distortion.astype(np.float64),
         ).reshape(2)
         x = np.array([norm[0], norm[1], 1.0], dtype=np.float64)
         rows.append(x[0] * pmat[2] - pmat[0])
@@ -147,6 +147,7 @@ def apply_wand_metric_alignment(
     up_axis: str = "Z",
     pair_window_us: int = 8000,
     assume_metric_scale: bool = False,
+    focal_scales: Dict[str, float] | None = None,
 ) -> Tuple[Dict[str, Tuple[np.ndarray, np.ndarray]], np.ndarray, Dict[str, Any]]:
     wand_points_m = np.asarray(wand_points_mm, dtype=np.float64) / 1000.0
     known_edges = np.array(
@@ -175,14 +176,22 @@ def apply_wand_metric_alignment(
     up = np.array([0.0, 0.0, 1.0], dtype=np.float64) if up_axis.upper() == "Z" else np.array([0.0, 1.0, 0.0], dtype=np.float64)
     target_axis = np.array([0.0, 1.0, 0.0], dtype=np.float64) if up_axis.upper() == "Z" else np.array([1.0, 0.0, 0.0], dtype=np.float64)
 
+    scaled_intrinsics: Dict[str, np.ndarray] = {}
+    for camera_id in active_rows:
+        k = camera_params[camera_id].intrinsic_matrix.astype(np.float64).copy()
+        fs = (focal_scales or {}).get(camera_id, 1.0)
+        k[0, 0] *= fs
+        k[1, 1] *= fs
+        scaled_intrinsics[camera_id] = k
+
     for obs_by_camera in samples:
         tri_points: List[np.ndarray] = []
         for point_idx in range(4):
-            obs_rows: List[Tuple[np.ndarray, Any, np.ndarray]] = []
+            obs_rows: List[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = []
             for camera_id, points in obs_by_camera.items():
                 rotation, translation = camera_poses_similarity[camera_id]
                 pmat = np.hstack([rotation, translation.reshape(3, 1)])
-                obs_rows.append((pmat, camera_params[camera_id], points[point_idx]))
+                obs_rows.append((pmat, scaled_intrinsics[camera_id], camera_params[camera_id].distortion_coeffs, points[point_idx]))
             point = _triangulate_point_ls(obs_rows)
             if point is None:
                 tri_points = []

@@ -217,7 +217,7 @@ def analyze_pose_segments(
             rotation, translation = camera_poses[camera_id]
             intrinsic = _scaled_intrinsic_matrix(camera, focal_scales.get(camera_id, 1.0))
             projection = np.hstack([rotation, translation.reshape(3, 1)])
-            observations.append((intrinsic, projection, point))
+            observations.append((intrinsic, camera.distortion_coeffs, projection, point))
             visible_points.append((camera_id, point, intrinsic, rotation, translation, camera.distortion_coeffs))
         if len(observations) < 2:
             continue

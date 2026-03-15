@@ -30,6 +30,7 @@ def _triangulate_pose_sample(
     camera_params: Dict[str, Any],
     camera_poses: Dict[str, Tuple[np.ndarray, np.ndarray]],
     observations: Sequence[Tuple[str, np.ndarray]],
+    focal_scales: Dict[str, float] | None = None,
 ) -> np.ndarray | None:
     if len(observations) < 2:
         return None
@@ -38,9 +39,14 @@ def _triangulate_pose_sample(
         camera = camera_params[camera_id]
         rotation, translation = camera_poses[camera_id]
         pmat = np.hstack([rotation, translation.reshape(3, 1)])
+        k = camera.intrinsic_matrix.astype(np.float64)
+        if focal_scales and camera_id in focal_scales:
+            k = k.copy()
+            k[0, 0] *= focal_scales[camera_id]
+            k[1, 1] *= focal_scales[camera_id]
         norm = cv2.undistortPoints(
             uv.reshape(1, 1, 2).astype(np.float64),
-            camera.intrinsic_matrix.astype(np.float64),
+            k,
             camera.distortion_coeffs.astype(np.float64),
         ).reshape(2)
         rows.append(norm[0] * pmat[2] - pmat[0])
@@ -182,6 +188,8 @@ def validate_wand_metric_extrinsics(
     wand_points_mm: Sequence[Sequence[float]],
     pair_window_us: int = 8000,
     up_axis: str = "Z",
+    focal_scales: Dict[str, float] | None = None,
+    to_world_matrix: np.ndarray | None = None,
 ) -> Dict[str, Any]:
     point_count = len(wand_points_mm)
     reproj_errors: Dict[str, List[float]] = {camera_id: [] for camera_id in camera_poses.keys()}
@@ -198,12 +206,14 @@ def validate_wand_metric_extrinsics(
         reference_camera_id = max(active_rows.keys(), key=lambda camera_id: len(active_rows[camera_id]))
         samples = _build_wand_metric_multiview(active_rows, reference_camera_id, pair_window_us=pair_window_us)
         up = np.array([0.0, 0.0, 1.0], dtype=np.float64) if up_axis.upper() == "Z" else np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        world_R = to_world_matrix[:3, :3].astype(np.float64) if to_world_matrix is not None else None
+        world_t = to_world_matrix[:3, 3].astype(np.float64) if to_world_matrix is not None else None
 
         for sample in samples:
             tri_points: List[np.ndarray] = []
             for point_idx in range(point_count):
                 observations = [(camera_id, points[point_idx]) for camera_id, points in sample.items()]
-                tri = _triangulate_pose_sample(camera_params, camera_poses, observations)
+                tri = _triangulate_pose_sample(camera_params, camera_poses, observations, focal_scales=focal_scales)
                 if tri is None:
                     break
                 tri_points.append(tri)
@@ -211,25 +221,35 @@ def validate_wand_metric_extrinsics(
                 continue
 
             tri = np.asarray(tri_points, dtype=np.float64)
-            centered = tri - np.mean(tri, axis=0)
+            # floor / up metrics: transform to world frame if matrix available
+            if world_R is not None and world_t is not None:
+                tri_world = (world_R @ tri.T).T + world_t.reshape(1, 3)
+            else:
+                tri_world = tri
+            centered = tri_world - np.mean(tri_world, axis=0)
             _, _, vt = np.linalg.svd(centered, full_matrices=False)
             normal = vt[-1]
             normal = normal / max(np.linalg.norm(normal), 1e-12)
             up_consistency_scores.append(float(abs(np.dot(normal, up))))
             if up_axis.upper() == "Z":
-                floor_residuals_mm.append(float(np.sqrt(np.mean(tri[:, 2] ** 2)) * 1000.0))
+                floor_residuals_mm.append(float(np.sqrt(np.mean(tri_world[:, 2] ** 2)) * 1000.0))
             else:
-                floor_residuals_mm.append(float(np.sqrt(np.mean(tri[:, 1] ** 2)) * 1000.0))
+                floor_residuals_mm.append(float(np.sqrt(np.mean(tri_world[:, 1] ** 2)) * 1000.0))
 
             for camera_id, image_points in sample.items():
                 camera = camera_params[camera_id]
                 rotation, translation = camera_poses[camera_id]
                 rvec, _ = cv2.Rodrigues(rotation)
+                k = camera.intrinsic_matrix.astype(np.float64)
+                if focal_scales and camera_id in focal_scales:
+                    k = k.copy()
+                    k[0, 0] *= focal_scales[camera_id]
+                    k[1, 1] *= focal_scales[camera_id]
                 proj, _ = cv2.projectPoints(
                     tri.astype(np.float64),
                     rvec.reshape(3, 1),
                     translation.reshape(3, 1),
-                    camera.intrinsic_matrix.astype(np.float64),
+                    k,
                     camera.distortion_coeffs.astype(np.float64),
                 )
                 pred = proj.reshape(-1, 2)
