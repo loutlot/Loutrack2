@@ -14,11 +14,11 @@ if __package__ in (None, ""):
         sys.path.insert(0, str(MODULE_SRC_ROOT))
     from host.logger import FrameLogger
     from host.receiver import UDPReceiver
-    from host.wand_session import SessionConfig, WandSession
+    from host.wand_session import CalibrationSession, CalibrationSessionConfig
 else:
     from .logger import FrameLogger
     from .receiver import UDPReceiver
-    from .wand_session import SessionConfig, WandSession
+    from .wand_session import CalibrationSession, CalibrationSessionConfig
 
 
 DEFAULT_OUTPUT = Path("logs") / "extrinsics_wand_metric.jsonl"
@@ -52,7 +52,7 @@ def main() -> int:
     args = parse_args()
     receiver = UDPReceiver(port=args.udp_port)
     receiver.start()
-    session = WandSession(
+    session = CalibrationSession(
         inventory_path=Path(args.inventory) if args.inventory else None,
         receiver=receiver,
     )
@@ -71,7 +71,7 @@ def main() -> int:
 
         receiver.set_frame_callback(lambda frame: logger.log_frame(frame.to_dict() if hasattr(frame, "to_dict") else dict(frame)))
 
-        config = SessionConfig(
+        config = CalibrationSessionConfig(
             exposure_us=args.exposure_us,
             gain=args.gain,
             fps=args.fps,

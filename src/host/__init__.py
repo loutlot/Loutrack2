@@ -40,8 +40,14 @@ from .wand_session import (
     WAND_OUTER_LONG_MM,
     WAND_POINTS_MM,
     CameraTarget,
-    SessionConfig,
-    WandSession,
+    CalibrationSession,
+    CalibrationSessionConfig,
+)
+from .extrinsics_methods import (
+    ExtrinsicsMethod,
+    ExtrinsicsMethodRegistry,
+    RegisteredExtrinsicsMethod,
+    build_default_extrinsics_registry,
 )
 
 from .control import (
@@ -119,8 +125,12 @@ __all__ = [
     "WAND_OUTER_LONG_MM",
     "WAND_POINTS_MM",
     "CameraTarget",
-    "SessionConfig",
-    "WandSession",
+    "CalibrationSession",
+    "CalibrationSessionConfig",
+    "ExtrinsicsMethod",
+    "RegisteredExtrinsicsMethod",
+    "ExtrinsicsMethodRegistry",
+    "build_default_extrinsics_registry",
     # Visualize
     "TrackingVisualizer",
     "SimpleGraph",

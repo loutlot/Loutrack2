@@ -174,7 +174,7 @@ def pi_capture_server() -> Generator[PiCaptureServerInfo, None, None]:
 
     cmd = [
         str(python_exe),
-        str(root / "src/pi/capture.py"),
+        str(root / "src/pi/service/capture_runtime.py"),
         "--camera-id",
         camera_id,
         "--tcp-host",
@@ -204,7 +204,7 @@ def pi_capture_server() -> Generator[PiCaptureServerInfo, None, None]:
                 out, err = proc.communicate(timeout=1.0)
                 msg = "\n".join(
                     [
-                        "src/pi/capture.py exited early",
+                        "src/pi/service/capture_runtime.py exited early",
                         f"cmd={cmd!r}",
                         f"returncode={proc.returncode}",
                         "stdout=",
@@ -224,7 +224,7 @@ def pi_capture_server() -> Generator[PiCaptureServerInfo, None, None]:
 
             time.sleep(0.05)
         else:
-            raise AssertionError(f"src/pi/capture.py did not become ready: {last_exc!r}")
+            raise AssertionError(f"src/pi/service/capture_runtime.py did not become ready: {last_exc!r}")
 
         yield {
             "ip": ip,

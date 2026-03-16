@@ -8,7 +8,7 @@ from typing import Any, Dict
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from host.wand_gui import HTML_PAGE, PROJECT_ROOT, WandGuiState, _resolve_static_asset
+from host.loutrack_gui import HTML_PAGE, PROJECT_ROOT, LoutrackGuiState, _resolve_static_asset
 from host.wand_session import CameraTarget
 
 
@@ -86,13 +86,13 @@ class _FakeTrackingRuntime:
 
 
 def test_gui_pose_and_floor_capture_paths(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr("host.wand_gui.DEFAULT_EXTRINSICS_OUTPUT_PATH", tmp_path / "extrinsics_pose_v2.json")
-    monkeypatch.setattr("host.wand_gui.DEFAULT_WAND_METRIC_LOG_PATH", tmp_path / "extrinsics_wand_metric.jsonl")
+    monkeypatch.setattr("host.loutrack_gui.DEFAULT_EXTRINSICS_OUTPUT_PATH", tmp_path / "extrinsics_pose_v2.json")
+    monkeypatch.setattr("host.loutrack_gui.DEFAULT_WAND_METRIC_LOG_PATH", tmp_path / "extrinsics_wand_metric.jsonl")
     receiver = _FakeReceiver()
-    state = WandGuiState(
+    state = LoutrackGuiState(
         session=_FakeSession(),
         receiver=receiver,
-        settings_path=tmp_path / "wand_gui_settings.json",
+        settings_path=tmp_path / "loutrack_gui_settings.json",
         tracking_runtime=_FakeTrackingRuntime(),
     )
     state.capture_log_dir = tmp_path / "logs"
@@ -150,13 +150,13 @@ def test_gui_pose_and_floor_capture_paths(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_generate_extrinsics_summary_and_tracking_use_v2_path(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr("host.wand_gui.DEFAULT_EXTRINSICS_OUTPUT_PATH", tmp_path / "extrinsics_pose_v2.json")
-    monkeypatch.setattr("host.wand_gui.DEFAULT_WAND_METRIC_LOG_PATH", tmp_path / "extrinsics_wand_metric.jsonl")
+    monkeypatch.setattr("host.loutrack_gui.DEFAULT_EXTRINSICS_OUTPUT_PATH", tmp_path / "extrinsics_pose_v2.json")
+    monkeypatch.setattr("host.loutrack_gui.DEFAULT_WAND_METRIC_LOG_PATH", tmp_path / "extrinsics_wand_metric.jsonl")
     runtime = _FakeTrackingRuntime()
-    state = WandGuiState(
+    state = LoutrackGuiState(
         session=_FakeSession(),
         receiver=_FakeReceiver(),
-        settings_path=tmp_path / "wand_gui_settings.json",
+        settings_path=tmp_path / "loutrack_gui_settings.json",
         tracking_runtime=runtime,
     )
     pose_log = tmp_path / "extrinsics_pose_capture.jsonl"
@@ -226,11 +226,11 @@ def test_generate_extrinsics_summary_and_tracking_use_v2_path(tmp_path: Path, mo
 def test_generate_extrinsics_returns_diagnostic_instead_of_raising_for_missing_pose_rows(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setattr("host.wand_gui.DEFAULT_EXTRINSICS_OUTPUT_PATH", tmp_path / "extrinsics_pose_v2.json")
-    state = WandGuiState(
+    monkeypatch.setattr("host.loutrack_gui.DEFAULT_EXTRINSICS_OUTPUT_PATH", tmp_path / "extrinsics_pose_v2.json")
+    state = LoutrackGuiState(
         session=_FakeSession(),
         receiver=_FakeReceiver(),
-        settings_path=tmp_path / "wand_gui_settings.json",
+        settings_path=tmp_path / "loutrack_gui_settings.json",
         tracking_runtime=_FakeTrackingRuntime(),
     )
     pose_log = tmp_path / "extrinsics_pose_capture.jsonl"
@@ -259,11 +259,11 @@ def test_generate_extrinsics_returns_diagnostic_instead_of_raising_for_missing_p
 
 
 def test_generate_extrinsics_returns_diagnostic_for_missing_pose_log(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr("host.wand_gui.DEFAULT_EXTRINSICS_OUTPUT_PATH", tmp_path / "extrinsics_pose_v2.json")
-    state = WandGuiState(
+    monkeypatch.setattr("host.loutrack_gui.DEFAULT_EXTRINSICS_OUTPUT_PATH", tmp_path / "extrinsics_pose_v2.json")
+    state = LoutrackGuiState(
         session=_FakeSession(),
         receiver=_FakeReceiver(),
-        settings_path=tmp_path / "wand_gui_settings.json",
+        settings_path=tmp_path / "loutrack_gui_settings.json",
         tracking_runtime=_FakeTrackingRuntime(),
     )
 
@@ -276,12 +276,12 @@ def test_generate_extrinsics_returns_diagnostic_for_missing_pose_log(tmp_path: P
 
 
 def test_workflow_marks_existing_pose_and_metric_logs_complete(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr("host.wand_gui.DEFAULT_EXTRINSICS_OUTPUT_PATH", tmp_path / "extrinsics_pose_v2.json")
-    monkeypatch.setattr("host.wand_gui.DEFAULT_WAND_METRIC_LOG_PATH", tmp_path / "extrinsics_wand_metric.jsonl")
-    state = WandGuiState(
+    monkeypatch.setattr("host.loutrack_gui.DEFAULT_EXTRINSICS_OUTPUT_PATH", tmp_path / "extrinsics_pose_v2.json")
+    monkeypatch.setattr("host.loutrack_gui.DEFAULT_WAND_METRIC_LOG_PATH", tmp_path / "extrinsics_wand_metric.jsonl")
+    state = LoutrackGuiState(
         session=_FakeSession(),
         receiver=_FakeReceiver(),
-        settings_path=tmp_path / "wand_gui_settings.json",
+        settings_path=tmp_path / "loutrack_gui_settings.json",
         tracking_runtime=_FakeTrackingRuntime(),
     )
     state.pose_capture_log_path = tmp_path / "extrinsics_pose_capture.jsonl"
@@ -308,6 +308,6 @@ def test_resolve_static_asset_prefers_repo_root_static(tmp_path: Path, monkeypat
     module_asset.parent.mkdir(parents=True)
     repo_asset.write_text("repo-root", encoding="utf-8")
     module_asset.write_text("module-src", encoding="utf-8")
-    monkeypatch.setattr("host.wand_gui.STATIC_DIR_CANDIDATES", (repo_static, module_static))
+    monkeypatch.setattr("host.loutrack_gui.STATIC_DIR_CANDIDATES", (repo_static, module_static))
     resolved = _resolve_static_asset("vendor/three.module.min.js")
     assert resolved == repo_asset

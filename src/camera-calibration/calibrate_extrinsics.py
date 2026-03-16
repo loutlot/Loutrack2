@@ -25,7 +25,7 @@ from host.geo import CalibrationLoader, CameraParams
 from extrinsics_capture import load_wand_metric_observations
 from extrinsics_scale import apply_wand_metric_alignment
 from extrinsics_validate import validate_wand_metric_extrinsics
-from wand_model import WAND_POINTS_MM
+from calibration.targets.wand import WAND_POINTS_MM
 
 
 DEFAULT_OUTPUT = "calibration/extrinsics_pose_v2.json"

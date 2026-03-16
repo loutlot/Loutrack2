@@ -252,17 +252,17 @@ print(status["recommendation"])
 
 ---
 
-### wand_session.py - wand収録オーケストレーション
+### wand_session.py - calibration収録オーケストレーション
 
 Host主導で `ping -> set_exposure/set_gain/set_fps -> mask_start -> start(mode=pose_capture|wand_metric_capture) -> stop` を実行。
 `hosts.ini` と `UDPReceiver.get_camera_addresses()` をマージして対象カメラを確定。
 
 ```python
-from src.host.wand_session import SessionConfig, WandSession
+from src.host.wand_session import CalibrationSession, CalibrationSessionConfig
 
-session = WandSession()
+session = CalibrationSession()
 result = session.run_session(
-    SessionConfig(exposure_us=12000, gain=8.0, fps=56, duration_s=60.0)
+    CalibrationSessionConfig(exposure_us=12000, gain=8.0, fps=56, duration_s=60.0)
 )
 print(result["session_id"])
 ```
@@ -270,19 +270,19 @@ print(result["session_id"])
 **主要クラス/定数**:
 | 名前 | 説明 |
 |------|------|
-| `WandSession` | wand収録制御の実行クラス |
-| `SessionConfig` | 収録パラメータ |
+| `CalibrationSession` | 収録制御の実行クラス（新正規名） |
+| `CalibrationSessionConfig` | 収録パラメータ（新正規名） |
 | `WAND_POINTS_MM` | wand 4点の固定3D座標（mm） |
 
 ---
 
-### wand_gui.py - 映像なし Web GUI
+### loutrack_gui.py - 映像なし Web GUI（新正規入口）
 
 同期スライダー（exposure/gain/fps）と `ping` / `mask_start` / `pose_capture` / `wand_metric_capture` / `Generate Extrinsics` をブラウザから操作する最小 GUI。
-`UDPReceiver` を起動して受動発見し、`WandSession` の inventory merge をそのまま利用する。
+`UDPReceiver` を起動して受動発見し、`CalibrationSession` の inventory merge をそのまま利用する。
 
 ```bash
-python3 src/host/wand_gui.py --host <HOST_IP> --port 8765
+python3 src/host/loutrack_gui.py --host <HOST_IP> --port 8765
 ```
 
 ブラウザで `http://<HOST_IP>:8765/` を開く。

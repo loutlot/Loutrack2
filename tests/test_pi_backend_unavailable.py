@@ -85,7 +85,7 @@ def pi_capture_server_picamera2_requested() -> Generator[PiCaptureServerInfo, No
 
     cmd = [
         str(python_exe),
-        str(ROOT / "src/pi/capture.py"),
+        str(ROOT / "src/pi/service/capture_runtime.py"),
         "--backend",
         "picamera2",
         "--camera-id",
@@ -115,7 +115,7 @@ def pi_capture_server_picamera2_requested() -> Generator[PiCaptureServerInfo, No
                 out, err = proc.communicate(timeout=1.0)
                 msg = "\n".join(
                     [
-                        "src/pi/capture.py exited early",
+                        "src/pi/service/capture_runtime.py exited early",
                         f"cmd={cmd!r}",
                         f"returncode={proc.returncode}",
                         "stdout=",
@@ -135,7 +135,7 @@ def pi_capture_server_picamera2_requested() -> Generator[PiCaptureServerInfo, No
 
             time.sleep(0.05)
         else:
-            raise AssertionError(f"src/pi/capture.py did not become ready: {last_exc!r}")
+            raise AssertionError(f"src/pi/service/capture_runtime.py did not become ready: {last_exc!r}")
 
         yield {
             "ip": ip,
@@ -170,9 +170,22 @@ def test_picamera2_backend_unavailable_is_graceful(
     resp = control.ping(ip, tcp_port, camera_id=camera_id, timeout=1.0)
     assert resp.get("ack") is True
 
-    resp = control.start(ip, tcp_port, camera_id=camera_id, mode="capture", timeout=1.0)
+    # Backend-dependent operation should fail with BACKEND_UNAVAILABLE.
+    resp = control.mask_start(
+        ip,
+        tcp_port,
+        camera_id=camera_id,
+        threshold=200,
+        frames=2,
+        timeout=1.0,
+    )
     assert resp.get("ack") is False
     assert resp.get("error_code") == 6
+
+    # Start remains blocked because READY state (mask built) was never reached.
+    resp = control.start(ip, tcp_port, camera_id=camera_id, mode="capture", timeout=1.0)
+    assert resp.get("ack") is False
+    assert resp.get("error_code") == 2
 
     resp = control.ping(ip, tcp_port, camera_id=camera_id, timeout=1.0)
     assert resp.get("ack") is True

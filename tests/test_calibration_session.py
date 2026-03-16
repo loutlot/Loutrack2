@@ -6,7 +6,11 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from host.wand_session import WAND_POINTS_MM, SessionConfig, WandSession
+from host.wand_session import (
+    WAND_POINTS_MM,
+    CalibrationSession,
+    CalibrationSessionConfig,
+)
 
 
 class _FakeReceiver:
@@ -73,7 +77,7 @@ def test_discovery_prefers_passive_ip(tmp_path: Path) -> None:
     inventory.write_text("pi-cam-01 192.168.1.101 pi-cam-01\n", encoding="utf-8")
     receiver = _FakeReceiver({"pi-cam-01": ("192.168.1.250", 5000)})
 
-    session = WandSession(inventory_path=inventory, receiver=receiver, control=_FakeControl())
+    session = CalibrationSession(inventory_path=inventory, receiver=receiver, control=_FakeControl())
     targets = session.discover_targets()
 
     assert len(targets) == 1
@@ -88,10 +92,10 @@ def test_run_session_control_order(monkeypatch, tmp_path: Path) -> None:
         encoding="utf-8",
     )
     fake_control = _FakeControl()
-    session = WandSession(inventory_path=inventory, control=fake_control)
+    session = CalibrationSession(inventory_path=inventory, control=fake_control)
     monkeypatch.setattr("host.wand_session.time.sleep", lambda _duration: None)
 
-    config = SessionConfig(
+    config = CalibrationSessionConfig(
         exposure_us=12000,
         gain=8.0,
         fps=56,
@@ -131,4 +135,4 @@ if __name__ == "__main__":
     test_wand_points_mm_defaults()
     with TemporaryDirectory() as tmp:
         test_discovery_prefers_passive_ip(Path(tmp))
-    print("wand_session smoke tests passed")
+    print("calibration_session smoke tests passed")

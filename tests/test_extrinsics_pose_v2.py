@@ -21,7 +21,7 @@ _mod = importlib.util.module_from_spec(_spec)
 sys.modules["calibrate_extrinsics"] = _mod
 _spec.loader.exec_module(_mod)
 
-from wand_model import WAND_POINTS_MM
+from calibration.targets.wand import WAND_POINTS_MM
 
 
 def _write_intrinsics(path: Path, camera_id: str, width: int = 1280, height: int = 960) -> None:

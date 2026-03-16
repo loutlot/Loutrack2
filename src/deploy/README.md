@@ -232,11 +232,11 @@ tail -f src/deploy/deploy.log
 ## Piサービス統合の整合
 このセクションは、新しいPiサービス環境にデプロイ構成と制御プロトコルを統合するためのポイントをまとめたものです。
 
-- エントリポイント: Pi 側のキャプチャ処理は src/pi/capture.py を使用します。
+- エントリポイント: Pi 側のキャプチャ処理は src/pi/service/capture_runtime.py を使用します。
 - TCP 制御 NDJSON ポート: 8554 をデフォルトとして、制御コマンドは PYTHONPATH=src .venv/bin/python -m host.control ... 形式で実行します。
 - UDP フレーム: Pi から Host へ送信される各データグラムは JSON 形式。デフォルトのブロードキャスト先は 255.255.255.255:5000 です。
 - UDP フレーム: 既存キーに加えて `timestamp_source` を含みます。`timestamp` は露光寄りの epoch(us) を優先して送ります。
-- systemd の例: capture.py を引数付きで実行するか、EnvironmentFile を用いて環境変数を読み込む形で起動します。
+- systemd の例: capture_runtime.py を引数付きで実行するか、EnvironmentFile を用いて環境変数を読み込む形で起動します。
 - src/deploy/hosts.ini の camera_id: 文字列で pi-cam-01 等を使用します。
 - 未実装/検討中: mask/LED の制御欄は現時点では未実装、または今後の計画として記載します。
 - 参照: docs/00_pre_implementation/pi_control_transport.md に制御プロトコルの詳細を記載しています。

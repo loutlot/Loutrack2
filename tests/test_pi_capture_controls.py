@@ -9,7 +9,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from pi.capture import Picamera2Backend  # noqa: E402
+from pi.service.capture_runtime import Picamera2Backend  # noqa: E402
 
 
 class _FakePicamera2:
@@ -60,7 +60,7 @@ def test_picamera2_backend_disables_auto_for_manual_exposure_and_focus(monkeypat
     backend._picam2 = fake_picam2
     backend._running = True
 
-    monkeypatch.setattr("pi.capture.importlib.import_module", lambda name: _Libcamera())
+    monkeypatch.setattr("pi.service.capture_runtime.importlib.import_module", lambda name: _Libcamera())
 
     backend.set_exposure_us(12000)
     backend.set_gain(4.0)
@@ -84,8 +84,8 @@ def test_picamera2_backend_prefers_sensor_metadata_timestamp(monkeypatch) -> Non
     backend._picam2 = fake_picam2  # type: ignore[assignment]
     backend._running = True
 
-    monkeypatch.setattr("pi.capture._clock_realtime_us", lambda: 5_000_000)
-    monkeypatch.setattr("pi.capture._clock_monotonic_us", lambda: 4_000_000)
+    monkeypatch.setattr("pi.service.capture_runtime._clock_realtime_us", lambda: 5_000_000)
+    monkeypatch.setattr("pi.service.capture_runtime._clock_monotonic_us", lambda: 4_000_000)
 
     captured = backend.next_captured_frame()
 

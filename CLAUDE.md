@@ -32,13 +32,13 @@ pip install -r requirements.txt
 ### Key Runtime Commands
 ```bash
 # Start GUI (extrinsics calibration + tracking)
-python src/host/wand_gui.py --host 0.0.0.0 --port 8765 --udp-port 5000
+python src/host/loutrack_gui.py --host 0.0.0.0 --port 8765 --udp-port 5000
 
 # Start Pi capture (on Raspberry Pi)
-.venv/bin/python src/pi/capture.py --camera-id pi-cam-01 --udp-dest <HOST_IP>:5000
+.venv/bin/python src/pi/service/capture_runtime.py --camera-id pi-cam-01 --udp-dest <HOST_IP>:5000
 
 # Pi capture with dummy backend (no camera hardware)
-.venv/bin/python src/pi/capture.py --backend dummy --camera-id pi-cam-01 --udp-dest localhost:5000
+.venv/bin/python src/pi/service/capture_runtime.py --backend dummy --camera-id pi-cam-01 --udp-dest localhost:5000
 
 # Extrinsics from CLI
 .venv/bin/python src/camera-calibration/calibrate_extrinsics.py \
@@ -53,7 +53,7 @@ python src/host/wand_gui.py --host 0.0.0.0 --port 8765 --udp-port 5000
 ### System Topology
 ```
 Raspberry Pi (x N)          Host Machine
-  capture.py                  wand_gui.py (Flask + WebSocket)
+  capture_runtime.py          loutrack_gui.py (HTTP server)
   - blob detection             receiver.py (UDP frame pairing)
   - PTP sync                   geo.py (DLT triangulation)
   - UDP → port 5000  ──────→   rigid.py (Kabsch pose estimation)
@@ -61,8 +61,8 @@ Raspberry Pi (x N)          Host Machine
 ```
 
 ### Key Source Locations
-- `src/pi/capture.py` — Pi-side state machine (IDLE→MASK_INIT→READY→RUNNING), blob detection, UDP emission, TCP control server
-- `src/host/wand_gui.py` — Web GUI; Flask routes + WebSocket; orchestrates all calibration steps and tracking
+- `src/pi/service/capture_runtime.py` — Pi-side state machine (IDLE→MASK_INIT→READY→RUNNING), blob detection, UDP emission, TCP control server
+- `src/host/loutrack_gui.py` — Web GUI; HTTP API; orchestrates all calibration steps and tracking
 - `src/host/receiver.py` — UDP reception, timestamp-based frame pairing across cameras
 - `src/host/geo.py` — DLT triangulation, camera projection utilities
 - `src/host/rigid.py` — DBSCAN clustering, Kabsch/SVD rigid body estimation, tracker
@@ -92,7 +92,7 @@ Unix epoch microseconds. Pi prioritizes sensor metadata timestamp; falls back to
 ### File Locations
 - Calibration outputs: `calibration/`
 - Runtime logs: `logs/` (JSONL format)
-- GUI state persistence: `logs/wand_gui_settings.json`
+- GUI state persistence: `logs/loutrack_gui_settings.json`
 
 ### Testing
 - Tests use pytest; no mocking of core geometry or solver logic — test with synthetic data

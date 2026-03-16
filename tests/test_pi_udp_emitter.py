@@ -9,7 +9,7 @@ from typing import cast
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.pi.capture import DummyBackend, DummyBackendConfig, UDPFrameEmitter
+from src.pi.service.capture_runtime import DummyBackend, DummyBackendConfig, UDPFrameEmitter
 
 
 def test_udp_frame_emitter_sends_three_frames() -> None:

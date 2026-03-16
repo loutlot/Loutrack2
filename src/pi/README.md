@@ -1,6 +1,6 @@
 # Pi キャプチャサービス
 
-`src/pi/capture.py` は Raspberry Pi 側のキャプチャサービスです。
+`src/pi/service/capture_runtime.py` が Raspberry Pi 側キャプチャサービスの正規入口です。
 
 - TCP 制御 (NDJSON): `0.0.0.0:8554`
 - UDP フレーム (1 データグラムにつき 1 つの JSON): デフォルト `255.255.255.255:5000`
@@ -9,12 +9,16 @@
 - 起動時のログはリスンアドレス、バックエンド、プレビュー状態、キャプチャ開始/停止ステータスを出力します
 - UDP ペイロードは既存キーを保持し、`timestamp_source` を追加します
 
+正規モジュール:
+
+- `pi.service.capture_runtime`
+
 ## ローカルで実行（ダミーバックエンド）
 
 macOS / Linux での開発用です。合成されたドットフレームを生成します。
 
 ```bash
-.venv/bin/python src/pi/capture.py \
+.venv/bin/python src/pi/service/capture_runtime.py \
   --backend dummy \
   --camera-id pi-cam-01 \
   --udp-dest localhost:5000
@@ -25,7 +29,7 @@ macOS / Linux での開発用です。合成されたドットフレームを生
 Raspberry Pi OS では `picamera2` がデフォルトのバックエンドです。`--backend picamera2` は省略可能です。
 
 ```bash
-.venv/bin/python src/pi/capture.py \
+.venv/bin/python src/pi/service/capture_runtime.py \
   --camera-id pi-cam-01 \
   --udp-dest 255.255.255.255:5000
 ```
@@ -36,7 +40,7 @@ Raspberry Pi OS では `picamera2` がデフォルトのバックエンドです
 Pi 本体でローカルに OpenCV デバッグプレビューを表示したい場合は、マスク設定中やワンドキャプチャ中、アイドル時に `--debug-preview` を付けます。
 
 ```bash
-.venv/bin/python src/pi/capture.py \
+.venv/bin/python src/pi/service/capture_runtime.py \
   --camera-id pi-cam-01 \
   --udp-dest 255.255.255.255:5000 \
   --debug-preview
@@ -148,14 +152,14 @@ sudo ./src/pi/manual_ntp_sync.sh
 
 `timestamp` は露光に合わせた最良の Unix エポック（マイクロ秒）として出力されます。
 
-- `timestamp_source="sensor_metadata"`: `picamera2` のメタデータがセンサータイムスタンプを提供し、`capture.py` がエポック時間に変換します
+- `timestamp_source="sensor_metadata"`: `picamera2` のメタデータがセンサータイムスタンプを提供し、`capture_runtime.py` がエポック時間に変換します
 - `timestamp_source="capture_dequeue"`: メタデータが無いまたは無効な場合、フレームキューからデキューした直後のクロック読み取りをフォールバックとして使用します
 
 PTP は Raspberry Pi 実行時の OS レベルの前提条件です。
 
 - `pi-cam-01` が固定 Grandmaster です
 - それ以外の Pi カメラは PTP クライアントです
-- `capture.py` は PTP サービスの起動/再起動を行いません
+- `capture_runtime.py` は PTP サービスの起動/再起動を行いません
 - `ping` は `pmc` を read-only UDS socket 経由で用いてベストエフォートで PTP 健全性を取得し、結果を 60 秒間キャッシュします
 
 ### 必要な Pi パッケージ（ハイレベル）

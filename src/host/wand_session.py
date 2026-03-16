@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from . import control as control_module
-from wand_model import (
+from calibration.targets.wand import (
     WAND_MARKER_DIAMETER_MM,
     WAND_NAME,
     WAND_OUTER_LONG_MM,
@@ -25,7 +25,7 @@ class CameraTarget:
 
 
 @dataclass
-class SessionConfig:
+class CalibrationSessionConfig:
     exposure_us: int
     gain: float
     fps: int
@@ -42,7 +42,7 @@ class SessionConfig:
     capture_kind: str = "pose_capture"
 
 
-class WandSession:
+class CalibrationSession:
     def __init__(
         self,
         inventory_path: Optional[Path] = None,
@@ -132,7 +132,7 @@ class WandSession:
             results[target.camera_id] = resp
         return results
 
-    def run_session(self, config: SessionConfig) -> Dict[str, Any]:
+    def run_session(self, config: CalibrationSessionConfig) -> Dict[str, Any]:
         targets = self.prepare_targets(camera_ids=config.camera_ids)
         if not targets:
             raise RuntimeError("No healthy cameras found")
@@ -235,7 +235,7 @@ class WandSession:
     def _all_acked(responses: Dict[str, Dict[str, Any]]) -> bool:
         return all(bool(resp.get("ack")) for resp in responses.values())
 
-    def _persist_session_metadata(self, result: Dict[str, Any], config: SessionConfig) -> Path:
+    def _persist_session_metadata(self, result: Dict[str, Any], config: CalibrationSessionConfig) -> Path:
         output_dir = config.output_dir or self.default_output_dir
         output_dir.mkdir(parents=True, exist_ok=True)
         path = output_dir / f"{result['session_id']}.json"

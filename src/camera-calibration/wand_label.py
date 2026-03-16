@@ -6,7 +6,7 @@ from typing import Dict, Optional, Sequence
 
 import numpy as np
 
-from wand_model import WAND_MID_RATIO
+from calibration.targets.wand import WAND_MID_RATIO
 
 
 @dataclass(frozen=True)

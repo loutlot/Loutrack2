@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 import time
 import threading
@@ -22,17 +23,20 @@ if __package__ in (None, ""):
     from host.receiver import UDPReceiver
     from host.logger import FrameLogger
     from host.tracking_runtime import TrackingRuntime
-    from host.wand_session import SessionConfig, WandSession
+    from host.wand_session import CalibrationSession, CalibrationSessionConfig
     from host.intrinsics_capture import IntrinsicsCapture, IntrinsicsConfig
+    from host.extrinsics_methods import ExtrinsicsMethodRegistry, build_default_extrinsics_registry
 else:
     from .receiver import UDPReceiver
     from .logger import FrameLogger
     from .tracking_runtime import TrackingRuntime
-    from .wand_session import SessionConfig, WandSession
+    from .wand_session import CalibrationSession, CalibrationSessionConfig
     from .intrinsics_capture import IntrinsicsCapture, IntrinsicsConfig
+    from .extrinsics_methods import ExtrinsicsMethodRegistry, build_default_extrinsics_registry
 
 
-DEFAULT_SETTINGS_PATH = Path("logs") / "wand_gui_settings.json"
+DEFAULT_SETTINGS_PATH = Path("logs") / "loutrack_gui_settings.json"
+OLD_SETTINGS_PATH = Path("logs") / "wand_gui_settings.json"
 DEFAULT_POSE_LOG_PATH = Path("logs") / "extrinsics_pose_capture.jsonl"
 DEFAULT_WAND_METRIC_LOG_PATH = Path("logs") / "extrinsics_wand_metric.jsonl"
 DEFAULT_EXTRINSICS_OUTPUT_PATH = Path("calibration") / "extrinsics_pose_v2.json"
@@ -49,7 +53,7 @@ HTML_PAGE = """<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Loutrack2 Wand Control</title>
+  <title>Loutrack GUI</title>
   <style>
     :root {
       --bg: #0F172A;
@@ -2399,10 +2403,10 @@ HTML_PAGE = """<!doctype html>
 """
 
 
-class WandGuiState:
+class LoutrackGuiState:
     def __init__(
         self,
-        session: WandSession,
+        session: CalibrationSession,
         receiver: UDPReceiver,
         settings_path: Path | None = None,
         tracking_runtime: TrackingRuntime | None = None,
@@ -2410,7 +2414,9 @@ class WandGuiState:
         self.session = session
         self.receiver = receiver
         self.lock = threading.Lock()
+        self._uses_default_settings_path = settings_path is None
         self.settings_path = settings_path or DEFAULT_SETTINGS_PATH
+        self._migrate_settings_once()
         self.selected_camera_ids: List[str] = []
         self.config = self._load_initial_config()
         self.camera_status: Dict[str, Dict[str, Any]] = {}
@@ -2426,7 +2432,11 @@ class WandGuiState:
         self._receiver_frame_callback = getattr(receiver, "_frame_callback", None)
         if hasattr(self.receiver, "set_frame_callback"):
             self.receiver.set_frame_callback(self._on_frame_received)
-        self._generate_extrinsics_solver = _load_extrinsics_solver()
+        self._generate_extrinsics_registry: ExtrinsicsMethodRegistry = build_default_extrinsics_registry(
+            blob_pose_solver=_load_extrinsics_solver(),
+        )
+        # Kept for backward-compatibility with existing tests and callers.
+        self._generate_extrinsics_solver = self._generate_extrinsics_registry.get("blob_pose_v2").solve
         self.tracking_runtime = tracking_runtime or TrackingRuntime()
         self.latest_extrinsics_path: Path | None = None
         self.latest_extrinsics_quality: Dict[str, Any] | None = None
@@ -2434,18 +2444,70 @@ class WandGuiState:
         self._intrinsics: Optional[IntrinsicsCapture] = None
         self._intrinsics_lock = threading.Lock()
 
-    def _default_config(self) -> SessionConfig:
-        return SessionConfig(exposure_us=12000, gain=8.0, fps=56, duration_s=DEFAULT_WAND_METRIC_DURATION_S)
+    @staticmethod
+    def _default_settings_payload() -> Dict[str, Any]:
+        return {
+            "exposure_us": 12000,
+            "gain": 8.0,
+            "fps": 56,
+            "focus": 5.215,
+            "threshold": 200,
+            "blob_min_diameter_px": None,
+            "blob_max_diameter_px": None,
+            "circularity_min": 0.0,
+            "mask_threshold": 200,
+            "mask_seconds": 0.5,
+            "wand_metric_seconds": DEFAULT_WAND_METRIC_DURATION_S,
+        }
 
-    def _load_initial_config(self) -> SessionConfig:
-        config = self._default_config()
-        path = self.settings_path
+    def _migrate_settings_once(self) -> None:
+        if not self._uses_default_settings_path:
+            return
+        old_path = OLD_SETTINGS_PATH
+        if not old_path.exists() or old_path == self.settings_path:
+            return
+        self.settings_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.settings_path.exists():
+            old_path.unlink(missing_ok=True)
+            return
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            return config
+            payload = json.loads(old_path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("legacy settings is not an object")
+            self.settings_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            old_path.unlink(missing_ok=True)
+            return
         except Exception:
-            return config
+            backup_path = old_path.with_suffix(old_path.suffix + ".invalid.bak")
+            try:
+                shutil.move(str(old_path), str(backup_path))
+            except Exception:
+                old_path.unlink(missing_ok=True)
+            self.settings_path.write_text(
+                json.dumps(self._default_settings_payload(), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+    def _default_config(self) -> CalibrationSessionConfig:
+        return CalibrationSessionConfig(exposure_us=12000, gain=8.0, fps=56, duration_s=DEFAULT_WAND_METRIC_DURATION_S)
+
+    def _read_settings_payload(self) -> Dict[str, Any]:
+        try:
+            payload = json.loads(self.settings_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {}
+        except Exception:
+            return {}
+        if isinstance(payload, dict):
+            return payload
+        return {}
+
+    def _load_initial_config(self) -> CalibrationSessionConfig:
+        config = self._default_config()
+        payload = self._read_settings_payload()
         if not isinstance(payload, dict):
             return config
         return self._build_session_config(payload, base_config=config)
@@ -2454,19 +2516,14 @@ class WandGuiState:
         payload = self._config_payload()
         path = self.settings_path
         try:
-            try:
-                existing = json.loads(path.read_text(encoding="utf-8"))
-            except Exception:
-                existing = {}
-            if not isinstance(existing, dict):
-                existing = {}
+            existing = self._read_settings_payload()
             existing.update(payload)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception:
             return
 
-    def _mask_params(self, config: SessionConfig | None = None) -> Dict[str, Any]:
+    def _mask_params(self, config: CalibrationSessionConfig | None = None) -> Dict[str, Any]:
         source = config or self.config
         mask = dict(source.mask_params or {})
         return {
@@ -2496,13 +2553,13 @@ class WandGuiState:
     def _build_session_config(
         self,
         payload: Dict[str, Any],
-        base_config: SessionConfig | None = None,
-    ) -> SessionConfig:
+        base_config: CalibrationSessionConfig | None = None,
+    ) -> CalibrationSessionConfig:
         source = base_config or self.config
         mask = self._mask_params(source)
         mask["threshold"] = int(payload.get("mask_threshold", mask["threshold"]))
         mask["seconds"] = float(payload.get("mask_seconds", mask["seconds"]))
-        return SessionConfig(
+        return CalibrationSessionConfig(
             exposure_us=int(payload.get("exposure_us", source.exposure_us)),
             gain=float(payload.get("gain", source.gain)),
             fps=int(payload.get("fps", source.fps)),
@@ -2877,12 +2934,7 @@ class WandGuiState:
     def _persist_intrinsics_settings(self, payload: Dict[str, Any]) -> None:
         path = self.settings_path
         try:
-            try:
-                existing = json.loads(path.read_text(encoding="utf-8"))
-            except Exception:
-                existing = {}
-            if not isinstance(existing, dict):
-                existing = {}
+            existing = self._read_settings_payload()
             marker_mm_raw = payload.get("marker_length_mm")
             existing["intrinsics"] = {
                 "camera_id": str(payload.get("camera_id", "pi-cam-01")),
@@ -2911,7 +2963,7 @@ class WandGuiState:
             "cooldown_s": 1.5,
         }
         try:
-            payload = json.loads(self.settings_path.read_text(encoding="utf-8"))
+            payload = self._read_settings_payload()
             saved = payload.get("intrinsics", {}) if isinstance(payload, dict) else {}
             if isinstance(saved, dict):
                 for k in defaults:
@@ -2929,6 +2981,7 @@ class WandGuiState:
             "config": self._config_payload(),
             "cameras": cameras,
             "workflow": self._workflow_summary(cameras),
+            "extrinsics_methods": self._generate_extrinsics_registry.to_payload(),
             "last_result": self.last_result,
             "receiver": self.receiver.stats,
             "tracking": self.get_tracking_status(),
@@ -3039,6 +3092,7 @@ class WandGuiState:
         return self.last_result
 
     def generate_extrinsics(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        extrinsics_method = str(payload.get("extrinsics_method", "blob_pose_v2")).strip() or "blob_pose_v2"
         intrinsics_raw = str(payload.get("intrinsics_path", "calibration")).strip()
         log_raw = str(payload.get("pose_log_path", payload.get("log_path", str(DEFAULT_POSE_LOG_PATH)))).strip()
         output_raw = str(payload.get("output_path", str(DEFAULT_EXTRINSICS_OUTPUT_PATH))).strip()
@@ -3077,7 +3131,11 @@ class WandGuiState:
             return self.last_result
 
         try:
-            raw_result = self._generate_extrinsics_solver(
+            if extrinsics_method == "blob_pose_v2" and callable(self._generate_extrinsics_solver):
+                solve_fn = self._generate_extrinsics_solver
+            else:
+                solve_fn = self._generate_extrinsics_registry.get(extrinsics_method).solve
+            raw_result = solve_fn(
                 intrinsics_path=str(intrinsics_path),
                 pose_log_path=str(resolved_log_path),
                 output_path=str(resolved_output),
@@ -3124,6 +3182,7 @@ class WandGuiState:
 
         summary = {
             "ok": True,
+            "extrinsics_method": extrinsics_method,
             "camera_order": raw_result.get("camera_order", []),
             "camera_count": camera_count,
             "output_path": str(resolved_output),
@@ -3329,8 +3388,8 @@ class WandGuiState:
         return all(bool(resp.get("ack")) for resp in responses.values())
 
 
-class WandGuiHandler(BaseHTTPRequestHandler):
-    state: WandGuiState
+class LoutrackGuiHandler(BaseHTTPRequestHandler):
+    state: LoutrackGuiState
 
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
@@ -3419,7 +3478,7 @@ class WandGuiHandler(BaseHTTPRequestHandler):
 
     @staticmethod
     def _debug_log(message: str) -> None:
-        print(f"[wand_gui] {message}", flush=True)
+        print(f"[loutrack_gui] {message}", flush=True)
 
     def _read_json(self) -> Dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0"))
@@ -3485,7 +3544,7 @@ def _resolve_static_asset(rel_path: str) -> Optional[Path]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Minimal web GUI for wand capture control")
+    parser = argparse.ArgumentParser(description="Loutrack GUI for calibration and tracking control")
     parser.add_argument("--host", default="127.0.0.1", help="HTTP bind host")
     parser.add_argument("--port", type=int, default=8765, help="HTTP bind port")
     parser.add_argument("--udp-port", type=int, default=5000, help="Passive discovery UDP port")
@@ -3511,15 +3570,15 @@ def main() -> None:
     args = parse_args()
     receiver = UDPReceiver(port=args.udp_port)
     receiver.start()
-    session = WandSession(
+    session = CalibrationSession(
         inventory_path=Path(args.inventory) if args.inventory else None,
         receiver=receiver,
     )
-    state = WandGuiState(session=session, receiver=receiver)
-    WandGuiHandler.state = state
-    server = ThreadingHTTPServer((args.host, args.port), WandGuiHandler)
+    state = LoutrackGuiState(session=session, receiver=receiver)
+    LoutrackGuiHandler.state = state
+    server = ThreadingHTTPServer((args.host, args.port), LoutrackGuiHandler)
     try:
-        print(f"wand GUI listening on http://{args.host}:{args.port}")
+        print(f"Loutrack GUI listening on http://{args.host}:{args.port}")
         server.serve_forever()
     finally:
         server.server_close()

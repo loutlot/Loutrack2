@@ -9,7 +9,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.pi.capture import (  # noqa: E402
+from src.pi.service.capture_runtime import (  # noqa: E402
     ClockSyncSnapshot,
     ControlServer,
     ControlServerConfig,
@@ -21,7 +21,7 @@ from src.pi.capture import (  # noqa: E402
     get_default_backend,
     resolve_debug_preview_enabled,
 )
-from src.pi import capture as capture_mod  # noqa: E402
+import src.pi.service.capture_runtime as capture_mod  # noqa: E402
 
 
 def _expected_centers(cfg: DummyBackendConfig, frame_index: int) -> list[tuple[int, int]]:
@@ -121,7 +121,7 @@ def test_control_server_ping_caches_clock_sync_probe(monkeypatch: pytest.MonkeyP
 
     times = iter([1_000_000, 1_500_000, 62_000_000])
     monkeypatch.setattr(server, "_probe_clock_sync", _probe)
-    monkeypatch.setattr("src.pi.capture._clock_realtime_us", lambda: next(times))
+    monkeypatch.setattr("src.pi.service.capture_runtime._clock_realtime_us", lambda: next(times))
 
     first = server._handle_ping("req-1", "pi-cam-01")
     second = server._handle_ping("req-2", "pi-cam-01")
@@ -344,7 +344,7 @@ def test_resolve_debug_preview_enabled_accepts_display(monkeypatch: pytest.Monke
 
 
 def test_get_default_backend_prefers_dummy_off_pi(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("src.pi.capture.running_on_raspberry_pi", lambda: False)
+    monkeypatch.setattr("src.pi.service.capture_runtime.running_on_raspberry_pi", lambda: False)
     assert get_default_backend() == "dummy"
 
 
