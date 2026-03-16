@@ -18,6 +18,7 @@
         "set_circularity_min",
         "mask_start",
         "mask_stop",
+        "set_preview",
         "led_on",
         "led_off",
         "set_resolution",
@@ -127,6 +128,37 @@
           "minimum": 0,
           "maximum": 1,
           "description": "Circularity lower bound"
+        }
+      }
+    },
+    "params_preview": {
+      "type": "object",
+      "description": "Parameters for MJPEG preview rendering",
+      "properties": {
+        "render_enabled": {
+          "type": "boolean",
+          "description": "Enable/disable MJPEG render workload"
+        },
+        "overlays": {
+          "type": "object",
+          "properties": {
+            "blob": {"type": "boolean"},
+            "mask": {"type": "boolean"},
+            "text": {"type": "boolean"},
+            "charuco": {"type": "boolean"}
+          },
+          "additionalProperties": false
+        },
+        "charuco": {
+          "type": "object",
+          "properties": {
+            "dictionary": {"type": "string"},
+            "squares_x": {"type": "integer", "minimum": 2},
+            "squares_y": {"type": "integer", "minimum": 2},
+            "square_length_mm": {"type": "number", "exclusiveMinimum": 0},
+            "marker_length_mm": {"type": "number", "exclusiveMinimum": 0}
+          },
+          "additionalProperties": false
         }
       }
     },

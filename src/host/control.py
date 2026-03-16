@@ -134,6 +134,38 @@ def set_circularity_min(
     return send_request(ip, port, req, timeout=timeout)
 
 
+def set_preview(
+    ip: str,
+    port: int,
+    camera_id: str,
+    render_enabled: Optional[bool] = None,
+    overlays: Optional[Dict[str, bool]] = None,
+    charuco: Optional[Dict[str, Any]] = None,
+    request_id: Optional[str] = None,
+    timeout: float = 5.0,
+) -> Dict[str, Any]:
+    params: Dict[str, Any] = {}
+    if render_enabled is not None:
+        params["render_enabled"] = bool(render_enabled)
+    if overlays:
+        params["overlays"] = dict(overlays)
+    if charuco:
+        params["charuco"] = dict(charuco)
+    req: Dict[str, Any] = {"cmd": "set_preview", "camera_id": camera_id, "params": params}
+    if request_id:
+        req["request_id"] = request_id
+    return send_request(ip, port, req, timeout=timeout)
+
+
+def _parse_bool_arg(value: str) -> bool:
+    raw = str(value).strip().lower()
+    if raw in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if raw in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    raise argparse.ArgumentTypeError(f"invalid boolean value: {value}")
+
+
 def mask_start(
     ip: str,
     port: int,
@@ -236,6 +268,18 @@ def _build_cli_and_run() -> None:
 
     sub.add_parser("mask_stop", help="Clear static mask on Pi")
 
+    preview_p = sub.add_parser("set_preview", help="Configure MJPEG preview rendering")
+    preview_p.add_argument("--render-enabled", type=_parse_bool_arg, default=None, help="Enable/disable MJPEG rendering")
+    preview_p.add_argument("--overlay-blob", type=_parse_bool_arg, default=None, help="Overlay blob circles")
+    preview_p.add_argument("--overlay-mask", type=_parse_bool_arg, default=None, help="Overlay static mask")
+    preview_p.add_argument("--overlay-text", type=_parse_bool_arg, default=None, help="Overlay diagnostics text")
+    preview_p.add_argument("--overlay-charuco", type=_parse_bool_arg, default=None, help="Overlay Charuco corners")
+    preview_p.add_argument("--charuco-dictionary", default=None, help="Charuco dictionary name (e.g. DICT_6X6_250)")
+    preview_p.add_argument("--charuco-squares-x", type=int, default=None, help="Charuco board squares in X")
+    preview_p.add_argument("--charuco-squares-y", type=int, default=None, help="Charuco board squares in Y")
+    preview_p.add_argument("--charuco-square-length-mm", type=float, default=None, help="Charuco square length (mm)")
+    preview_p.add_argument("--charuco-marker-length-mm", type=float, default=None, help="Charuco marker length (mm)")
+
     args = parser.parse_args()
 
     ip = args.ip
@@ -286,6 +330,38 @@ def _build_cli_and_run() -> None:
             )
         elif args.cmd == "mask_stop":
             resp = mask_stop(ip, port, camera_id=camera_id, request_id=req_id)
+        elif args.cmd == "set_preview":
+            overlays: Dict[str, bool] = {}
+            if args.overlay_blob is not None:
+                overlays["blob"] = bool(args.overlay_blob)
+            if args.overlay_mask is not None:
+                overlays["mask"] = bool(args.overlay_mask)
+            if args.overlay_text is not None:
+                overlays["text"] = bool(args.overlay_text)
+            if args.overlay_charuco is not None:
+                overlays["charuco"] = bool(args.overlay_charuco)
+
+            charuco: Dict[str, Any] = {}
+            if args.charuco_dictionary is not None:
+                charuco["dictionary"] = str(args.charuco_dictionary)
+            if args.charuco_squares_x is not None:
+                charuco["squares_x"] = int(args.charuco_squares_x)
+            if args.charuco_squares_y is not None:
+                charuco["squares_y"] = int(args.charuco_squares_y)
+            if args.charuco_square_length_mm is not None:
+                charuco["square_length_mm"] = float(args.charuco_square_length_mm)
+            if args.charuco_marker_length_mm is not None:
+                charuco["marker_length_mm"] = float(args.charuco_marker_length_mm)
+
+            resp = set_preview(
+                ip,
+                port,
+                camera_id=camera_id,
+                render_enabled=args.render_enabled,
+                overlays=overlays if overlays else None,
+                charuco=charuco if charuco else None,
+                request_id=req_id,
+            )
         else:
             raise SystemExit("Unknown command")
 

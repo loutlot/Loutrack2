@@ -52,6 +52,12 @@ IDLE_PREVIEW_FPS = 15.0
 DEFAULT_CAPTURE_WIDTH = 2304
 DEFAULT_CAPTURE_HEIGHT = 1296
 DEFAULT_TARGET_FPS = 56
+DEFAULT_MJPEG_PORT = 8555
+DEFAULT_CHARUCO_DICTIONARY = "DICT_6X6_250"
+DEFAULT_CHARUCO_SQUARES_X = 6
+DEFAULT_CHARUCO_SQUARES_Y = 8
+DEFAULT_CHARUCO_SQUARE_LENGTH_MM = 30.0
+DEFAULT_CHARUCO_MARKER_LENGTH_MM = 22.5
 PREVIEW_STOP_TIMEOUT_SECONDS = 2.0
 PROCESSING_QUEUE_MAXSIZE = 2
 PREVIEW_QUEUE_MAXSIZE = 1
@@ -77,6 +83,7 @@ SCHEMA_COMMANDS = {
     "set_circularity_min",
     "mask_start",
     "mask_stop",
+    "set_preview",
     "led_on",
     "led_off",
     "set_resolution",
@@ -96,6 +103,7 @@ MVP_SUPPORTED_COMMANDS = {
     "set_circularity_min",
     "mask_start",
     "mask_stop",
+    "set_preview",
 }
 
 
@@ -291,6 +299,47 @@ class _PreviewPacket:
     mask: np.ndarray | None
     stats: dict[str, object]
     extra_lines: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class PreviewOverlayOptions:
+    blob: bool = True
+    mask: bool = True
+    text: bool = True
+    charuco: bool = True
+
+    def to_dict(self) -> dict[str, bool]:
+        return {
+            "blob": bool(self.blob),
+            "mask": bool(self.mask),
+            "text": bool(self.text),
+            "charuco": bool(self.charuco),
+        }
+
+
+@dataclass(frozen=True)
+class PreviewCharucoConfig:
+    dictionary: str = DEFAULT_CHARUCO_DICTIONARY
+    squares_x: int = DEFAULT_CHARUCO_SQUARES_X
+    squares_y: int = DEFAULT_CHARUCO_SQUARES_Y
+    square_length_mm: float = DEFAULT_CHARUCO_SQUARE_LENGTH_MM
+    marker_length_mm: float = DEFAULT_CHARUCO_MARKER_LENGTH_MM
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "dictionary": str(self.dictionary),
+            "squares_x": int(self.squares_x),
+            "squares_y": int(self.squares_y),
+            "square_length_mm": float(self.square_length_mm),
+            "marker_length_mm": float(self.marker_length_mm),
+        }
+
+
+@dataclass(frozen=True)
+class PreviewRenderConfig:
+    render_enabled: bool = False
+    overlays: PreviewOverlayOptions = field(default_factory=PreviewOverlayOptions)
+    charuco: PreviewCharucoConfig = field(default_factory=PreviewCharucoConfig)
 
 
 class _MaskBuildRequest:
@@ -626,6 +675,297 @@ class ClockSyncSnapshot:
     timestamping_mode: Literal["software", "hardware", "unknown"] = "unknown"
 
 
+def _get_aruco_module() -> Any | None:
+    return getattr(cv2, "aruco", None)
+
+
+def _create_aruco_dictionary(aruco: Any, dictionary_name: str) -> Any | None:
+    dictionary_id = getattr(aruco, dictionary_name, None)
+    if dictionary_id is None:
+        return None
+    get_predefined = getattr(aruco, "getPredefinedDictionary", None)
+    if callable(get_predefined):
+        try:
+            return get_predefined(dictionary_id)
+        except Exception:
+            return None
+    dictionary_get = getattr(aruco, "Dictionary_get", None)
+    if callable(dictionary_get):
+        try:
+            return dictionary_get(dictionary_id)
+        except Exception:
+            return None
+    return None
+
+
+def _create_aruco_detector_parameters(aruco: Any) -> Any | None:
+    ctor = getattr(aruco, "DetectorParameters", None)
+    if callable(ctor):
+        try:
+            return ctor()
+        except Exception:
+            return None
+    legacy_ctor = getattr(aruco, "DetectorParameters_create", None)
+    if callable(legacy_ctor):
+        try:
+            return legacy_ctor()
+        except Exception:
+            return None
+    return None
+
+
+def _create_charuco_board(
+    aruco: Any,
+    *,
+    squares_x: int,
+    squares_y: int,
+    square_length_m: float,
+    marker_length_m: float,
+    dictionary: Any,
+) -> Any | None:
+    board_cls = getattr(aruco, "CharucoBoard", None)
+    if board_cls is not None:
+        try:
+            return board_cls((squares_x, squares_y), square_length_m, marker_length_m, dictionary)
+        except TypeError:
+            create_fn = getattr(board_cls, "create", None)
+            if callable(create_fn):
+                try:
+                    return create_fn(squares_x, squares_y, square_length_m, marker_length_m, dictionary)
+                except Exception:
+                    return None
+        except Exception:
+            return None
+
+    legacy_create = getattr(aruco, "CharucoBoard_create", None)
+    if callable(legacy_create):
+        try:
+            return legacy_create(squares_x, squares_y, square_length_m, marker_length_m, dictionary)
+        except Exception:
+            return None
+    return None
+
+
+def _preview_text_lines(
+    *,
+    camera_id: str,
+    stats: dict[str, object],
+    extra_lines: list[str] | None,
+) -> list[str]:
+    lines = [
+        f"{camera_id}",
+        f"accepted={stats.get('accepted_blob_count', 0)} raw={stats.get('raw_contour_count', 0)}",
+        (
+            f"rej_diam={stats.get('rejected_by_diameter', 0)} "
+            f"rej_circ={stats.get('rejected_by_circularity', 0)}"
+        ),
+        (
+            f"thr={stats.get('threshold')} "
+            f"diam=[{stats.get('min_diameter_px')},{stats.get('max_diameter_px')}] "
+            f"circ>={stats.get('circularity_min')}"
+        ),
+    ]
+    if extra_lines:
+        lines.extend(extra_lines)
+    return lines
+
+
+def _render_preview_canvas(
+    *,
+    frame: np.ndarray,
+    blobs: list[dict[str, float]],
+    mask: np.ndarray | None,
+    stats: dict[str, object],
+    camera_id: str,
+    extra_lines: list[str] | None,
+    overlays: PreviewOverlayOptions,
+    charuco_renderer: "_CharucoOverlayRenderer" | None = None,
+    charuco_config: PreviewCharucoConfig | None = None,
+) -> np.ndarray:
+    if frame.ndim == 2:
+        canvas = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+    else:
+        canvas = frame.copy()
+
+    if overlays.mask and mask is not None and mask.shape[:2] == canvas.shape[:2]:
+        mask_bool = mask.astype(bool, copy=False)
+        if mask_bool.any():
+            mask_overlay = np.zeros_like(canvas)
+            mask_overlay[:, :, 2] = 255
+            blended = cv2.addWeighted(canvas, 0.72, mask_overlay, 0.28, 0)
+            canvas[mask_bool] = blended[mask_bool]
+
+    if overlays.blob:
+        for blob in blobs:
+            center = (int(round(float(blob["x"]))), int(round(float(blob["y"]))))
+            radius = max(4, int(round(math.sqrt(max(float(blob["area"]), 1.0) / math.pi))))
+            cv2.circle(canvas, center, radius, (0, 255, 0), 2)
+            cv2.circle(canvas, center, 2, (0, 255, 255), -1)
+
+    if overlays.charuco and charuco_renderer is not None and charuco_config is not None:
+        charuco_renderer.draw(canvas, charuco_config)
+
+    if overlays.text:
+        lines = _preview_text_lines(camera_id=camera_id, stats=stats, extra_lines=extra_lines)
+        y = 24
+        for line in lines:
+            cv2.putText(
+                canvas,
+                line,
+                (10, y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (0, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
+            y += 22
+    return canvas
+
+
+def _encode_preview_jpeg(image: np.ndarray, quality: int = 75) -> bytes | None:
+    try:
+        ok, buf = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, int(quality)])
+    except Exception:
+        return None
+    if not ok:
+        return None
+    return bytes(buf.tobytes())
+
+
+def _build_placeholder_jpeg(
+    message: str,
+    *,
+    width: int = 960,
+    height: int = 540,
+    quality: int = 70,
+) -> bytes:
+    canvas = np.zeros((max(64, height), max(64, width), 3), dtype=np.uint8)
+    canvas[:] = (14, 18, 24)
+    cv2.putText(
+        canvas,
+        message,
+        (24, canvas.shape[0] // 2),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        1.0,
+        (180, 220, 255),
+        2,
+        cv2.LINE_AA,
+    )
+    encoded = _encode_preview_jpeg(canvas, quality=quality)
+    return encoded if encoded is not None else b""
+
+
+class _CharucoOverlayRenderer:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._cache_key: tuple[str, int, int, float, float] | None = None
+        self._cached_dictionary: Any = None
+        self._cached_board: Any = None
+        self._available: bool = True
+
+    def is_dictionary_supported(self, dictionary_name: str) -> bool:
+        aruco = _get_aruco_module()
+        if aruco is None:
+            return True
+        return getattr(aruco, dictionary_name, None) is not None
+
+    def draw(self, image: np.ndarray, config: PreviewCharucoConfig) -> None:
+        resources = self._resources(config)
+        if resources is None:
+            return
+        aruco, dictionary, board = resources
+        detector_params = _create_aruco_detector_parameters(aruco)
+        if detector_params is None:
+            return
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+        try:
+            if hasattr(aruco, "ArucoDetector"):
+                detector = aruco.ArucoDetector(dictionary, detector_params)
+                marker_corners, marker_ids, _ = detector.detectMarkers(gray)
+            else:
+                detect_markers = getattr(aruco, "detectMarkers", None)
+                if not callable(detect_markers):
+                    return
+                marker_corners, marker_ids, _ = detect_markers(gray, dictionary, parameters=detector_params)
+        except Exception:
+            return
+        if marker_ids is None or len(marker_ids) < 4:
+            return
+
+        interpolate = getattr(aruco, "interpolateCornersCharuco", None)
+        if not callable(interpolate):
+            return
+        try:
+            result = interpolate(marker_corners, marker_ids, gray, board)
+        except Exception:
+            return
+
+        charuco_corners: Any = None
+        charuco_ids: Any = None
+        if isinstance(result, tuple):
+            if len(result) >= 2 and isinstance(result[0], np.ndarray):
+                charuco_corners = result[0]
+                charuco_ids = result[1]
+            elif len(result) >= 3:
+                retval = bool(result[0])
+                if retval:
+                    charuco_corners = result[1]
+                    charuco_ids = result[2]
+        if charuco_corners is None or charuco_ids is None:
+            return
+        if len(charuco_corners) < 4:
+            return
+
+        draw_charuco = getattr(aruco, "drawDetectedCornersCharuco", None)
+        if not callable(draw_charuco):
+            return
+        try:
+            draw_charuco(image, charuco_corners, charuco_ids)
+        except Exception:
+            return
+
+    def _resources(self, config: PreviewCharucoConfig) -> tuple[Any, Any, Any] | None:
+        if not self._available:
+            return None
+        key = (
+            str(config.dictionary),
+            int(config.squares_x),
+            int(config.squares_y),
+            float(config.square_length_mm),
+            float(config.marker_length_mm),
+        )
+        with self._lock:
+            if self._cache_key == key and self._cached_dictionary is not None and self._cached_board is not None:
+                aruco = _get_aruco_module()
+                if aruco is None:
+                    self._available = False
+                    return None
+                return aruco, self._cached_dictionary, self._cached_board
+
+            aruco = _get_aruco_module()
+            if aruco is None:
+                self._available = False
+                return None
+            dictionary = _create_aruco_dictionary(aruco, str(config.dictionary))
+            if dictionary is None:
+                return None
+            board = _create_charuco_board(
+                aruco,
+                squares_x=int(config.squares_x),
+                squares_y=int(config.squares_y),
+                square_length_m=float(config.square_length_mm) / 1000.0,
+                marker_length_m=float(config.marker_length_mm) / 1000.0,
+                dictionary=dictionary,
+            )
+            if board is None:
+                return None
+            self._cache_key = key
+            self._cached_dictionary = dictionary
+            self._cached_board = board
+            return aruco, dictionary, board
+
+
 class DebugPreview:
     def __init__(
         self,
@@ -728,54 +1068,15 @@ class DebugPreview:
         camera_id: str,
         extra_lines: list[str] | None,
     ) -> np.ndarray:
-        if frame.ndim == 2:
-            canvas = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-        else:
-            canvas = frame.copy()
-
-        if mask is not None and mask.shape[:2] == canvas.shape[:2]:
-            mask_bool = mask.astype(bool, copy=False)
-            if mask_bool.any():
-                mask_overlay = np.zeros_like(canvas)
-                mask_overlay[:, :, 2] = 255
-                blended = cv2.addWeighted(canvas, 0.72, mask_overlay, 0.28, 0)
-                canvas[mask_bool] = blended[mask_bool]
-
-        for blob in blobs:
-            center = (int(round(float(blob["x"]))), int(round(float(blob["y"]))))
-            radius = max(4, int(round(math.sqrt(max(float(blob["area"]), 1.0) / math.pi))))
-            cv2.circle(canvas, center, radius, (0, 255, 0), 2)
-            cv2.circle(canvas, center, 2, (0, 255, 255), -1)
-
-        lines = [
-            f"{camera_id}",
-            f"accepted={stats.get('accepted_blob_count', 0)} raw={stats.get('raw_contour_count', 0)}",
-            (
-                f"rej_diam={stats.get('rejected_by_diameter', 0)} "
-                f"rej_circ={stats.get('rejected_by_circularity', 0)}"
-            ),
-            (
-                f"thr={stats.get('threshold')} "
-                f"diam=[{stats.get('min_diameter_px')},{stats.get('max_diameter_px')}] "
-                f"circ>={stats.get('circularity_min')}"
-            ),
-        ]
-        if extra_lines:
-            lines.extend(extra_lines)
-        y = 24
-        for line in lines:
-            cv2.putText(
-                canvas,
-                line,
-                (10, y),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.55,
-                (0, 255, 255),
-                1,
-                cv2.LINE_AA,
-            )
-            y += 22
-        return canvas
+        return _render_preview_canvas(
+            frame=frame,
+            blobs=blobs,
+            mask=mask,
+            stats=stats,
+            camera_id=camera_id,
+            extra_lines=extra_lines,
+            overlays=PreviewOverlayOptions(blob=True, mask=True, text=True, charuco=False),
+        )
 
 
 class FrameBackend(Protocol):
@@ -1533,6 +1834,7 @@ class _ProcessingWorker:
             "active_source": "capture_dequeue",
             "sensor_timestamp_available": False,
         }
+        self._latest_preview_packet: _PreviewPacket | None = None
         self._frame_index = 0
         self._frames_processed = 0
         self._frames_sent = 0
@@ -1606,6 +1908,19 @@ class _ProcessingWorker:
     def get_last_timestamping_status(self) -> dict[str, object]:
         with self._lock:
             return dict(self._last_timestamping_status)
+
+    def get_latest_preview_packet(self) -> _PreviewPacket | None:
+        with self._lock:
+            packet = self._latest_preview_packet
+        if packet is None:
+            return None
+        return _PreviewPacket(
+            frame=packet.frame.copy(),
+            blobs=[{"x": float(blob["x"]), "y": float(blob["y"]), "area": float(blob["area"])} for blob in packet.blobs],
+            mask=packet.mask.copy() if packet.mask is not None else None,
+            stats=dict(packet.stats),
+            extra_lines=tuple(packet.extra_lines),
+        )
 
     def get_runtime_diagnostics(self) -> dict[str, object]:
         with self._lock:
@@ -1695,15 +2010,33 @@ class _ProcessingWorker:
                 extra_lines = [f"state={state_label}"]
                 if stream_mode is not None:
                     extra_lines.append(f"mode={stream_mode}")
-                self._preview_worker.submit(
-                    _PreviewPacket(
+                preview_packet = _PreviewPacket(
+                    frame=preview_frame,
+                    blobs=preview_blobs,
+                    mask=preview_mask,
+                    stats=stats,
+                    extra_lines=tuple(extra_lines),
+                )
+                with self._lock:
+                    self._latest_preview_packet = preview_packet
+                self._preview_worker.submit(preview_packet)
+            else:
+                preview_frame, preview_blobs, preview_mask = _resize_preview_payload(
+                    packet.captured_frame.image,
+                    cast(list[dict[str, float]], blobs),
+                    applied_mask,
+                )
+                extra_lines = [f"state={state_label}"]
+                if stream_mode is not None:
+                    extra_lines.append(f"mode={stream_mode}")
+                with self._lock:
+                    self._latest_preview_packet = _PreviewPacket(
                         frame=preview_frame,
                         blobs=preview_blobs,
                         mask=preview_mask,
                         stats=stats,
                         extra_lines=tuple(extra_lines),
                     )
-                )
 
             if stream_mode is None or sock is None:
                 continue
@@ -1755,7 +2088,7 @@ class _CapturePipeline:
         self._started = False
         self._stream_mode: str | None = None
         self._mask_build_active = False
-        self._mjpeg_enabled: bool = False
+        self._mjpeg_render_enabled: bool = False
         self._desired_fps = float(DEFAULT_TARGET_FPS)
         self._desired_exposure_us: int | None = None
         self._desired_gain: float | None = None
@@ -1912,10 +2245,16 @@ class _CapturePipeline:
     def get_frame_snapshot(self) -> np.ndarray | None:
         return self._camera_worker.get_frame_snapshot()
 
-    def set_mjpeg_enabled(self, enabled: bool) -> None:
+    def get_preview_snapshot(self) -> _PreviewPacket | None:
+        return self._processing_worker.get_latest_preview_packet()
+
+    def set_mjpeg_render_enabled(self, enabled: bool) -> None:
         with self._lock:
-            self._mjpeg_enabled = enabled
+            self._mjpeg_render_enabled = bool(enabled)
         self._refresh_activity()
+
+    def set_mjpeg_enabled(self, enabled: bool) -> None:
+        self.set_mjpeg_render_enabled(enabled)
 
     def get_runtime_diagnostics(self) -> dict[str, object]:
         runtime = {}
@@ -1960,10 +2299,10 @@ class _CapturePipeline:
             stream_mode = self._stream_mode
             mask_build_active = self._mask_build_active
             preview_enabled = self._preview_worker is not None
-            mjpeg_enabled = self._mjpeg_enabled
+            mjpeg_render_enabled = self._mjpeg_render_enabled
         if stream_mode is not None or mask_build_active:
             return desired_fps
-        if preview_enabled or mjpeg_enabled:
+        if preview_enabled or mjpeg_render_enabled:
             return min(desired_fps, IDLE_PREVIEW_FPS)
         return desired_fps
 
@@ -1973,7 +2312,7 @@ class _CapturePipeline:
                 self._stream_mode is not None
                 or self._mask_build_active
                 or self._preview_worker is not None
-                or self._mjpeg_enabled
+                or self._mjpeg_render_enabled
             )
         if should_run:
             self._active_event.set()
@@ -1992,13 +2331,11 @@ class MJPEGStreamer:
         *,
         port: int,
         fps: float = 2.0,
-        jpeg_quality: int = 75,
-        get_frame_fn: Callable[[], np.ndarray | None],
+        get_jpeg_fn: Callable[[], bytes | None],
     ) -> None:
         self._port = port
         self._fps = fps
-        self._quality = jpeg_quality
-        self._get_frame_fn = get_frame_fn
+        self._get_jpeg_fn = get_jpeg_fn
         self._latest_jpeg: bytes | None = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -2019,18 +2356,9 @@ class MJPEGStreamer:
     def _encode_loop(self) -> None:
         while not self._stop.is_set():
             try:
-                frame = self._get_frame_fn()
-                if frame is not None:
-                    if frame.ndim == 2:
-                        frame_bgr = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-                    else:
-                        frame_bgr = frame
-                    ok, buf = cv2.imencode(
-                        ".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, self._quality]
-                    )
-                    if ok:
-                        with self._lock:
-                            self._latest_jpeg = buf.tobytes()
+                jpeg = self._get_jpeg_fn()
+                with self._lock:
+                    self._latest_jpeg = bytes(jpeg) if jpeg is not None else None
             except Exception:
                 pass
             self._stop.wait(1.0 / max(0.1, self._fps))
@@ -2099,7 +2427,7 @@ class ControlServerConfig:
     mask_max_ratio_warning: float = MASK_MAX_RATIO_WARNING
     mask_init_timeout_s: float = MASK_INIT_TIMEOUT_SECONDS
     debug_preview: bool = False
-    mjpeg_port: int = 0
+    mjpeg_port: int = DEFAULT_MJPEG_PORT
 
 
 class ControlServer:
@@ -2134,6 +2462,10 @@ class ControlServer:
         self._mask_pixels: int = 0
         self._mask_ratio: float = 0.0
         self._mask_warning: str | None = None
+        self._preview_render_config: PreviewRenderConfig = PreviewRenderConfig()
+        self._charuco_renderer = _CharucoOverlayRenderer()
+        self._mjpeg_render_off_jpeg: bytes = _build_placeholder_jpeg("MJPEG render off")
+        self._mjpeg_waiting_jpeg: bytes = _build_placeholder_jpeg("MJPEG waiting for frame")
         self._debug_preview: DebugPreview | None = (
             DebugPreview(log_fn=self._log) if self._config.debug_preview else None
         )
@@ -2175,7 +2507,8 @@ class ControlServer:
             f"backend={self._config.backend} "
             f"resolution={DEFAULT_CAPTURE_WIDTH}x{DEFAULT_CAPTURE_HEIGHT} "
             f"fps={self._config.target_fps} "
-            f"debug_preview={'on' if self._config.debug_preview else 'off'}"
+            f"debug_preview={'on' if self._config.debug_preview else 'off'} "
+            f"mjpeg_port={self._config.mjpeg_port}"
         )
         if self._config.debug_preview:
             try:
@@ -2187,24 +2520,18 @@ class ControlServer:
 
         if self._config.mjpeg_port > 0:
             try:
-                pipeline = self._ensure_pipeline_started()
-                pipeline.set_mjpeg_enabled(True)
-
-                def _get_frame_for_mjpeg() -> np.ndarray | None:
-                    with self._state_lock:
-                        p = self._pipeline
-                    return p.get_frame_snapshot() if p is not None else None
-
                 self._mjpeg = MJPEGStreamer(
                     port=self._config.mjpeg_port,
-                    get_frame_fn=_get_frame_for_mjpeg,
+                    get_jpeg_fn=self._get_mjpeg_jpeg,
                 )
                 self._mjpeg.start()
-                self._log(f"MJPEG streamer started on port {self._config.mjpeg_port}")
-            except BackendUnavailableError as exc:
-                self._log(f"mjpeg pipeline unavailable: {exc}")
+                self._log(
+                    "MJPEG streamer started "
+                    f"port={self._config.mjpeg_port} render_default="
+                    f"{'on' if self._preview_render_config.render_enabled else 'off'}"
+                )
             except Exception as exc:  # noqa: BLE001
-                self._log(f"mjpeg pipeline start failed: {exc}")
+                self._log(f"mjpeg streamer start failed: {exc}")
 
         try:
             while self._running:
@@ -2271,6 +2598,7 @@ class ControlServer:
         pipeline.set_mask(self._static_mask)
         pipeline.set_state_label(self._state)
         pipeline.start()
+        pipeline.set_mjpeg_render_enabled(self._preview_render_config.render_enabled)
         with self._state_lock:
             self._pipeline = pipeline
         return pipeline
@@ -2648,6 +2976,7 @@ class ControlServer:
             ),
             "mask_start": lambda: self._handle_mask_start(request_id, request_camera_id, params),
             "mask_stop": lambda: self._handle_mask_stop(request_id, request_camera_id),
+            "set_preview": lambda: self._dispatch_set_preview(request_id, request_camera_id, params),
         }
         handler = handlers.get(cmd)
         if handler is None:
@@ -2785,6 +3114,266 @@ class ControlServer:
             )
         self._set_circularity_min(circularity_value)
         return self._ok_response(request_id, request_camera_id)
+
+    def _dispatch_set_preview(
+        self,
+        request_id: str,
+        request_camera_id: str,
+        params: dict[str, object],
+    ) -> dict[str, object]:
+        allowed_keys = {"render_enabled", "overlays", "charuco"}
+        unknown_keys = sorted(set(params.keys()) - allowed_keys)
+        if unknown_keys:
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message=f"invalid_request: set_preview unknown keys ({','.join(unknown_keys)})",
+            )
+
+        with self._state_lock:
+            previous = self._preview_render_config
+
+        render_enabled = previous.render_enabled
+        overlays = previous.overlays
+        charuco = previous.charuco
+
+        if "render_enabled" in params:
+            render_enabled_obj = params.get("render_enabled")
+            if not isinstance(render_enabled_obj, bool):
+                return self._error_response(
+                    request_id=request_id,
+                    request_camera_id=request_camera_id,
+                    error_code=ERROR_INVALID_REQUEST,
+                    error_message="invalid_request: set_preview.render_enabled must be boolean",
+                )
+            render_enabled = bool(render_enabled_obj)
+
+        if "overlays" in params:
+            overlays_obj = params.get("overlays")
+            if not isinstance(overlays_obj, dict):
+                return self._error_response(
+                    request_id=request_id,
+                    request_camera_id=request_camera_id,
+                    error_code=ERROR_INVALID_REQUEST,
+                    error_message="invalid_request: set_preview.overlays must be object",
+                )
+            overlay_allowed = {"blob", "mask", "text", "charuco"}
+            overlay_unknown = sorted(set(overlays_obj.keys()) - overlay_allowed)
+            if overlay_unknown:
+                return self._error_response(
+                    request_id=request_id,
+                    request_camera_id=request_camera_id,
+                    error_code=ERROR_INVALID_REQUEST,
+                    error_message=(
+                        "invalid_request: set_preview.overlays unknown keys "
+                        f"({','.join(overlay_unknown)})"
+                    ),
+                )
+            blob = overlays.blob
+            mask = overlays.mask
+            text = overlays.text
+            charuco_overlay = overlays.charuco
+            if "blob" in overlays_obj:
+                if not isinstance(overlays_obj["blob"], bool):
+                    return self._error_response(
+                        request_id=request_id,
+                        request_camera_id=request_camera_id,
+                        error_code=ERROR_INVALID_REQUEST,
+                        error_message="invalid_request: set_preview.overlays.blob must be boolean",
+                    )
+                blob = bool(overlays_obj["blob"])
+            if "mask" in overlays_obj:
+                if not isinstance(overlays_obj["mask"], bool):
+                    return self._error_response(
+                        request_id=request_id,
+                        request_camera_id=request_camera_id,
+                        error_code=ERROR_INVALID_REQUEST,
+                        error_message="invalid_request: set_preview.overlays.mask must be boolean",
+                    )
+                mask = bool(overlays_obj["mask"])
+            if "text" in overlays_obj:
+                if not isinstance(overlays_obj["text"], bool):
+                    return self._error_response(
+                        request_id=request_id,
+                        request_camera_id=request_camera_id,
+                        error_code=ERROR_INVALID_REQUEST,
+                        error_message="invalid_request: set_preview.overlays.text must be boolean",
+                    )
+                text = bool(overlays_obj["text"])
+            if "charuco" in overlays_obj:
+                if not isinstance(overlays_obj["charuco"], bool):
+                    return self._error_response(
+                        request_id=request_id,
+                        request_camera_id=request_camera_id,
+                        error_code=ERROR_INVALID_REQUEST,
+                        error_message="invalid_request: set_preview.overlays.charuco must be boolean",
+                    )
+                charuco_overlay = bool(overlays_obj["charuco"])
+            overlays = PreviewOverlayOptions(
+                blob=blob,
+                mask=mask,
+                text=text,
+                charuco=charuco_overlay,
+            )
+
+        if "charuco" in params:
+            charuco_obj = params.get("charuco")
+            if not isinstance(charuco_obj, dict):
+                return self._error_response(
+                    request_id=request_id,
+                    request_camera_id=request_camera_id,
+                    error_code=ERROR_INVALID_REQUEST,
+                    error_message="invalid_request: set_preview.charuco must be object",
+                )
+            charuco_allowed = {
+                "dictionary",
+                "squares_x",
+                "squares_y",
+                "square_length_mm",
+                "marker_length_mm",
+            }
+            charuco_unknown = sorted(set(charuco_obj.keys()) - charuco_allowed)
+            if charuco_unknown:
+                return self._error_response(
+                    request_id=request_id,
+                    request_camera_id=request_camera_id,
+                    error_code=ERROR_INVALID_REQUEST,
+                    error_message=(
+                        "invalid_request: set_preview.charuco unknown keys "
+                        f"({','.join(charuco_unknown)})"
+                    ),
+                )
+
+            dictionary = charuco.dictionary
+            squares_x = charuco.squares_x
+            squares_y = charuco.squares_y
+            square_length_mm = charuco.square_length_mm
+            marker_length_mm = charuco.marker_length_mm
+
+            if "dictionary" in charuco_obj:
+                dictionary_obj = charuco_obj.get("dictionary")
+                if not isinstance(dictionary_obj, str) or not dictionary_obj.strip():
+                    return self._error_response(
+                        request_id=request_id,
+                        request_camera_id=request_camera_id,
+                        error_code=ERROR_INVALID_REQUEST,
+                        error_message="invalid_request: set_preview.charuco.dictionary must be non-empty string",
+                    )
+                dictionary = dictionary_obj.strip()
+                if not self._charuco_renderer.is_dictionary_supported(dictionary):
+                    return self._error_response(
+                        request_id=request_id,
+                        request_camera_id=request_camera_id,
+                        error_code=ERROR_INVALID_REQUEST,
+                        error_message=f"invalid_request: unsupported_charuco_dictionary ({dictionary})",
+                    )
+            if "squares_x" in charuco_obj:
+                squares_x_obj = charuco_obj.get("squares_x")
+                if not isinstance(squares_x_obj, int) or int(squares_x_obj) < 2:
+                    return self._error_response(
+                        request_id=request_id,
+                        request_camera_id=request_camera_id,
+                        error_code=ERROR_INVALID_REQUEST,
+                        error_message="invalid_request: set_preview.charuco.squares_x must be integer >= 2",
+                    )
+                squares_x = int(squares_x_obj)
+            if "squares_y" in charuco_obj:
+                squares_y_obj = charuco_obj.get("squares_y")
+                if not isinstance(squares_y_obj, int) or int(squares_y_obj) < 2:
+                    return self._error_response(
+                        request_id=request_id,
+                        request_camera_id=request_camera_id,
+                        error_code=ERROR_INVALID_REQUEST,
+                        error_message="invalid_request: set_preview.charuco.squares_y must be integer >= 2",
+                    )
+                squares_y = int(squares_y_obj)
+            if "square_length_mm" in charuco_obj:
+                square_length_obj = charuco_obj.get("square_length_mm")
+                if not isinstance(square_length_obj, (int, float)) or float(square_length_obj) <= 0.0:
+                    return self._error_response(
+                        request_id=request_id,
+                        request_camera_id=request_camera_id,
+                        error_code=ERROR_INVALID_REQUEST,
+                        error_message="invalid_request: set_preview.charuco.square_length_mm must be > 0",
+                    )
+                square_length_mm = float(square_length_obj)
+            if "marker_length_mm" in charuco_obj:
+                marker_length_obj = charuco_obj.get("marker_length_mm")
+                if not isinstance(marker_length_obj, (int, float)) or float(marker_length_obj) <= 0.0:
+                    return self._error_response(
+                        request_id=request_id,
+                        request_camera_id=request_camera_id,
+                        error_code=ERROR_INVALID_REQUEST,
+                        error_message="invalid_request: set_preview.charuco.marker_length_mm must be > 0",
+                    )
+                marker_length_mm = float(marker_length_obj)
+            if marker_length_mm >= square_length_mm:
+                return self._error_response(
+                    request_id=request_id,
+                    request_camera_id=request_camera_id,
+                    error_code=ERROR_INVALID_REQUEST,
+                    error_message=(
+                        "invalid_request: set_preview.charuco.marker_length_mm "
+                        "must be smaller than square_length_mm"
+                    ),
+                )
+
+            charuco = PreviewCharucoConfig(
+                dictionary=dictionary,
+                squares_x=squares_x,
+                squares_y=squares_y,
+                square_length_mm=square_length_mm,
+                marker_length_mm=marker_length_mm,
+            )
+
+        if render_enabled and self._config.mjpeg_port <= 0:
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message="invalid_request: mjpeg_disabled",
+            )
+
+        updated_config = PreviewRenderConfig(
+            render_enabled=render_enabled,
+            overlays=overlays,
+            charuco=charuco,
+        )
+        with self._state_lock:
+            self._preview_render_config = updated_config
+            pipeline = self._pipeline
+
+        if updated_config.render_enabled:
+            try:
+                pipeline = self._ensure_pipeline_started()
+                pipeline.set_mjpeg_render_enabled(True)
+            except BackendUnavailableError as exc:
+                with self._state_lock:
+                    self._preview_render_config = previous
+                return self._error_response(
+                    request_id=request_id,
+                    request_camera_id=request_camera_id,
+                    error_code=ERROR_BACKEND_UNAVAILABLE,
+                    error_message=f"backend_unavailable: {exc}",
+                )
+            except Exception as exc:  # noqa: BLE001
+                with self._state_lock:
+                    self._preview_render_config = previous
+                return self._error_response(
+                    request_id=request_id,
+                    request_camera_id=request_camera_id,
+                    error_code=ERROR_INTERNAL,
+                    error_message=f"internal_error: set_preview_failed: {exc}",
+                )
+        elif pipeline is not None:
+            pipeline.set_mjpeg_render_enabled(False)
+
+        return self._ok_response(
+            request_id=request_id,
+            request_camera_id=request_camera_id,
+            result={"preview": self._preview_config_payload()},
+        )
 
     def _handle_mask_start(self, request_id: str, request_camera_id: str, params: dict[str, object]) -> dict[str, object]:
         threshold = params.get("threshold", self._config.mask_threshold)
@@ -3193,6 +3782,43 @@ class ControlServer:
                 "sensor_timestamp_available": bool(stats.get("sensor_timestamp_available", False)),
             }
 
+    def _preview_config_payload(self) -> dict[str, object]:
+        with self._state_lock:
+            config = self._preview_render_config
+        return {
+            "render_enabled": bool(config.render_enabled),
+            "overlays": config.overlays.to_dict(),
+            "charuco": config.charuco.to_dict(),
+        }
+
+    def _get_mjpeg_jpeg(self) -> bytes | None:
+        with self._state_lock:
+            render_config = self._preview_render_config
+            pipeline = self._pipeline
+        if not render_config.render_enabled:
+            return self._mjpeg_render_off_jpeg
+        if pipeline is None:
+            return self._mjpeg_waiting_jpeg
+
+        snapshot = pipeline.get_preview_snapshot()
+        if snapshot is None:
+            return self._mjpeg_waiting_jpeg
+        canvas = _render_preview_canvas(
+            frame=snapshot.frame,
+            blobs=snapshot.blobs,
+            mask=snapshot.mask,
+            stats=snapshot.stats,
+            camera_id=self._config.camera_id,
+            extra_lines=list(snapshot.extra_lines),
+            overlays=render_config.overlays,
+            charuco_renderer=self._charuco_renderer,
+            charuco_config=render_config.charuco,
+        )
+        encoded = _encode_preview_jpeg(canvas, quality=75)
+        if encoded is None:
+            return self._mjpeg_waiting_jpeg
+        return encoded
+
     def _show_debug_preview(
         self,
         *,
@@ -3320,6 +3946,11 @@ class ControlServer:
             pipeline = self._pipeline
             blob_diagnostics = dict(self._last_blob_diagnostics)
             timestamping = dict(self._last_timestamping_diagnostics)
+        preview_payload = self._preview_config_payload()
+        diagnostics["mjpeg_server_enabled"] = bool(self._config.mjpeg_port > 0)
+        diagnostics["mjpeg_render_enabled"] = bool(preview_payload.get("render_enabled", False))
+        diagnostics["preview_overlays"] = preview_payload.get("overlays", {})
+        diagnostics["charuco_config"] = preview_payload.get("charuco", {})
         diagnostics["debug_preview_active"] = bool(
             (pipeline is not None and pipeline.debug_preview_active())
             or (self._debug_preview is not None and self._debug_preview.window_open)
@@ -3556,8 +4187,8 @@ def parse_args() -> ControlServerConfig:
     _ = parser.add_argument(
         "--mjpeg-port",
         type=int,
-        default=0,
-        help="Port for MJPEG preview stream (0 = disabled, recommended: 8555)",
+        default=DEFAULT_MJPEG_PORT,
+        help=f"Port for MJPEG preview stream (0 = disabled, default: {DEFAULT_MJPEG_PORT})",
     )
 
     namespace = parser.parse_args()
@@ -3567,7 +4198,7 @@ def parse_args() -> ControlServerConfig:
     backend = getattr(namespace, "backend", default_backend)
     udp_dest = getattr(namespace, "udp_dest", "255.255.255.255:5000")
     debug_preview = getattr(namespace, "debug_preview", False)
-    mjpeg_port = getattr(namespace, "mjpeg_port", 0)
+    mjpeg_port = getattr(namespace, "mjpeg_port", DEFAULT_MJPEG_PORT)
 
     if camera_id is None:
         camera_id = get_default_camera_id()
@@ -3586,6 +4217,10 @@ def parse_args() -> ControlServerConfig:
         raise SystemExit("--udp-dest must be a string")
     if not isinstance(debug_preview, bool):
         raise SystemExit("--debug-preview must be a boolean flag")
+    if not isinstance(mjpeg_port, int):
+        raise SystemExit("--mjpeg-port must be an integer")
+    if int(mjpeg_port) < 0 or int(mjpeg_port) > 65535:
+        raise SystemExit("--mjpeg-port must be in range [0,65535]")
 
     try:
         udp_host, udp_port = parse_udp_dest(udp_dest)

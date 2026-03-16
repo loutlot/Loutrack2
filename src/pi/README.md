@@ -30,6 +30,9 @@ Raspberry Pi OS では `picamera2` がデフォルトのバックエンドです
   --udp-dest 255.255.255.255:5000
 ```
 
+`--mjpeg-port` は既定で `8555` です。`http://<PI_IP>:8555/mjpeg` で headless のまま確認できます。
+無効化したい場合だけ `--mjpeg-port 0` を指定します。
+
 Pi 本体でローカルに OpenCV デバッグプレビューを表示したい場合は、マスク設定中やワンドキャプチャ中、アイドル時に `--debug-preview` を付けます。
 
 ```bash
@@ -47,6 +50,18 @@ export XAUTHORITY=/home/pi/.Xauthority
 ```
 
 プレビューはデバッグ用のみです。サービスは single camera pipeline で動き、idle / mask build / capture のすべてが同じ backend から処理されます。OpenCV HighGUI は専用 preview thread だけが触り、preview は同じウィンドウを継続利用します。高負荷時は preview frame を drop して capture を優先します。`DISPLAY` が設定されていない場合、サービスはウィンドウを表示しないようにプレビューを無効化し、OpenCV HighGUI に触れずに実行を続行します。
+
+MJPEG サーバー起動と描画負荷は分離されています。起動直後は MJPEG render が OFF で、`set_preview` API で ON/OFF を切り替えます。
+
+```bash
+PYTHONPATH=src .venv/bin/python -m host.control \
+  --ip <PI_IP> \
+  --camera-id pi-cam-01 \
+  set_preview \
+  --render-enabled true
+```
+
+描画 ON 時は OpenCV preview と同じ blob/mask/text overlay を MJPEG へ反映し、必要なら Charuco overlay も重畳できます。
 
 `start` は `capture` / `pose_capture` / `wand_metric_capture` の全 mode で static mask を必須にします。つまり `Build Mask` 実行後に `READY` へ入っていることが開始条件です。mask は `mask_start` 中の生成処理を除き常時適用されます。
 

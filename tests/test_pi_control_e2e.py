@@ -6,6 +6,7 @@ import subprocess
 import threading
 import time
 import importlib
+import urllib.request
 from pathlib import Path
 from typing import Callable, Protocol, TypedDict, cast
 from collections.abc import Generator
@@ -76,6 +77,19 @@ class ControlModule(Protocol):
     ) -> dict[str, object]:
         ...
 
+    def set_preview(
+        self,
+        ip: str,
+        port: int,
+        camera_id: str,
+        render_enabled: bool | None = None,
+        overlays: dict[str, bool] | None = None,
+        charuco: dict[str, object] | None = None,
+        request_id: str | None = None,
+        timeout: float = 5.0,
+    ) -> dict[str, object]:
+        ...
+
 
 class UDPReceiverClass(Protocol):
     def __init__(self, host: str = "0.0.0.0", port: int = 5000, buffer_size: int = 65536) -> None:
@@ -99,6 +113,7 @@ class PiCaptureServerInfo(TypedDict):
     ip: str
     tcp_port: int
     udp_port: int
+    mjpeg_port: int
     camera_id: str
     proc: subprocess.Popen[str]
 
@@ -122,6 +137,25 @@ def _get_free_udp_port(host: str = "127.0.0.1") -> int:
         return int(addr[1])
 
 
+def _fetch_first_mjpeg_jpeg(url: str, timeout: float = 2.0) -> bytes:
+    with urllib.request.urlopen(url, timeout=timeout) as response:
+        data = bytearray()
+        deadline = time.monotonic() + max(0.2, timeout)
+        while time.monotonic() < deadline:
+            chunk = response.read(4096)
+            if not chunk:
+                break
+            data.extend(chunk)
+            start = data.find(b"\xff\xd8")
+            if start < 0:
+                continue
+            end = data.find(b"\xff\xd9", start + 2)
+            if end < 0:
+                continue
+            return bytes(data[start : end + 2])
+    raise AssertionError(f"Failed to read MJPEG frame from {url}")
+
+
 @pytest.fixture(scope="module")
 def pi_capture_server() -> Generator[PiCaptureServerInfo, None, None]:
     root = ROOT
@@ -131,6 +165,7 @@ def pi_capture_server() -> Generator[PiCaptureServerInfo, None, None]:
 
     tcp_port = _get_free_tcp_port()
     udp_port = _get_free_udp_port()
+    mjpeg_port = _get_free_tcp_port()
     camera_id = "pi-cam-01"
     ip = "127.0.0.1"
 
@@ -148,6 +183,8 @@ def pi_capture_server() -> Generator[PiCaptureServerInfo, None, None]:
         str(tcp_port),
         "--udp-dest",
         f"{ip}:{udp_port}",
+        "--mjpeg-port",
+        str(mjpeg_port),
     ]
 
     proc = subprocess.Popen(
@@ -193,6 +230,7 @@ def pi_capture_server() -> Generator[PiCaptureServerInfo, None, None]:
             "ip": ip,
             "tcp_port": tcp_port,
             "udp_port": udp_port,
+            "mjpeg_port": mjpeg_port,
             "camera_id": camera_id,
             "proc": proc,
         }
@@ -381,3 +419,53 @@ def test_pi_mask_and_wand_mode_flow(pi_capture_server: PiCaptureServerInfo) -> N
         assert resp.get("ack") is True
     finally:
         receiver.stop()
+
+
+def test_pi_mjpeg_preview_render_toggle(pi_capture_server: PiCaptureServerInfo) -> None:
+    ip = pi_capture_server["ip"]
+    tcp_port = pi_capture_server["tcp_port"]
+    camera_id = pi_capture_server["camera_id"]
+    mjpeg_port = pi_capture_server["mjpeg_port"]
+
+    mjpeg_url = f"http://{ip}:{mjpeg_port}/mjpeg"
+    off_jpeg = _fetch_first_mjpeg_jpeg(mjpeg_url, timeout=3.0)
+    assert len(off_jpeg) > 0
+
+    resp = control.set_preview(
+        ip,
+        tcp_port,
+        camera_id=camera_id,
+        render_enabled=True,
+        overlays={"charuco": False},
+        timeout=2.0,
+    )
+    assert resp.get("ack") is True
+
+    on_jpeg = off_jpeg
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        current = _fetch_first_mjpeg_jpeg(mjpeg_url, timeout=2.0)
+        if current != off_jpeg:
+            on_jpeg = current
+            break
+        time.sleep(0.05)
+    assert on_jpeg != off_jpeg
+
+    resp = control.set_preview(
+        ip,
+        tcp_port,
+        camera_id=camera_id,
+        render_enabled=False,
+        timeout=2.0,
+    )
+    assert resp.get("ack") is True
+
+    restored = False
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        off_again = _fetch_first_mjpeg_jpeg(mjpeg_url, timeout=2.0)
+        if off_again == off_jpeg:
+            restored = True
+            break
+        time.sleep(0.05)
+    assert restored

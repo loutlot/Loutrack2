@@ -86,6 +86,15 @@ def test_control_server_ping_includes_blob_diagnostics_and_runtime() -> None:
     assert isinstance(result, dict)
     assert result["debug_preview_enabled"] is False
     assert result["debug_preview_active"] is False
+    assert result["mjpeg_server_enabled"] is True
+    assert result["mjpeg_render_enabled"] is False
+    assert result["preview_overlays"] == {
+        "blob": True,
+        "mask": True,
+        "text": True,
+        "charuco": True,
+    }
+    assert result["charuco_config"]["dictionary"] == "DICT_6X6_250"
     assert result["blob_diagnostics"]["threshold"] == 200
     assert result["clock_sync"]["status"] in {"locked", "degraded", "unknown"}
     assert result["clock_sync"]["role"] in {"master", "slave", "unknown"}
@@ -258,6 +267,70 @@ def test_handle_stop_returns_ready_and_keeps_mask(monkeypatch: pytest.MonkeyPatc
     assert server._state == STATE_READY
     assert captured["stop_stream"] is True
     assert captured["state"] == STATE_READY
+
+
+def test_set_preview_updates_ping_and_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
+    server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=False))
+    calls: list[bool] = []
+
+    class _FakePipeline:
+        def set_mjpeg_render_enabled(self, enabled: bool) -> None:
+            calls.append(bool(enabled))
+
+    fake_pipeline = _FakePipeline()
+    monkeypatch.setattr(server, "_ensure_pipeline_started", lambda: fake_pipeline)
+
+    response = server._dispatch_set_preview(
+        "req-1",
+        "pi-cam-01",
+        {
+            "render_enabled": True,
+            "overlays": {"charuco": False},
+            "charuco": {"squares_x": 7},
+        },
+    )
+    assert response["ack"] is True
+    assert calls == [True]
+
+    ping = server._handle_ping("req-2", "pi-cam-01")
+    result = ping["result"]
+    assert result["mjpeg_render_enabled"] is True
+    assert result["preview_overlays"]["charuco"] is False
+    assert result["charuco_config"]["squares_x"] == 7
+
+    server._pipeline = fake_pipeline  # type: ignore[assignment]
+    response = server._dispatch_set_preview("req-3", "pi-cam-01", {"render_enabled": False})
+    assert response["ack"] is True
+    assert calls[-1] is False
+
+
+def test_set_preview_rejects_invalid_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=False))
+    monkeypatch.setattr(server._charuco_renderer, "is_dictionary_supported", lambda _value: False)
+
+    invalid_dictionary = server._dispatch_set_preview(
+        "req-1",
+        "pi-cam-01",
+        {"charuco": {"dictionary": "INVALID_DICT"}},
+    )
+    assert invalid_dictionary["ack"] is False
+    assert invalid_dictionary["error_code"] == 2
+
+    invalid_shape = server._dispatch_set_preview(
+        "req-2",
+        "pi-cam-01",
+        {"charuco": {"squares_x": 1}},
+    )
+    assert invalid_shape["ack"] is False
+    assert invalid_shape["error_code"] == 2
+
+    invalid_type = server._dispatch_set_preview(
+        "req-3",
+        "pi-cam-01",
+        {"overlays": {"mask": "on"}},
+    )
+    assert invalid_type["ack"] is False
+    assert invalid_type["error_code"] == 2
 
 
 def test_resolve_debug_preview_enabled_requires_display(monkeypatch: pytest.MonkeyPatch) -> None:

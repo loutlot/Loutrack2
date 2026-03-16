@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 def test_pi_control_transport_doc_smoke() -> None:
-    doc_path = Path(__file__).resolve().parents[1] / "docs" / "pi_control_transport.md"
+    doc_path = Path(__file__).resolve().parents[1] / "docs" / "00_pre_implementation" / "pi_control_transport.md"
     text = doc_path.read_text(encoding="utf-8")
 
     required = [
@@ -15,6 +15,7 @@ def test_pi_control_transport_doc_smoke() -> None:
         "start",
         "stop",
         "mask_start",
+        "set_preview",
         "255.255.255.255:5000",
     ]
     for token in required:

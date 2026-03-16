@@ -65,20 +65,23 @@ HTML_PAGE = """<!doctype html>
       --sidebar-w: 220px;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; }
     body {
       background: var(--bg);
       color: var(--ink);
       font-family: "Inter", "Avenir Next", "Helvetica Neue", sans-serif;
       font-size: 13px;
       overflow: hidden;
-      width: 1300px;
-      height: 900px;
+      width: 100vw;
+      height: 100vh;
+      min-width: 0;
+      min-height: 0;
     }
     .app-shell {
       display: flex;
       flex-direction: row;
-      width: 1300px;
-      height: 900px;
+      width: 100vw;
+      height: 100vh;
       overflow: hidden;
     }
 
@@ -196,6 +199,8 @@ HTML_PAGE = """<!doctype html>
     }
     .split-left { display: flex; flex-direction: column; min-width: 0; }
     .split-right { display: flex; flex-direction: column; min-width: 0; }
+    .calib-split-left { flex: 1.4; display: flex; flex-direction: column; min-height: 0; }
+    .calib-split-right { width: 340px; min-width: 280px; display: flex; flex-direction: column; min-height: 0; }
 
     /* ── Panels / Cards ───────────────────────────────── */
     .panel {
@@ -483,7 +488,7 @@ HTML_PAGE = """<!doctype html>
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 11px;
+      font-size: 50px;
       font-weight: 700;
       color: var(--ink-muted);
     }
@@ -491,11 +496,13 @@ HTML_PAGE = """<!doctype html>
     .int-stat { font-size: 12px; color: var(--ink-muted); margin-bottom: 4px; }
     .int-stat strong { color: var(--ink); }
     .int-camera-list { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+    .int-slider-title { display: inline-flex; align-items: baseline; gap: 4px; white-space: nowrap; }
 
     /* ── Floor / countdown ────────────────────────────── */
     .floor-card {
-      max-width: 400px;
-      margin: auto;
+      width: min(100%, 640px);
+      max-width: 100%;
+      margin: 0;
       text-align: center;
     }
     .floor-countdown {
@@ -505,6 +512,62 @@ HTML_PAGE = """<!doctype html>
       margin: 16px 0;
       min-height: 60px;
     }
+
+    /* ── Sidebar section headers ─────────────────────── */
+    .nav-section-header {
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--ink-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      padding: 8px 10px 3px;
+      margin-top: 2px;
+    }
+
+    /* ── MJPEG preview grid ───────────────────────────── */
+    .mjpeg-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+      margin-bottom: 10px;
+      flex-shrink: 0;
+    }
+    .mjpeg-cell {
+      background: #0d1117;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .mjpeg-cell img {
+      width: 100%;
+      aspect-ratio: 16/9;
+      object-fit: contain;
+      display: block;
+    }
+    .mjpeg-label {
+      font-size: 10px;
+      color: var(--ink-muted);
+      text-align: center;
+      padding: 2px 4px;
+      background: rgba(15,23,42,0.7);
+    }
+
+    /* ── Op-status badge ──────────────────────────────── */
+    .op-status {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 9px;
+      border-radius: 6px;
+      margin-left: 8px;
+      vertical-align: middle;
+      background: rgba(148,163,184,0.12);
+      color: var(--ink-muted);
+      transition: background 0.15s, color 0.15s;
+    }
+    .op-status.waiting { background: rgba(249,115,22,0.15); color: var(--warm); }
+    .op-status.done    { background: rgba(34,197,94,0.15);  color: var(--accent); }
+    .op-status.error   { background: rgba(239,68,68,0.15);  color: var(--danger); }
 
     /* ── Hidden compat elements ───────────────────────── */
     .hidden-compat { display: none !important; }
@@ -550,17 +613,21 @@ HTML_PAGE = """<!doctype html>
       <div class="sidebar-logo">LT<span>2</span></div>
       <div class="sidebar-nav" id="sidebarNav">
         <!-- populated by renderSidebar() -->
-        <button class="nav-item active" data-view="cameras"><span class="step-icon">⊞</span>Cameras</button>
+        <div class="nav-section-header">Status</div>
+        <button class="nav-item active" data-view="cameras"><span class="step-icon">⊞</span>Camera Status</button>
         <div class="sidebar-divider"></div>
+        <div class="nav-section-header">Camera Settings</div>
         <button class="nav-item" data-view="blob"><span class="step-icon">○</span>Blob Detection</button>
         <button class="nav-item" data-view="mask"><span class="step-icon">○</span>Mask Build</button>
-        <button class="nav-item" data-view="pose"><span class="step-icon">○</span>Pose Capture</button>
+        <div class="sidebar-divider"></div>
+        <div class="nav-section-header">Camera Calibration</div>
+        <button class="nav-item" data-view="intrinsics"><span class="step-icon">◎</span>Intrinsics</button>
+        <button class="nav-item" data-view="pose"><span class="step-icon">○</span>Camera Pose Capture</button>
         <button class="nav-item" data-view="floor"><span class="step-icon">○</span>Floor / Metric</button>
         <button class="nav-item" data-view="extrinsics"><span class="step-icon">○</span>Extrinsics</button>
         <div class="sidebar-divider"></div>
+        <div class="nav-section-header">Tracking</div>
         <button class="nav-item" data-view="tracking"><span class="step-icon">○</span>Tracking</button>
-        <div class="sidebar-divider"></div>
-        <button class="nav-item" data-view="intrinsics"><span class="step-icon">◎</span>Intrinsics</button>
       </div>
       <div class="sidebar-bottom">
         <button class="btn-ghost btn-sm" data-command="refresh" style="flex:1">Refresh</button>
@@ -571,25 +638,36 @@ HTML_PAGE = """<!doctype html>
     <!-- ── Main area ───────────────────────────────────── -->
     <div class="main-area">
 
-      <!-- VIEW: Cameras (default) -->
+      <!-- VIEW: Camera Status (default) -->
       <div class="view active" id="viewCameras">
-        <div class="view-title">Camera Fleet</div>
+        <div class="view-title">Camera Status</div>
+        <div class="mjpeg-grid" id="mjpegGridCameras"></div>
         <div class="stat-row" id="camerasSummaryBar">
           <div class="stat-card"><div class="stat-label">Selected</div><div class="stat-value">0</div></div>
           <div class="stat-card"><div class="stat-label">Healthy</div><div class="stat-value">0</div></div>
           <div class="stat-card"><div class="stat-label">Running</div><div class="stat-value">0</div></div>
           <div class="stat-card"><div class="stat-label">Mask Ready</div><div class="stat-value">0</div></div>
         </div>
-        <div class="panel" style="flex:1;display:flex;flex-direction:column;min-height:0">
-          <div class="tbl-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>☑</th><th>ID</th><th>IP</th><th>State</th><th>Blobs</th><th>Mask%</th><th>Health</th><th>Clock</th>
-                </tr>
-              </thead>
-              <tbody id="cameraRows"></tbody>
-            </table>
+        <div class="split" style="flex:1;min-height:0">
+          <div class="split-left" style="flex:2;display:flex;flex-direction:column;min-height:0">
+            <div class="panel" style="flex:1;display:flex;flex-direction:column;min-height:0">
+              <div class="tbl-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>☑</th><th>ID</th><th>IP</th><th>State</th><th>Blobs</th><th>Mask%</th><th>Health</th><th>Clock</th>
+                    </tr>
+                  </thead>
+                  <tbody id="cameraRows"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <div class="split-right" style="width:300px;min-width:200px;display:flex;flex-direction:column;min-height:0">
+            <div class="panel" style="flex:1;display:flex;flex-direction:column;min-height:0">
+              <div class="panel-title">Console</div>
+              <pre class="console" id="status"></pre>
+            </div>
           </div>
         </div>
       </div>
@@ -597,8 +675,9 @@ HTML_PAGE = """<!doctype html>
       <!-- VIEW: Blob Detection -->
       <div class="view" id="viewBlob">
         <div class="view-title">Blob Detection Adjustment</div>
-        <div class="split">
-          <div class="split-left" style="flex:1.4">
+        <div class="mjpeg-grid" id="mjpegGridBlob"></div>
+        <div class="split" style="flex:1;min-height:0">
+          <div class="split-left calib-split-left">
             <div class="panel" style="flex:1;display:flex;flex-direction:column;min-height:0">
               <div class="panel-title">Camera Status</div>
               <div class="tbl-wrap">
@@ -611,7 +690,7 @@ HTML_PAGE = """<!doctype html>
               </div>
             </div>
           </div>
-          <div class="split-right" style="width:340px;min-width:280px">
+          <div class="split-right calib-split-right">
             <div class="panel">
               <div class="panel-title">Detection Settings</div>
               <div class="slider-grid">
@@ -659,8 +738,9 @@ HTML_PAGE = """<!doctype html>
       <!-- VIEW: Mask Build -->
       <div class="view" id="viewMask">
         <div class="view-title">Mask Build</div>
-        <div class="split">
-          <div class="split-left" style="flex:1.4">
+        <div class="mjpeg-grid" id="mjpegGridMask"></div>
+        <div class="split" style="flex:1;min-height:0">
+          <div class="split-left calib-split-left">
             <div class="panel" style="flex:1;display:flex;flex-direction:column;min-height:0">
               <div class="panel-title">Camera Mask Status</div>
               <div class="tbl-wrap">
@@ -673,7 +753,7 @@ HTML_PAGE = """<!doctype html>
               </div>
             </div>
           </div>
-          <div class="split-right" style="width:300px;min-width:240px">
+          <div class="split-right calib-split-right">
             <div class="panel">
               <div class="panel-title">Mask Settings</div>
               <div class="slider-grid" style="grid-template-columns:1fr">
@@ -695,11 +775,11 @@ HTML_PAGE = """<!doctype html>
         </div>
       </div>
 
-      <!-- VIEW: Pose Capture -->
+      <!-- VIEW: Camera Pose Capture -->
       <div class="view" id="viewPose">
-        <div class="view-title">Pose Capture</div>
-        <div class="split">
-          <div class="split-left" style="flex:1.4">
+        <div class="view-title">Camera Pose Capture</div>
+        <div class="split" style="flex:1;min-height:0">
+          <div class="split-left calib-split-left">
             <div class="panel" style="flex:1;display:flex;flex-direction:column;min-height:0">
               <div class="panel-title">Camera Capture Status</div>
               <div class="tbl-wrap">
@@ -712,7 +792,7 @@ HTML_PAGE = """<!doctype html>
               </div>
             </div>
           </div>
-          <div class="split-right" style="width:280px;min-width:240px">
+          <div class="split-right calib-split-right">
             <div class="panel">
               <div class="panel-title">Capture Control</div>
               <div class="stat-card" style="margin-bottom:10px">
@@ -733,7 +813,10 @@ HTML_PAGE = """<!doctype html>
       </div>
 
       <!-- VIEW: Floor / Metric -->
-      <div class="view" id="viewFloor" style="align-items:center;justify-content:center">
+      <div class="view" id="viewFloor">
+        <div class="view-title">Floor / Metric</div>
+        <div class="mjpeg-grid" id="mjpegGridFloor"></div>
+        <div style="flex:1;display:flex;align-items:flex-start;justify-content:flex-start;min-height:0">
         <div class="panel floor-card">
           <div class="panel-title" style="text-align:center">Floor / Metric Capture</div>
           <p style="color:var(--ink-muted);font-size:12px;text-align:center;margin-top:6px">
@@ -755,6 +838,7 @@ HTML_PAGE = """<!doctype html>
             <button class="btn-ghost" data-command="stop_wand_metric_capture">Stop</button>
           </div>
         </div>
+        </div><!-- /.center wrapper -->
       </div>
 
       <!-- VIEW: Extrinsics -->
@@ -783,10 +867,6 @@ HTML_PAGE = """<!doctype html>
               <div class="panel-title">Quality</div>
               <div id="extrinsicsQualityBadges"><span class="quality-badge">No extrinsics yet</span></div>
               <div id="extrinsicsDetailSummary" style="font-size:11px;color:var(--ink-muted);margin-top:6px"></div>
-            </div>
-            <div class="panel" style="flex:1;display:flex;flex-direction:column;min-height:0">
-              <div class="panel-title">Console</div>
-              <pre class="console" id="status"></pre>
             </div>
           </div>
         </div>
@@ -866,11 +946,31 @@ HTML_PAGE = """<!doctype html>
               <div class="panel-title">Live Feed</div>
               <div class="intrinsics-viewer">
                 <img id="intFrame" alt="Charuco preview" style="display:none">
-                <span id="intFrameEmpty" style="color:var(--ink-muted);font-size:13px">Start capture to preview</span>
+                <span id="intFrameEmpty" style="color:var(--ink-muted);font-size:13px">Select a camera to preview</span>
               </div>
             </div>
           </div>
           <div class="split-right" style="flex:1;display:flex;flex-direction:column;gap:8px;overflow-y:auto">
+            <div class="panel">
+              <div class="panel-title">Camera Controls</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px 12px;margin-top:6px">
+                <label><span class="int-slider-title">Focus <span class="hint" id="intFocusValue">5.215</span></span>
+                  <input id="intFocus" type="range" min="0" max="10" step="0.001" value="5.215">
+                </label>
+                <label><span class="int-slider-title">Exposure <span class="hint" id="intExposureValue">6400</span> µs</span>
+                  <input id="intExposure" type="range" min="100" max="30000" step="100" value="6400">
+                </label>
+                <label><span class="int-slider-title">Gain <span class="hint" id="intGainValue">6.0</span></span>
+                  <input id="intGain" type="range" min="1" max="16" step="0.1" value="6.0">
+                </label>
+                <label><span class="int-slider-title">FPS <span class="hint" id="intFpsValue">60</span></span>
+                  <input id="intFps" type="range" min="15" max="120" step="1" value="60">
+                </label>
+              </div>
+              <div class="btn-row" style="margin-top:8px">
+                <button id="intApplyCamera" class="btn-teal btn-sm">Apply to Camera</button>
+              </div>
+            </div>
             <div class="panel">
               <div class="panel-title">Frame Collection</div>
               <div class="int-stat">Captured: <strong id="intCaptured">0</strong> / <strong id="intNeeded">25</strong></div>
@@ -1331,7 +1431,7 @@ HTML_PAGE = """<!doctype html>
 
     function reportUiError(context, error) {
       const message = error instanceof Error ? error.message : String(error);
-      elements.status.textContent = JSON.stringify({ error: `${context}: ${message}` }, null, 2);
+      if (elements.status) elements.status.textContent = `Error\n${context}: ${message}`;
     }
 
     async function initTrackingViewer() {
@@ -1499,6 +1599,7 @@ HTML_PAGE = """<!doctype html>
     }
 
     function renderCameraRows(cameras) {
+      renderMjpegGrids(cameras);
       // Main cameras view table (compact)
       elements.rows.innerHTML = cameras.map((camera) => {
         const diagnostics = camera.diagnostics || {};
@@ -1679,6 +1780,30 @@ HTML_PAGE = """<!doctype html>
 
     let activeView = "cameras";
 
+    // Views that require Pi preview to be ON
+    const PREVIEW_ON_VIEWS = new Set(["cameras", "blob", "floor"]);
+    // Views that explicitly turn Pi preview OFF
+    const PREVIEW_OFF_VIEWS = new Set(["pose", "tracking"]);
+
+    function showStatus(msg, variant) {
+      if (!elements.status) return;
+      elements.status.textContent = msg;
+    }
+
+    function renderMjpegGrids(cameras) {
+      const gridIds = ["mjpegGridCameras", "mjpegGridBlob", "mjpegGridMask", "mjpegGridFloor"];
+      const html = cameras
+        .filter(c => c.ip)
+        .map(c => `<div class="mjpeg-cell">
+          <img src="http://${escapeHtml(c.ip)}:8555/mjpeg" alt="${escapeHtml(c.camera_id)}">
+          <div class="mjpeg-label">${escapeHtml(c.camera_id)}</div>
+        </div>`).join("");
+      gridIds.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = html;
+      });
+    }
+
     function setActiveView(viewName) {
       document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
       const target = document.getElementById(
@@ -1699,6 +1824,15 @@ HTML_PAGE = """<!doctype html>
       }
       if (viewName === "tracking") {
         trackingViewer.resize();
+      }
+      // Toggle Pi MJPEG preview based on page
+      if (PREVIEW_ON_VIEWS.has(viewName) || PREVIEW_OFF_VIEWS.has(viewName)) {
+        const renderEnabled = PREVIEW_ON_VIEWS.has(viewName);
+        postJson("/api/command", {
+          command: "set_preview",
+          render_enabled: renderEnabled,
+          camera_ids: selectedCameraIds(),
+        }).catch(() => {});
       }
     }
 
@@ -1754,17 +1888,21 @@ HTML_PAGE = """<!doctype html>
       const trackingBadge = state.tracking?.running ? "LIVE" : null;
 
       const navHtml = [
-        navItem("cameras", "⊞", "Cameras", "", null),
+        `<div class="nav-section-header">Status</div>`,
+        navItem("cameras", "⊞", "Camera Status", "", null),
         `<div class="sidebar-divider"></div>`,
+        `<div class="nav-section-header">Camera Settings</div>`,
         navItem("blob", stepIcon("blob"), "Blob Detection", stepClass("blob"), null),
         navItem("mask", stepIcon("mask"), "Mask Build", stepClass("mask"), maskBadge),
-        navItem("pose", stepIcon("wand"), "Pose Capture", stepClass("wand"), null),
+        `<div class="sidebar-divider"></div>`,
+        `<div class="nav-section-header">Camera Calibration</div>`,
+        navItem("intrinsics", "◎", "Intrinsics", "", null),
+        navItem("pose", stepIcon("wand"), "Camera Pose Capture", stepClass("wand"), null),
         navItem("floor", stepIcon("floor"), "Floor / Metric", stepClass("floor"), null),
         navItem("extrinsics", stepIcon("extrinsics"), "Extrinsics", stepClass("extrinsics"), null),
         `<div class="sidebar-divider"></div>`,
+        `<div class="nav-section-header">Tracking</div>`,
         navItem("tracking", state.tracking?.running ? "▶" : "○", "Tracking", trackingClass, trackingBadge),
-        `<div class="sidebar-divider"></div>`,
-        navItem("intrinsics", "◎", "Intrinsics", "", null),
       ].join("");
 
       document.getElementById("sidebarNav").innerHTML = navHtml;
@@ -1889,11 +2027,12 @@ HTML_PAGE = """<!doctype html>
       renderExtrinsicsQuality(state.workflow || {});
       renderCamerasSummaryBar(state);
       await loadTracking();
-      // Restore intrinsics form fields from saved settings
+      // Restore intrinsics form fields from saved settings.
+      // Keep camera selection local to the current UI session so quick camera
+      // switching is not overwritten by periodic state refreshes.
       const is = state.intrinsics_settings;
-      if (is) {
+      if (is && Date.now() > intFieldsUserEdited) {
         const fields = [
-          ["intCameraId", is.camera_id],
           ["intMjpegUrl", is.mjpeg_url],
           ["intSquareMm", is.square_length_mm],
           ["intMarkerMm", is.marker_length_mm != null ? is.marker_length_mm : ""],
@@ -1950,9 +2089,11 @@ HTML_PAGE = """<!doctype html>
     }
 
     document.getElementById("applyConfig").addEventListener("click", async () => {
+      showStatus("Waiting...");
       try {
         await postJson("/api/config", configPayload());
         await safeLoadState();
+        showStatus("Done!");
       } catch (error) {
         reportUiError("apply_config", error);
       }
@@ -1960,12 +2101,14 @@ HTML_PAGE = """<!doctype html>
 
     document.querySelectorAll("button[data-command]").forEach((button) => {
       button.addEventListener("click", async () => {
+        showStatus("Waiting...");
         try {
           await postJson("/api/command", {
             command: button.dataset.command,
             camera_ids: selectedCameraIds(),
           });
           await safeLoadState();
+          showStatus("Done!");
         } catch (error) {
           reportUiError(`command_${button.dataset.command || "unknown"}`, error);
         }
@@ -1973,6 +2116,7 @@ HTML_PAGE = """<!doctype html>
     });
 
     document.getElementById("captureWandMetric").addEventListener("click", async () => {
+      showStatus("Waiting...");
       try {
         await postJson("/api/command", {
           command: "start_wand_metric_capture",
@@ -1981,12 +2125,14 @@ HTML_PAGE = """<!doctype html>
           wand_metric_log_path: elements.wandMetricLogPath.value,
         });
         await safeLoadState();
+        showStatus("Done!");
       } catch (error) {
         reportUiError("start_wand_metric_capture", error);
       }
     });
 
     document.getElementById("generateExtrinsics").addEventListener("click", async () => {
+      showStatus("Waiting...");
       try {
         await postJson("/api/generate_extrinsics", {
           intrinsics_path: elements.intrinsicsPath.value,
@@ -1998,6 +2144,7 @@ HTML_PAGE = """<!doctype html>
           min_pairs: Number(elements.minPairs.value),
         });
         await safeLoadState();
+        showStatus("Done!");
       } catch (error) {
         reportUiError("generate_extrinsics", error);
       }
@@ -2008,22 +2155,26 @@ HTML_PAGE = """<!doctype html>
     elements.tabIntrinsics.addEventListener("click", () => setActivePage("intrinsics"));
 
     elements.trackingStart.addEventListener("click", async () => {
+      showStatus("Waiting...");
       try {
         await postJson("/api/tracking/start", {
           patterns: ["waist"],
         });
         setActivePage("tracking");
         await safeLoadState();
+        showStatus("Done!");
       } catch (error) {
         reportUiError("tracking_start", error);
       }
     });
 
     elements.trackingStop.addEventListener("click", async () => {
+      showStatus("Waiting...");
       try {
         await postJson("/api/tracking/stop", {});
         setActivePage("tracking");
         await safeLoadState();
+        showStatus("Done!");
       } catch (error) {
         reportUiError("tracking_stop", error);
       }
@@ -2055,6 +2206,8 @@ HTML_PAGE = """<!doctype html>
     let intFrameIntervalId = null;
     let intStatusIntervalId = null;
     let intCurrentBlobUrl = null;
+    // Guard: timestamp (ms) until which loadState must NOT overwrite intrinsics fields
+    let intFieldsUserEdited = 0;
 
     function intStopPollers() {
       if (intFrameIntervalId) { clearInterval(intFrameIntervalId); intFrameIntervalId = null; }
@@ -2116,6 +2269,16 @@ HTML_PAGE = """<!doctype html>
                 btn.onclick = () => {
                   if (elements.intCameraId) elements.intCameraId.value = btn.dataset.cam;
                   if (elements.intMjpegUrl) elements.intMjpegUrl.value = btn.dataset.url;
+                  const url = btn.dataset.url || "";
+                  if (url && elements.intFrame) {
+                    if (intFrameIntervalId) { clearInterval(intFrameIntervalId); intFrameIntervalId = null; }
+                    if (intCurrentBlobUrl) { URL.revokeObjectURL(intCurrentBlobUrl); intCurrentBlobUrl = null; }
+                    elements.intFrame.src = url;
+                    elements.intFrame.style.display = "block";
+                    if (elements.intFrameEmpty) elements.intFrameEmpty.style.display = "none";
+                    intStartStatusPoller();
+                  }
+                  intFieldsUserEdited = Date.now() + 60000; // block server restore for 60s
                 };
               });
             } else {
@@ -2140,11 +2303,26 @@ HTML_PAGE = """<!doctype html>
       };
     }
 
+    // Lock fields when user types directly into Camera ID or MJPEG URL
+    elements.intCameraId?.addEventListener("input", () => { intFieldsUserEdited = Date.now() + 60000; });
+    elements.intMjpegUrl?.addEventListener("input", () => { intFieldsUserEdited = Date.now() + 60000; });
+
     elements.intStart?.addEventListener("click", async () => {
+      intFieldsUserEdited = Date.now() + 60000; // keep user-entered values after start
       try { await postJson("/api/intrinsics/start", intPayload()); } catch (e) { reportUiError("int_start", e); }
     });
     elements.intStop?.addEventListener("click", async () => {
+      // Stop server-side capture
       try { await postJson("/api/intrinsics/stop", {}); } catch (e) { reportUiError("int_stop", e); }
+      // Stop all pollers
+      intStopPollers();
+      // Stop MJPEG feed and hide frame
+      if (elements.intFrame) {
+        elements.intFrame.src = "";
+        elements.intFrame.style.display = "none";
+      }
+      if (elements.intFrameEmpty) elements.intFrameEmpty.style.display = "";
+      if (intCurrentBlobUrl) { URL.revokeObjectURL(intCurrentBlobUrl); intCurrentBlobUrl = null; }
     });
     elements.intClear?.addEventListener("click", async () => {
       try { await postJson("/api/intrinsics/clear", {}); } catch (e) { reportUiError("int_clear", e); }
@@ -2160,7 +2338,56 @@ HTML_PAGE = """<!doctype html>
     elements.intCalibrate?.addEventListener("click", async () => {
       try { await postJson("/api/intrinsics/calibrate", {}); } catch (e) { reportUiError("int_calibrate", e); }
     });
+
     // ── end Intrinsics tab ────────────────────────────────────────────
+
+    // ── Intrinsics Camera Controls ────────────────────────────────────
+    const intCamSliders = [
+      { id: "intFocus",    valId: "intFocusValue" },
+      { id: "intExposure", valId: "intExposureValue" },
+      { id: "intGain",     valId: "intGainValue" },
+      { id: "intFps",      valId: "intFpsValue" },
+    ];
+    const intCamTimers = {};
+
+    function intCamConfigPayload() {
+      const blobRange = normalizedBlobRange();
+      return {
+        camera_ids: [elements.intCameraId?.value?.trim() || "pi-cam-01"],
+        focus:            Number(document.getElementById("intFocus")?.value ?? 5.215),
+        exposure_us:      Number(document.getElementById("intExposure")?.value ?? 6400),
+        gain:             Number(document.getElementById("intGain")?.value ?? 6.0),
+        fps:              Number(document.getElementById("intFps")?.value ?? 60),
+        circularity_min:  Number(elements.circularity.value),
+        blob_min_diameter_px: blobRange.min,
+        blob_max_diameter_px: blobRange.max,
+        mask_threshold:   Number(elements.maskThreshold.value),
+        mask_seconds:     Number(elements.maskSeconds.value),
+        wand_metric_seconds: Number(elements.wandMetricSeconds.value),
+      };
+    }
+
+    intCamSliders.forEach(({ id, valId }) => {
+      const input = document.getElementById(id);
+      const span  = document.getElementById(valId);
+      if (!input) return;
+      if (span) span.textContent = input.value;
+      input.addEventListener("input", () => {
+        if (span) span.textContent = input.value;
+        if (intCamTimers[id]) clearTimeout(intCamTimers[id]);
+        intCamTimers[id] = setTimeout(async () => {
+          try { await postJson("/api/config", intCamConfigPayload()); }
+          catch (e) { reportUiError("int_cam_slider_" + id, e); }
+          finally { intCamTimers[id] = null; }
+        }, 200);
+      });
+    });
+
+    document.getElementById("intApplyCamera")?.addEventListener("click", async () => {
+      try { await postJson("/api/config", intCamConfigPayload()); }
+      catch (e) { reportUiError("int_apply_camera", e); }
+    });
+    // ── end Intrinsics Camera Controls ───────────────────────────────
 
     setActiveView("cameras");
     initTrackingViewer();
@@ -2750,6 +2977,15 @@ class WandGuiState:
             "mask_stop": lambda: self.session._broadcast(targets, "mask_stop"),
         }
         handler = command_handlers.get(command)
+        if command == "set_preview":
+            kwargs: Dict[str, Any] = {}
+            render_enabled = payload.get("render_enabled")
+            if render_enabled is not None:
+                kwargs["render_enabled"] = bool(render_enabled)
+            result = self.session._broadcast(targets, "set_preview", **kwargs)
+            self._update_camera_status({command: result})
+            self.last_result = {command: result}
+            return self.last_result
         if command in ("start", "start_pose_capture"):
             log_path = self._start_capture_log("pose_capture")
             result = self.session._broadcast(targets, "start", mode="pose_capture")

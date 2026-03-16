@@ -96,6 +96,14 @@ Control response の `error_code` は以下を固定する (1..7):
 - `set_threshold`
 - `set_blob_diameter`
 - `set_circularity_min`
+- `set_preview`
+
+`set_preview` は MJPEG 描画負荷の ON/OFF と overlay 設定を切り替える。
+サポートする `params`:
+
+- `render_enabled` (bool)
+- `overlays.blob|mask|text|charuco` (bool)
+- `charuco.dictionary|squares_x|squares_y|square_length_mm|marker_length_mm`
 
 ### 5.2 Schema-valid but not supported (MVP)
 

@@ -56,6 +56,7 @@ from .control import (
     set_threshold,
     set_blob_diameter,
     set_circularity_min,
+    set_preview,
 )
 
 __all__ = [
@@ -111,6 +112,7 @@ __all__ = [
     "set_threshold",
     "set_blob_diameter",
     "set_circularity_min",
+    "set_preview",
     "WAND_NAME",
     "WAND_MARKER_DIAMETER_MM",
     "WAND_OUTER_SHORT_MM",
