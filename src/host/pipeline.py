@@ -8,7 +8,8 @@ Provides the complete processing chain:
 import time
 import threading
 import numpy as np
-from typing import Optional, Dict, Any, List, Callable
+from typing import Optional, Dict, Any, List, Callable, Deque
+from collections import deque
 from datetime import datetime
 
 from .receiver import FrameProcessor, PairedFrames
@@ -288,21 +289,19 @@ class TrackingSession:
             log_dir=self.config.get("log_dir", "./logs")
         )
         
-        self._pose_history: List[Dict[str, Any]] = []
+        self._max_history: int = self.config.get("max_history", 3600)  # ~1 min at 60fps
+        self._pose_history: Deque[Dict[str, Any]] = deque(maxlen=self._max_history)
         self._history_lock = threading.Lock()
-        self._max_history = self.config.get("max_history", 3600)  # ~1 min at 60fps
     
     def start(self, session_name: Optional[str] = None) -> None:
         """Start tracking session."""
         def on_pose(poses: Dict[str, RigidBodyPose]):
             with self._history_lock:
+                # deque(maxlen=) auto-discards oldest entries — no manual trimming needed
                 self._pose_history.append({
                     "timestamp": max(p.timestamp for p in poses.values()),
                     "poses": {name: pose.to_dict() for name, pose in poses.items()}
                 })
-                # Trim history
-                if len(self._pose_history) > self._max_history:
-                    self._pose_history = self._pose_history[-self._max_history:]
         
         self.pipeline.set_pose_callback(on_pose)
         self.pipeline.start(session_name=session_name)
@@ -329,7 +328,7 @@ class TrackingSession:
             List of pose entries
         """
         with self._history_lock:
-            history = self._pose_history.copy()
+            history = list(self._pose_history)
         
         if since_timestamp is not None:
             history = [h for h in history if h["timestamp"] > since_timestamp]
@@ -367,7 +366,7 @@ class TrackingSession:
         import json
         
         with self._history_lock:
-            history = self._pose_history.copy()
+            history = list(self._pose_history)
         
         if format == "json":
             with open(filepath, 'w') as f:

@@ -12,8 +12,10 @@ import numpy as np
 from typing import Optional, Dict, Any, List, Tuple
 from dataclasses import dataclass, field
 from collections import deque
+from scipy.optimize import linear_sum_assignment
 from scipy.spatial.transform import Rotation
 from scipy.spatial.distance import cdist
+from scipy.spatial import cKDTree
 import threading
 
 
@@ -142,65 +144,54 @@ class PointClusterer:
     
     def cluster(self, points: np.ndarray) -> List[np.ndarray]:
         """
-        Cluster 3D points using DBSCAN.
-        
+        Cluster 3D points using DBSCAN via a KD-tree for O(n log n) queries.
+
         Args:
             points: Nx3 array of 3D points
-            
+
         Returns:
-            List of point arrays, one per cluster
+            List of point arrays, one per cluster (noise points excluded).
         """
-        if len(points) < self.min_samples:
-            return [points] if len(points) > 0 else []
-        
-        # Compute pairwise distances
-        distances = cdist(points, points)
-        
-        # DBSCAN implementation
-        labels = np.full(len(points), -1, dtype=int)
+        n = len(points)
+        if n == 0:
+            return []
+        if n < self.min_samples:
+            return [points]
+
+        # Build KD-tree for efficient radius queries
+        tree = cKDTree(points)
+        neighbor_lists = tree.query_ball_point(points, self.eps)
+
+        labels = np.full(n, -1, dtype=np.intp)
         cluster_id = 0
-        
-        for i in range(len(points)):
+
+        for i in range(n):
             if labels[i] != -1:
                 continue
-            
-            # Find neighbors
-            neighbors = np.where(distances[i] <= self.eps)[0]
-            
+            neighbors = neighbor_lists[i]
             if len(neighbors) < self.min_samples:
-                continue  # Noise point
-            
-            # Start new cluster
-            labels[neighbors] = cluster_id
-            
-            # Expand cluster
+                continue  # noise candidate — may be absorbed later
+
+            labels[i] = cluster_id
             seed_set = list(neighbors)
-            seed_set.remove(i)
-            
+
             j = 0
             while j < len(seed_set):
                 q = seed_set[j]
-                
-                q_neighbors = np.where(distances[q] <= self.eps)[0]
-                
-                if len(q_neighbors) >= self.min_samples:
-                    for n in q_neighbors:
-                        if labels[n] == -1:
-                            labels[n] = cluster_id
-                            seed_set.append(n)
-                
+                if labels[q] == -1:
+                    labels[q] = cluster_id
+                    q_neighbors = neighbor_lists[q]
+                    if len(q_neighbors) >= self.min_samples:
+                        for nb in q_neighbors:
+                            if labels[nb] == -1:
+                                seed_set.append(nb)
+                elif labels[q] != cluster_id:
+                    labels[q] = cluster_id
                 j += 1
-            
+
             cluster_id += 1
-        
-        # Extract clusters
-        clusters = []
-        for c in range(cluster_id):
-            cluster_points = points[labels == c]
-            if len(cluster_points) > 0:
-                clusters.append(cluster_points)
-        
-        return clusters
+
+        return [points[labels == c] for c in range(cluster_id)]
 
 
 class KabschEstimator:
@@ -295,16 +286,12 @@ class KabschEstimator:
         n_obs = len(observed_points)
         
         if n_obs < n_ref:
-            # More reference points than observed - can't fully estimate
-            # Try to match observed to closest reference points
-            best_error = float('inf')
-            best_R, best_t = np.eye(3), np.zeros(3)
-            
-            # Use all observed points, find closest reference
-            distances = cdist(observed_points, reference_points)
-            closest_refs = np.argmin(distances, axis=1)
-            matched_ref = reference_points[closest_refs]
-            
+            # More reference points than observed — select the globally optimal
+            # one-to-one subset of reference points via the Hungarian algorithm.
+            distances = cdist(observed_points, reference_points)  # n_obs × n_ref
+            _, col_ind = linear_sum_assignment(distances)
+            matched_ref = reference_points[col_ind]
+
             R, t, error = KabschEstimator.estimate(observed_points, matched_ref)
             return observed_points, matched_ref, error
         
@@ -325,30 +312,19 @@ class KabschEstimator:
                         if error < best_error:
                             best_error = error
                             best_obs = obs_subset
-                    except:
+                    except Exception:
                         continue
                 
                 if best_obs is not None:
                     return best_obs, reference_points, best_error
             
-            # For larger datasets, use greedy matching
-            distances = cdist(reference_points, observed_points)
-            matched_obs_indices = []
-            
-            for i in range(n_ref):
-                # Find closest unmatched observed point
-                min_dist = float('inf')
-                min_j = -1
-                for j in range(n_obs):
-                    if j not in matched_obs_indices:
-                        if distances[i, j] < min_dist:
-                            min_dist = distances[i, j]
-                            min_j = j
-                matched_obs_indices.append(min_j)
-            
-            matched_obs = observed_points[matched_obs_indices]
+            # For larger datasets, use the Hungarian algorithm for a globally
+            # optimal one-to-one assignment (replaces greedy nearest-neighbour).
+            distances = cdist(reference_points, observed_points)  # n_ref × n_obs
+            _, col_ind = linear_sum_assignment(distances)
+            matched_obs = observed_points[col_ind]
             R, t, error = KabschEstimator.estimate(matched_obs, reference_points)
-            
+
             return matched_obs, reference_points, error
 
 
@@ -437,26 +413,35 @@ class RigidBodyTracker:
         
         self._pose_history: deque = deque(maxlen=history_size)
         self._lock = threading.Lock()
-        
-        # Kalman filter state (simplified)
+
+        # Tracked state
         self._position = np.zeros(3)
         self._velocity = np.zeros(3)
         self._quaternion = np.array([1.0, 0.0, 0.0, 0.0])  # [w, x, y, z]
-        
+        self._last_valid_timestamp: int = 0  # microseconds
+
         # Tracking statistics
         self.track_count = 0
         self.lost_frames = 0
         self.total_frames = 0
     
     def update(self, pose: RigidBodyPose) -> None:
-        """Update tracker with new pose estimate."""
+        """Update tracker with new pose estimate, including velocity estimation."""
         with self._lock:
             self._pose_history.append(pose)
             self.total_frames += 1
-            
+
             if pose.valid:
+                if self.track_count > 0 and self._last_valid_timestamp > 0:
+                    dt_s = (pose.timestamp - self._last_valid_timestamp) / 1_000_000.0
+                    # Only update velocity if dt is sane (0–500 ms)
+                    if 0.0 < dt_s < 0.5:
+                        self._velocity = (pose.position - self._position) / dt_s
+                    else:
+                        self._velocity = np.zeros(3)
                 self._position = pose.position.copy()
                 self._quaternion = pose.quaternion.copy()
+                self._last_valid_timestamp = pose.timestamp
                 self.track_count += 1
                 self.lost_frames = 0
             else:

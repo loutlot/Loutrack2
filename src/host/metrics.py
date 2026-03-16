@@ -44,11 +44,11 @@ class CameraMetrics:
     _blob_counts: deque = field(default_factory=lambda: deque(maxlen=60))
 
 
-@dataclass 
+@dataclass
 class TriangulationMetrics:
-    """Metrics for triangulation quality."""
+    """Metrics for triangulation quality (rolling window)."""
     total_points: int = 0
-    reprojection_errors: List[float] = field(default_factory=list)
+    reprojection_errors: deque = field(default_factory=lambda: deque(maxlen=1000))
     mean_error: float = 0.0
     max_error: float = 0.0
     rms_error: float = 0.0
@@ -181,23 +181,20 @@ class MetricsCollector:
         with self._lock:
             self._triangulation.total_points += point_count
             self._triangulation.reprojection_errors.extend(reprojection_errors)
-            
-            # Keep only last 1000 errors for memory
-            if len(self._triangulation.reprojection_errors) > 1000:
-                self._triangulation.reprojection_errors = \
-                    self._triangulation.reprojection_errors[-1000:]
-            
-            # Calculate error statistics
+
+            # Calculate error statistics (deque auto-limits to maxlen=1000)
             if self._triangulation.reprojection_errors:
-                errors = self._triangulation.reprojection_errors
-                self._triangulation.mean_error = sum(errors) / len(errors)
-                self._triangulation.max_error = max(errors)
-                
-                # RMS error
-                squared_sum = sum(e * e for e in errors)
-                self._triangulation.rms_error = (
-                    squared_sum / len(errors)
-                ) ** 0.5
+                import numpy as _np
+                errors_arr = _np.fromiter(
+                    self._triangulation.reprojection_errors,
+                    dtype=float,
+                    count=len(self._triangulation.reprojection_errors),
+                )
+                self._triangulation.mean_error = float(errors_arr.mean())
+                self._triangulation.max_error = float(errors_arr.max())
+                self._triangulation.rms_error = float(
+                    _np.sqrt(_np.mean(errors_arr ** 2))
+                )
             
             return {
                 "total_points": self._triangulation.total_points,
@@ -315,7 +312,9 @@ class MetricsCollector:
         """Reset all metrics."""
         with self._lock:
             self._cameras.clear()
-            self._triangulation = TriangulationMetrics()
+            self._triangulation = TriangulationMetrics(
+                reprojection_errors=deque(maxlen=1000)
+            )
             self._frame_times.clear()
             self._global_frame_count = 0
             self._start_time = time.time()

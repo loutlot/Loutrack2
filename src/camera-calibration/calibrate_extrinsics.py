@@ -345,37 +345,68 @@ def initialize_camera_poses_chain(
     camera_params: Dict[str, CameraParams],
     min_pairs: int,
 ) -> Dict[str, Tuple[np.ndarray, np.ndarray]]:
+    """Initialize camera poses by anchoring each new camera to its best parent.
+
+    Rather than chaining strictly in sequence (which compounds errors), each
+    camera beyond the first is initialised relative to whichever already-placed
+    camera shares the most simultaneous observations with it.  The pair with
+    the highest overlap is inherently the most reliable basis for the Essential
+    Matrix decomposition, so this strategy keeps initialisation errors local
+    and reduces drift for later cameras in the ordering.
+    """
     poses: Dict[str, Tuple[np.ndarray, np.ndarray]] = {
         camera_order[0]: (np.eye(3, dtype=np.float64), np.zeros(3, dtype=np.float64))
     }
-    for previous_camera, current_camera in zip(camera_order[:-1], camera_order[1:]):
-        idx_prev = camera_order.index(previous_camera)
+    initialized: List[str] = [camera_order[0]]
+
+    for current_camera in camera_order[1:]:
         idx_curr = camera_order.index(current_camera)
-        pair_points_prev: List[np.ndarray] = []
+
+        # Find the already-initialised camera with the most shared rows.
+        best_parent = initialized[0]
+        best_count = 0
+        for parent in initialized:
+            idx_parent = camera_order.index(parent)
+            count = sum(
+                1 for row in rows
+                if row.image_points[idx_parent] is not None
+                and row.image_points[idx_curr] is not None
+            )
+            if count > best_count:
+                best_count = count
+                best_parent = parent
+
+        idx_parent = camera_order.index(best_parent)
+        pair_points_parent: List[np.ndarray] = []
         pair_points_curr: List[np.ndarray] = []
         for row in rows:
-            point_prev = row.image_points[idx_prev]
+            point_parent = row.image_points[idx_parent]
             point_curr = row.image_points[idx_curr]
-            if point_prev is None or point_curr is None:
+            if point_parent is None or point_curr is None:
                 continue
-            pair_points_prev.append(point_prev.astype(np.float64))
+            pair_points_parent.append(point_parent.astype(np.float64))
             pair_points_curr.append(point_curr.astype(np.float64))
-        if len(pair_points_prev) < min_pairs:
+
+        if len(pair_points_parent) < min_pairs:
             raise ValueError(
-                f"adjacent pair {previous_camera} <-> {current_camera} has only {len(pair_points_prev)} usable rows"
+                f"best parent pair {best_parent} <-> {current_camera} has only "
+                f"{len(pair_points_parent)} usable rows (need {min_pairs})"
             )
+
         rotation_rel, translation_rel = _select_relative_motion(
-            np.asarray(pair_points_prev, dtype=np.float64),
+            np.asarray(pair_points_parent, dtype=np.float64),
             np.asarray(pair_points_curr, dtype=np.float64),
-            camera_params[previous_camera].intrinsic_matrix,
+            camera_params[best_parent].intrinsic_matrix,
             camera_params[current_camera].intrinsic_matrix,
-            camera_params[previous_camera].distortion_coeffs,
+            camera_params[best_parent].distortion_coeffs,
             camera_params[current_camera].distortion_coeffs,
         )
-        rotation_prev, translation_prev = poses[previous_camera]
-        rotation_curr = rotation_rel @ rotation_prev
-        translation_curr = (rotation_rel @ translation_prev.reshape(3, 1)).reshape(3) + translation_rel.reshape(3)
+        rotation_parent, translation_parent = poses[best_parent]
+        rotation_curr = rotation_rel @ rotation_parent
+        translation_curr = (rotation_rel @ translation_parent.reshape(3, 1)).reshape(3) + translation_rel.reshape(3)
         poses[current_camera] = (rotation_curr.astype(np.float64), translation_curr.astype(np.float64))
+        initialized.append(current_camera)
+
     return poses
 
 

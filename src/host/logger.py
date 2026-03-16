@@ -172,16 +172,30 @@ class FrameLogger:
         
         self._write_queue.put(event_entry)
     
+    # Flush to disk after this many queued writes (trades latency for throughput)
+    _FLUSH_INTERVAL: int = 30
+
     def _writer_loop(self) -> None:
-        """Background thread for writing log entries."""
+        """Background thread for writing log entries.
+
+        Batches writes and flushes every _FLUSH_INTERVAL entries rather than
+        after every frame to avoid excessive syscall overhead at high FPS.
+        """
+        pending = 0
         while True:
             entry = self._write_queue.get()
             if entry is None:
+                # Flush remaining buffered data before exit
+                if self._file_handle:
+                    self._file_handle.flush()
                 break
-            
+
             if self._file_handle:
-                self._file_handle.write(json.dumps(entry) + '\n')
-                self._file_handle.flush()
+                self._file_handle.write(json.dumps(entry) + "\n")
+                pending += 1
+                if pending >= self._FLUSH_INTERVAL:
+                    self._file_handle.flush()
+                    pending = 0
     
     @property
     def is_recording(self) -> bool:

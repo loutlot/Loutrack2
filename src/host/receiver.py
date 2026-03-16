@@ -132,7 +132,19 @@ class FrameBuffer:
         """Get list of cameras with frames in buffer."""
         with self._lock:
             return list(self._buffers.keys())
-    
+
+    def get_all_frames(self, camera_id: str) -> List["Frame"]:
+        """Return a snapshot of all buffered frames for a camera (newest first)."""
+        with self._lock:
+            if camera_id not in self._buffers:
+                return []
+            return list(self._buffers[camera_id])
+
+    def get_buffer_size(self, camera_id: str) -> int:
+        """Return current number of buffered frames for a camera."""
+        with self._lock:
+            return len(self._buffers.get(camera_id, []))
+
     def cleanup_old_frames(self) -> int:
         """
         Remove frames older than max_age_seconds.
@@ -205,10 +217,10 @@ class FramePairer:
         if reference_camera and reference_camera in camera_ids:
             ref_cam = reference_camera
         else:
-            ref_cam = max(camera_ids, key=lambda c: len(buffer._buffers[c]))
-        
-        # Get all reference frames
-        ref_frames = list(buffer._buffers.get(ref_cam, []))
+            ref_cam = max(camera_ids, key=lambda c: buffer.get_buffer_size(c))
+
+        # Get all reference frames via the public API
+        ref_frames = buffer.get_all_frames(ref_cam)
         if not ref_frames:
             return []
         
@@ -242,7 +254,7 @@ class FramePairer:
                 if not candidates and self.frame_index_fallback:
                     # Fallback to frame_index matching
                     target_index = ref_frame.frame_index
-                    all_frames = buffer._buffers.get(cam_id, [])
+                    all_frames = buffer.get_all_frames(cam_id)
                     candidates = [
                         f for f in all_frames
                         if f.frame_index == target_index
@@ -264,10 +276,22 @@ class FramePairer:
         return paired
 
 
+# Try to use orjson for 5-10x faster JSON parsing; fall back to stdlib json.
+try:
+    import orjson as _json_lib
+
+    def _parse_json(data: bytes) -> Any:
+        return _json_lib.loads(data)
+
+except ImportError:
+    def _parse_json(data: bytes) -> Any:  # type: ignore[misc]
+        return json.loads(data.decode("utf-8"))
+
+
 class UDPReceiver:
     """
     UDP server for receiving frame messages from Raspberry Pi cameras.
-    
+
     Usage:
         receiver = UDPReceiver(port=5000)
         receiver.set_frame_callback(on_frame_received)
@@ -275,20 +299,27 @@ class UDPReceiver:
         # ... receive frames ...
         receiver.stop()
     """
-    
+
+    # Maximum single UDP datagram we'll accept (64 KiB covers any JSON blob payload)
+    _RECV_BYTES: int = 65536
+    # Kernel socket receive buffer (2 MiB).
+    # With 3 cameras at 60 fps and ~500-byte frames the steady-state throughput is
+    # ~90 KB/s; the enlarged kernel buffer absorbs bursts without dropping packets.
+    _KERNEL_RECV_BUF: int = 2 * 1024 * 1024
+
     def __init__(
         self,
         host: str = "0.0.0.0",
         port: int = 5000,
-        buffer_size: int = 65536
+        buffer_size: int = 65536,
     ):
         """
         Initialize UDP receiver.
-        
+
         Args:
-            host: Host address to bind (default: all interfaces)
-            port: UDP port to listen on
-            buffer_size: Socket receive buffer size
+            host:        Host address to bind (default: all interfaces).
+            port:        UDP port to listen on.
+            buffer_size: Max datagram size to read (default 65536).
         """
         self.host = host
         self.port = port
@@ -323,7 +354,8 @@ class UDPReceiver:
             return
         
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, self.buffer_size)
+        # Set a large kernel receive buffer to absorb bursts from multiple cameras.
+        self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, self._KERNEL_RECV_BUF)
         self._socket.bind((self.host, self.port))
         self._socket.settimeout(1.0)  # Allow periodic checking of _running
         
@@ -343,13 +375,13 @@ class UDPReceiver:
         """Main receive loop."""
         while self._running:
             try:
-                data, addr = self._socket.recvfrom(65536)
+                data, addr = self._socket.recvfrom(self._RECV_BYTES)
                 self._bytes_received += len(data)
-                
-                # Parse JSON
+
+                # Parse JSON (uses orjson if available for ~5-10x speedup)
                 try:
-                    msg = json.loads(data.decode('utf-8'))
-                except json.JSONDecodeError as e:
+                    msg = _parse_json(data)
+                except (ValueError, KeyError) as e:
                     self._errors += 1
                     if self._error_callback:
                         self._error_callback(e)
@@ -478,11 +510,11 @@ class FrameProcessor:
     
     def get_stats(self) -> Dict[str, Any]:
         """Get processor statistics."""
+        cam_ids = self.buffer.get_camera_ids()
         return {
             "receiver": self.receiver.stats,
-            "cameras": self.buffer.get_camera_ids(),
+            "cameras": cam_ids,
             "buffer_sizes": {
-                cam: len(self.buffer._buffers[cam])
-                for cam in self.buffer.get_camera_ids()
-            }
+                cam: self.buffer.get_buffer_size(cam) for cam in cam_ids
+            },
         }

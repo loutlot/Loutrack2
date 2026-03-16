@@ -6,23 +6,46 @@ import sys
 from typing import Optional, Dict, Any
 
 
-def _recv_line(sock: socket.socket) -> str:
-    """Read bytes from socket until a newline, return the decoded line (without the newline)."""
-    buf = b""
+def _recv_line(sock: socket.socket, _buf: bytearray = None) -> str:
+    """
+    Read bytes from socket until a newline; return the decoded line (no newline).
+
+    The function reads exactly one NDJSON line.  Any bytes that arrive after
+    the first newline in the same recv() call are discarded — this is safe
+    because the current protocol is strictly request/response (1:1) per
+    connection and the server closes the connection after one reply.
+    """
+    buf = bytearray()
     while True:
         chunk = sock.recv(4096)
         if not chunk:
             raise ConnectionError("Socket closed by peer before newline")
-        buf += chunk
-        if b"\n" in buf:
-            line, _, rest = buf.partition(b"\n")
-    
-            return line.decode("utf-8")
+        buf.extend(chunk)
+        nl = buf.find(b"\n")
+        if nl >= 0:
+            return buf[:nl].decode("utf-8")
+
+
+def _build_request(
+    camera_id: str,
+    cmd: str,
+    params: Optional[Dict[str, Any]] = None,
+    request_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Construct a well-formed NDJSON control request dict."""
+    req: Dict[str, Any] = {
+        "request_id": request_id or str(uuid.uuid4()),
+        "camera_id": camera_id,
+        "cmd": cmd,
+    }
+    if params:
+        req["params"] = params
+    return req
 
 
 def send_request(ip: str, port: int, request_dict: Dict[str, Any], timeout: float = 5.0) -> Dict[str, Any]:
-    """Send a single NDJSON request line and read a single NDJSON response line.
-    Uses stdlib only. Ensures a request_id and camera_id are present when provided.
+    """Send a single NDJSON request and read the NDJSON response.
+
     Returns the parsed JSON response as a dict.
     """
     if not isinstance(request_dict, dict):
@@ -34,7 +57,7 @@ def send_request(ip: str, port: int, request_dict: Dict[str, Any], timeout: floa
     if not req.get("camera_id"):
         raise ValueError("request must include camera_id")
 
-    payload = (json.dumps(req, separators=(",", ":")).encode("utf-8") + b"\n")
+    payload = json.dumps(req, separators=(",", ":")).encode("utf-8") + b"\n"
 
     with socket.create_connection((ip, port), timeout=timeout) as sock:
         sock.settimeout(timeout)
@@ -46,58 +69,51 @@ def send_request(ip: str, port: int, request_dict: Dict[str, Any], timeout: floa
         raise ValueError(f"Invalid JSON from server: {resp_line!r}") from e
 
 
+def _send(
+    ip: str,
+    port: int,
+    camera_id: str,
+    cmd: str,
+    params: Optional[Dict[str, Any]] = None,
+    request_id: Optional[str] = None,
+    timeout: float = 5.0,
+) -> Dict[str, Any]:
+    """Internal helper: build and send a control request."""
+    return send_request(
+        ip, port, _build_request(camera_id, cmd, params, request_id), timeout=timeout
+    )
+
+
 def ping(ip: str, port: int, camera_id: str, request_id: Optional[str] = None, timeout: float = 5.0) -> Dict[str, Any]:
-    req: Dict[str, Any] = {"cmd": "ping", "camera_id": camera_id}
-    if request_id:
-        req["request_id"] = request_id
-    return send_request(ip, port, req, timeout=timeout)
+    return _send(ip, port, camera_id, "ping", request_id=request_id, timeout=timeout)
 
 
 def start(ip: str, port: int, camera_id: str, mode: str, request_id: Optional[str] = None, timeout: float = 5.0) -> Dict[str, Any]:
-    req: Dict[str, Any] = {"cmd": "start", "camera_id": camera_id, "params": {"mode": mode}}
-    if request_id:
-        req["request_id"] = request_id
-    return send_request(ip, port, req, timeout=timeout)
+    return _send(ip, port, camera_id, "start", {"mode": mode}, request_id=request_id, timeout=timeout)
 
 
 def stop(ip: str, port: int, camera_id: str, request_id: Optional[str] = None, timeout: float = 5.0) -> Dict[str, Any]:
-    req: Dict[str, Any] = {"cmd": "stop", "camera_id": camera_id}
-    if request_id:
-        req["request_id"] = request_id
-    return send_request(ip, port, req, timeout=timeout)
+    return _send(ip, port, camera_id, "stop", request_id=request_id, timeout=timeout)
 
 
 def set_exposure(ip: str, port: int, camera_id: str, value: int, request_id: Optional[str] = None, timeout: float = 5.0) -> Dict[str, Any]:
-    req: Dict[str, Any] = {"cmd": "set_exposure", "camera_id": camera_id, "params": {"value": int(value)}}
-    if request_id:
-        req["request_id"] = request_id
-    return send_request(ip, port, req, timeout=timeout)
+    return _send(ip, port, camera_id, "set_exposure", {"value": int(value)}, request_id=request_id, timeout=timeout)
 
 
 def set_gain(ip: str, port: int, camera_id: str, value: float, request_id: Optional[str] = None, timeout: float = 5.0) -> Dict[str, Any]:
-    req: Dict[str, Any] = {"cmd": "set_gain", "camera_id": camera_id, "params": {"value": float(value)}}
-    if request_id:
-        req["request_id"] = request_id
-    return send_request(ip, port, req, timeout=timeout)
+    return _send(ip, port, camera_id, "set_gain", {"value": float(value)}, request_id=request_id, timeout=timeout)
 
 
 def set_fps(ip: str, port: int, camera_id: str, value: int, request_id: Optional[str] = None, timeout: float = 5.0) -> Dict[str, Any]:
-    req: Dict[str, Any] = {"cmd": "set_fps", "camera_id": camera_id, "params": {"value": int(value)}}
-    if request_id:
-        req["request_id"] = request_id
-    return send_request(ip, port, req, timeout=timeout)
+    return _send(ip, port, camera_id, "set_fps", {"value": int(value)}, request_id=request_id, timeout=timeout)
+
 
 def set_focus(ip: str, port: int, camera_id: str, value: float, request_id: Optional[str] = None, timeout: float = 5.0) -> Dict[str, Any]:
-    req: Dict[str, Any] = {"cmd": "set_focus", "camera_id": camera_id, "params": {"value": float(value)}}
-    if request_id:
-        req["request_id"] = request_id
-    return send_request(ip, port, req, timeout=timeout)
+    return _send(ip, port, camera_id, "set_focus", {"value": float(value)}, request_id=request_id, timeout=timeout)
+
 
 def set_threshold(ip: str, port: int, camera_id: str, value: int, request_id: Optional[str] = None, timeout: float = 5.0) -> Dict[str, Any]:
-    req: Dict[str, Any] = {"cmd": "set_threshold", "camera_id": camera_id, "params": {"value": int(value)}}
-    if request_id:
-        req["request_id"] = request_id
-    return send_request(ip, port, req, timeout=timeout)
+    return _send(ip, port, camera_id, "set_threshold", {"value": int(value)}, request_id=request_id, timeout=timeout)
 
 
 def set_blob_diameter(
@@ -114,10 +130,7 @@ def set_blob_diameter(
         params["min_px"] = float(min_px)
     if max_px is not None:
         params["max_px"] = float(max_px)
-    req: Dict[str, Any] = {"cmd": "set_blob_diameter", "camera_id": camera_id, "params": params}
-    if request_id:
-        req["request_id"] = request_id
-    return send_request(ip, port, req, timeout=timeout)
+    return _send(ip, port, camera_id, "set_blob_diameter", params or None, request_id=request_id, timeout=timeout)
 
 
 def set_circularity_min(
@@ -128,10 +141,7 @@ def set_circularity_min(
     request_id: Optional[str] = None,
     timeout: float = 5.0,
 ) -> Dict[str, Any]:
-    req: Dict[str, Any] = {"cmd": "set_circularity_min", "camera_id": camera_id, "params": {"value": float(value)}}
-    if request_id:
-        req["request_id"] = request_id
-    return send_request(ip, port, req, timeout=timeout)
+    return _send(ip, port, camera_id, "set_circularity_min", {"value": float(value)}, request_id=request_id, timeout=timeout)
 
 
 def set_preview(
@@ -151,10 +161,7 @@ def set_preview(
         params["overlays"] = dict(overlays)
     if charuco:
         params["charuco"] = dict(charuco)
-    req: Dict[str, Any] = {"cmd": "set_preview", "camera_id": camera_id, "params": params}
-    if request_id:
-        req["request_id"] = request_id
-    return send_request(ip, port, req, timeout=timeout)
+    return _send(ip, port, camera_id, "set_preview", params or None, request_id=request_id, timeout=timeout)
 
 
 def intrinsics_start(
@@ -181,10 +188,7 @@ def intrinsics_start(
     }
     if marker_length_mm is not None:
         params["marker_length_mm"] = float(marker_length_mm)
-    req: Dict[str, Any] = {"cmd": "intrinsics_start", "camera_id": camera_id, "params": params}
-    if request_id:
-        req["request_id"] = request_id
-    return send_request(ip, port, req, timeout=timeout)
+    return _send(ip, port, camera_id, "intrinsics_start", params, request_id=request_id, timeout=timeout)
 
 
 def intrinsics_stop(
@@ -194,10 +198,7 @@ def intrinsics_stop(
     request_id: Optional[str] = None,
     timeout: float = 5.0,
 ) -> Dict[str, Any]:
-    req: Dict[str, Any] = {"cmd": "intrinsics_stop", "camera_id": camera_id}
-    if request_id:
-        req["request_id"] = request_id
-    return send_request(ip, port, req, timeout=timeout)
+    return _send(ip, port, camera_id, "intrinsics_stop", request_id=request_id, timeout=timeout)
 
 
 def intrinsics_clear(
@@ -207,10 +208,7 @@ def intrinsics_clear(
     request_id: Optional[str] = None,
     timeout: float = 5.0,
 ) -> Dict[str, Any]:
-    req: Dict[str, Any] = {"cmd": "intrinsics_clear", "camera_id": camera_id}
-    if request_id:
-        req["request_id"] = request_id
-    return send_request(ip, port, req, timeout=timeout)
+    return _send(ip, port, camera_id, "intrinsics_clear", request_id=request_id, timeout=timeout)
 
 
 def intrinsics_calibrate(
@@ -220,10 +218,7 @@ def intrinsics_calibrate(
     request_id: Optional[str] = None,
     timeout: float = 15.0,
 ) -> Dict[str, Any]:
-    req: Dict[str, Any] = {"cmd": "intrinsics_calibrate", "camera_id": camera_id}
-    if request_id:
-        req["request_id"] = request_id
-    return send_request(ip, port, req, timeout=timeout)
+    return _send(ip, port, camera_id, "intrinsics_calibrate", request_id=request_id, timeout=timeout)
 
 
 def intrinsics_status(
@@ -233,10 +228,7 @@ def intrinsics_status(
     request_id: Optional[str] = None,
     timeout: float = 5.0,
 ) -> Dict[str, Any]:
-    req: Dict[str, Any] = {"cmd": "intrinsics_status", "camera_id": camera_id}
-    if request_id:
-        req["request_id"] = request_id
-    return send_request(ip, port, req, timeout=timeout)
+    return _send(ip, port, camera_id, "intrinsics_status", request_id=request_id, timeout=timeout)
 
 
 def _parse_bool_arg(value: str) -> bool:
@@ -274,11 +266,7 @@ def mask_start(
         params["min_area"] = int(min_area)
     if dilate is not None:
         params["dilate"] = int(dilate)
-
-    req: Dict[str, Any] = {"cmd": "mask_start", "camera_id": camera_id, "params": params}
-    if request_id:
-        req["request_id"] = request_id
-    return send_request(ip, port, req, timeout=timeout)
+    return _send(ip, port, camera_id, "mask_start", params or None, request_id=request_id, timeout=timeout)
 
 
 def mask_stop(
@@ -288,10 +276,7 @@ def mask_stop(
     request_id: Optional[str] = None,
     timeout: float = 5.0,
 ) -> Dict[str, Any]:
-    req: Dict[str, Any] = {"cmd": "mask_stop", "camera_id": camera_id}
-    if request_id:
-        req["request_id"] = request_id
-    return send_request(ip, port, req, timeout=timeout)
+    return _send(ip, port, camera_id, "mask_stop", request_id=request_id, timeout=timeout)
 
 
 def _print_json_and_exit(resp: Dict[str, Any]) -> None:
