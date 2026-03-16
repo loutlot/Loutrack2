@@ -96,7 +96,7 @@ HostからPiへ送信する制御コマンド。TCP/JSON (JSON-RPC風)。
 | `ping` | - | 生存確認 |
 
 補足:
-- `control.json` の enum は schema 上の集合で、実際に受理するコマンドは [capture_runtime.py](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/pi/service/capture_runtime.py) の `SCHEMA_COMMANDS` / `MVP_SUPPORTED_COMMANDS` に従います。
+- `control.json` の enum は schema 上の集合で、実際に受理するコマンドは [capture_runtime.py](/src/pi/service/capture_runtime.py) の `SCHEMA_COMMANDS` / `MVP_SUPPORTED_COMMANDS` に従います。
 - `led_on` / `led_off` / `set_resolution` は schema enum に残っていますが、現行 MVP では未サポートです。
 
 ---

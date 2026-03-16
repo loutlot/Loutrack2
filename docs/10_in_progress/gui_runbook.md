@@ -505,7 +505,7 @@ python src/host/wand_gui.py --host 0.0.0.0 --port 8765 --udp-port 5000
 
 ## 9. 関連資料
 
-- [`/README.md`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/README.md) — プロジェクト全体の概要と起動手順
-- [`/src/pi/README.md`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/pi/README.md) — Pi 側 capture 詳細
-- [`/src/camera-calibration/README.md`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/camera-calibration/README.md) — intrinsics 較正の詳細
-- [`/src/host/README.md`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/host/README.md) — Host モジュール概要
+- [`/README.md`](/README.md) — プロジェクト全体の概要と起動手順
+- [`/src/pi/README.md`](/src/pi/README.md) — Pi 側 capture 詳細
+- [`/src/camera-calibration/README.md`](/src/camera-calibration/README.md) — intrinsics 較正の詳細
+- [`/src/host/README.md`](/src/host/README.md) — Host モジュール概要

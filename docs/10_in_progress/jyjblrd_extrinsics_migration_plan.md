@@ -3,7 +3,7 @@
 ## 0. 結論
 
 現行の Loutrack2 の extrinsics 生成は、
-[`/src/camera-calibration/calibrate_extrinsics.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/camera-calibration/calibrate_extrinsics.py)
+[`/src/camera-calibration/calibrate_extrinsics.py`](/src/camera-calibration/calibrate_extrinsics.py)
 で 4 点 wand を 1 フレームごとにラベル付けし、その対応を使って multiview BA まで持っていく構成です。
 
 この構成は「既知剛体を使える」という理論上の強みはある一方で、今回の実データ条件では次の 2 点が支配的な失敗要因になっています。
@@ -11,7 +11,7 @@
 - wand が小さく、2m 前後の距離では 4 点の画素配置差が小さい
 - 失敗の大半が BA より前、つまり `同一フレーム内の 4 点対応付け` で起きている
 
-そのため、[`/references/jyjblrd`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/references/jyjblrd)
+そのため、[`/references/jyjblrd`](/references/jyjblrd)
 の方式を参考にした次の移行が妥当です。
 
 - extrinsics 校正では 4 点 wand を primary 観測として使わない
@@ -27,9 +27,9 @@
 
 参照元:
 
-- [`/references/jyjblrd/Low-Cost-Mocap/computer_code/api/index.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/references/jyjblrd/Low-Cost-Mocap/computer_code/api/index.py)
-- [`/references/jyjblrd/Low-Cost-Mocap/computer_code/api/helpers.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/references/jyjblrd/Low-Cost-Mocap/computer_code/api/helpers.py)
-- [`/references/jyjblrd/theory.md`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/references/jyjblrd/theory.md)
+- [`/references/jyjblrd/Low-Cost-Mocap/computer_code/api/index.py`](/references/jyjblrd/Low-Cost-Mocap/computer_code/api/index.py)
+- [`/references/jyjblrd/Low-Cost-Mocap/computer_code/api/helpers.py`](/references/jyjblrd/Low-Cost-Mocap/computer_code/api/helpers.py)
+- [`/references/jyjblrd/theory.md`](/references/jyjblrd/theory.md)
 
 採用する核は次です。
 
@@ -55,15 +55,15 @@ Loutrack2 で必要なのは、参照実装のライブ側ではなく、`calcul
 現行の主経路は次です。
 
 - GUI:
-  - [`/src/host/wand_gui.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/host/wand_gui.py)
+  - [`/src/host/wand_gui.py`](/src/host/wand_gui.py)
 - 収録:
-  - [`/src/host/wand_session.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/host/wand_session.py)
-  - [`/src/pi/capture.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/pi/capture.py)
+  - [`/src/host/wand_session.py`](/src/host/wand_session.py)
+  - [`/src/pi/capture.py`](/src/pi/capture.py)
 - solver:
-  - [`/src/camera-calibration/calibrate_extrinsics.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/camera-calibration/calibrate_extrinsics.py)
-  - [`/src/camera-calibration/wand_label.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/camera-calibration/wand_label.py)
-  - [`/src/camera-calibration/wand_samples.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/camera-calibration/wand_samples.py)
-  - [`/src/camera-calibration/wand_bundle_adjustment.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/camera-calibration/wand_bundle_adjustment.py)
+  - [`/src/camera-calibration/calibrate_extrinsics.py`](/src/camera-calibration/calibrate_extrinsics.py)
+  - [`/src/camera-calibration/wand_label.py`](/src/camera-calibration/wand_label.py)
+  - [`/src/camera-calibration/wand_samples.py`](/src/camera-calibration/wand_samples.py)
+  - [`/src/camera-calibration/wand_bundle_adjustment.py`](/src/camera-calibration/wand_bundle_adjustment.py)
 
 論理は以下です。
 
@@ -142,7 +142,7 @@ extrinsics 校正を次の 3 レイヤへ分割します。
 
 新規:
 
-- [`/src/camera-calibration/extrinsics_capture.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/camera-calibration/extrinsics_capture.py)
+- [`/src/camera-calibration/extrinsics_capture.py`](/src/camera-calibration/extrinsics_capture.py)
 
 責務:
 
@@ -174,7 +174,7 @@ class PoseCaptureSample:
 
 新規:
 
-- [`/src/camera-calibration/extrinsics_samples.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/camera-calibration/extrinsics_samples.py)
+- [`/src/camera-calibration/extrinsics_samples.py`](/src/camera-calibration/extrinsics_samples.py)
 
 責務:
 
@@ -186,7 +186,7 @@ class PoseCaptureSample:
 
 新規:
 
-- [`/src/camera-calibration/extrinsics_initializer.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/camera-calibration/extrinsics_initializer.py)
+- [`/src/camera-calibration/extrinsics_initializer.py`](/src/camera-calibration/extrinsics_initializer.py)
 
 責務:
 
@@ -199,7 +199,7 @@ class PoseCaptureSample:
 
 新規:
 
-- [`/src/camera-calibration/extrinsics_ba.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/camera-calibration/extrinsics_ba.py)
+- [`/src/camera-calibration/extrinsics_ba.py`](/src/camera-calibration/extrinsics_ba.py)
 
 責務:
 
@@ -219,7 +219,7 @@ class PoseCaptureSample:
 
 新規:
 
-- [`/src/camera-calibration/extrinsics_scale.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/camera-calibration/extrinsics_scale.py)
+- [`/src/camera-calibration/extrinsics_scale.py`](/src/camera-calibration/extrinsics_scale.py)
 
 責務:
 
@@ -237,7 +237,7 @@ scale / floor の候補:
 
 新規:
 
-- [`/src/camera-calibration/extrinsics_validate.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/camera-calibration/extrinsics_validate.py)
+- [`/src/camera-calibration/extrinsics_validate.py`](/src/camera-calibration/extrinsics_validate.py)
 
 責務:
 
@@ -446,7 +446,7 @@ GUI 追加項目:
 ## 7. 出力 schema
 
 既存の
-[`/calibration/calibration_extrinsics_v1.json`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/calibration/calibration_extrinsics_v1.json)
+[`/calibration/calibration_extrinsics_v1.json`](/calibration/calibration_extrinsics_v1.json)
 互換は維持します。
 
 追加する `session_meta`:
@@ -475,7 +475,7 @@ GUI 追加項目:
 ```
 
 重要なのは downstream 互換です。
-[`/src/host/geo.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/host/geo.py)
+[`/src/host/geo.py`](/src/host/geo.py)
 は camera ごとの `rotation_matrix`, `translation_m` を読めればよいので、
 トップレベルの camera 配列は維持します。
 
@@ -559,10 +559,10 @@ GUI 追加項目:
 
 追加:
 
-- [`/tests/test_extrinsics_capture.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/tests/test_extrinsics_capture.py)
-- [`/tests/test_extrinsics_samples.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/tests/test_extrinsics_samples.py)
-- [`/tests/test_extrinsics_initializer.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/tests/test_extrinsics_initializer.py)
-- [`/tests/test_extrinsics_ba.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/tests/test_extrinsics_ba.py)
+- [`/tests/test_extrinsics_capture.py`](/tests/test_extrinsics_capture.py)
+- [`/tests/test_extrinsics_samples.py`](/tests/test_extrinsics_samples.py)
+- [`/tests/test_extrinsics_initializer.py`](/tests/test_extrinsics_initializer.py)
+- [`/tests/test_extrinsics_ba.py`](/tests/test_extrinsics_ba.py)
 
 観点:
 
@@ -575,9 +575,9 @@ GUI 追加項目:
 
 追加:
 
-- [`/tests/test_wand_gui.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/tests/test_wand_gui.py)
+- [`/tests/test_wand_gui.py`](/tests/test_wand_gui.py)
   - `pose_capture` と `wand_metric_capture` の payload を通す
-- [`/tests/test_wand_extrinsics.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/tests/test_wand_extrinsics.py)
+- [`/tests/test_wand_extrinsics.py`](/tests/test_wand_extrinsics.py)
   - `pose_capture -> metric/floor` 出力が schema 互換であることを確認
 
 ### 実機確認

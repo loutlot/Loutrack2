@@ -3,10 +3,10 @@
 ## 0. 目的
 
 現行の `Extrinsics Generation` は、
-[`/src/camera-calibration/calibrate_extrinsics.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/camera-calibration/calibrate_extrinsics.py)
+[`/src/camera-calibration/calibrate_extrinsics.py`](/src/camera-calibration/calibrate_extrinsics.py)
 で「基準カメラ vs 各カメラ」の独立 pairwise 推定を行っています。
 
-今回の変更目的は、[`/references/jyjblrd`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/references/jyjblrd)
+今回の変更目的は、[`/references/jyjblrd`](/references/jyjblrd)
 の実装思想を取り込みつつ、Loutrack2 では既知剛体である 4 点 wand を最大限使う形に
 Extrinsics solver を再設計することです。
 
@@ -25,9 +25,9 @@ Extrinsics solver を再設計することです。
 
 対象:
 
-- [`/src/camera-calibration/calibrate_extrinsics.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/camera-calibration/calibrate_extrinsics.py)
-- [`/src/host/wand_session.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/host/wand_session.py)
-- [`/src/host/wand_gui.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/host/wand_gui.py)
+- [`/src/camera-calibration/calibrate_extrinsics.py`](/src/camera-calibration/calibrate_extrinsics.py)
+- [`/src/host/wand_session.py`](/src/host/wand_session.py)
+- [`/src/host/wand_gui.py`](/src/host/wand_gui.py)
 
 現行フローは概ね次です。
 
@@ -52,9 +52,9 @@ Extrinsics solver を再設計することです。
 
 参照元:
 
-- [`/references/jyjblrd/Low-Cost-Mocap/computer_code/api/index.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/references/jyjblrd/Low-Cost-Mocap/computer_code/api/index.py)
-- [`/references/jyjblrd/Low-Cost-Mocap/computer_code/api/helpers.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/references/jyjblrd/Low-Cost-Mocap/computer_code/api/helpers.py)
-- [`/references/jyjblrd/theory.md`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/references/jyjblrd/theory.md)
+- [`/references/jyjblrd/Low-Cost-Mocap/computer_code/api/index.py`](/references/jyjblrd/Low-Cost-Mocap/computer_code/api/index.py)
+- [`/references/jyjblrd/Low-Cost-Mocap/computer_code/api/helpers.py`](/references/jyjblrd/Low-Cost-Mocap/computer_code/api/helpers.py)
+- [`/references/jyjblrd/theory.md`](/references/jyjblrd/theory.md)
 
 ### 2.1 取り込む実装思想
 
@@ -203,9 +203,9 @@ wand log
 
 変更対象:
 
-- 新規 [`/src/camera-calibration/wand_label.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/camera-calibration/wand_label.py)
-- 既存 [`/src/camera-calibration/calibrate_extrinsics.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/camera-calibration/calibrate_extrinsics.py)
-- [`/tests/test_wand_extrinsics.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/tests/test_wand_extrinsics.py)
+- 新規 [`/src/camera-calibration/wand_label.py`](/src/camera-calibration/wand_label.py)
+- 既存 [`/src/camera-calibration/calibrate_extrinsics.py`](/src/camera-calibration/calibrate_extrinsics.py)
+- [`/tests/test_wand_extrinsics.py`](/tests/test_wand_extrinsics.py)
 
 内容:
 
@@ -222,9 +222,9 @@ wand log
 
 変更対象:
 
-- 新規 [`/src/camera-calibration/wand_samples.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/camera-calibration/wand_samples.py)
-- 既存 [`/src/camera-calibration/calibrate_extrinsics.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/camera-calibration/calibrate_extrinsics.py)
-- 新規または統合 [`/tests/test_wand_extrinsics.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/tests/test_wand_extrinsics.py)
+- 新規 [`/src/camera-calibration/wand_samples.py`](/src/camera-calibration/wand_samples.py)
+- 既存 [`/src/camera-calibration/calibrate_extrinsics.py`](/src/camera-calibration/calibrate_extrinsics.py)
+- 新規または統合 [`/tests/test_wand_extrinsics.py`](/tests/test_wand_extrinsics.py)
 
 内容:
 
@@ -242,8 +242,8 @@ wand log
 
 変更対象:
 
-- 新規 [`/src/camera-calibration/extrinsics_initializer.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/camera-calibration/extrinsics_initializer.py)
-- 既存 [`/src/camera-calibration/calibrate_extrinsics.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/camera-calibration/calibrate_extrinsics.py)
+- 新規 [`/src/camera-calibration/extrinsics_initializer.py`](/src/camera-calibration/extrinsics_initializer.py)
+- 既存 [`/src/camera-calibration/calibrate_extrinsics.py`](/src/camera-calibration/calibrate_extrinsics.py)
 
 内容:
 
@@ -266,8 +266,8 @@ wand log
 
 変更対象:
 
-- 新規 [`/src/camera-calibration/wand_pose_init.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/camera-calibration/wand_pose_init.py)
-- 既存 [`/src/camera-calibration/calibrate_extrinsics.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/camera-calibration/calibrate_extrinsics.py)
+- 新規 [`/src/camera-calibration/wand_pose_init.py`](/src/camera-calibration/wand_pose_init.py)
+- 既存 [`/src/camera-calibration/calibrate_extrinsics.py`](/src/camera-calibration/calibrate_extrinsics.py)
 
 内容:
 
@@ -286,8 +286,8 @@ wand log
 
 変更対象:
 
-- 新規 [`/src/camera-calibration/wand_bundle_adjustment.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/camera-calibration/wand_bundle_adjustment.py)
-- 既存 [`/src/camera-calibration/calibrate_extrinsics.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/camera-calibration/calibrate_extrinsics.py)
+- 新規 [`/src/camera-calibration/wand_bundle_adjustment.py`](/src/camera-calibration/wand_bundle_adjustment.py)
+- 既存 [`/src/camera-calibration/calibrate_extrinsics.py`](/src/camera-calibration/calibrate_extrinsics.py)
 
 最適化変数:
 
@@ -321,9 +321,9 @@ sum robust_norm(project(camera_i, wand_pose_k, X_j) - u_ijk)
 
 変更対象:
 
-- [`/src/camera-calibration/calibrate_extrinsics.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/camera-calibration/calibrate_extrinsics.py)
-- [`/schema/calibration_extrinsics_v1.json`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/schema/calibration_extrinsics_v1.json)
-- [`/schema/README.md`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/schema/README.md)
+- [`/src/camera-calibration/calibrate_extrinsics.py`](/src/camera-calibration/calibrate_extrinsics.py)
+- [`/schema/calibration_extrinsics_v1.json`](/schema/calibration_extrinsics_v1.json)
+- [`/schema/README.md`](/schema/README.md)
 
 追加したい指標:
 
@@ -346,8 +346,8 @@ sum robust_norm(project(camera_i, wand_pose_k, X_j) - u_ijk)
 
 変更対象:
 
-- [`/src/host/wand_gui.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/host/wand_gui.py)
-- [`/tests/test_wand_gui.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/tests/test_wand_gui.py)
+- [`/src/host/wand_gui.py`](/src/host/wand_gui.py)
+- [`/tests/test_wand_gui.py`](/tests/test_wand_gui.py)
 
 内容:
 
@@ -370,11 +370,11 @@ sum robust_norm(project(camera_i, wand_pose_k, X_j) - u_ijk)
 
 変更対象:
 
-- [`/tests/test_wand_extrinsics.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/tests/test_wand_extrinsics.py)
+- [`/tests/test_wand_extrinsics.py`](/tests/test_wand_extrinsics.py)
 - 必要に応じて新規:
-  - [`/tests/test_wand_label.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/tests/test_wand_label.py)
-  - [`/tests/test_wand_samples.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/tests/test_wand_samples.py)
-  - [`/tests/test_wand_bundle_adjustment.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/tests/test_wand_bundle_adjustment.py)
+  - [`/tests/test_wand_label.py`](/tests/test_wand_label.py)
+  - [`/tests/test_wand_samples.py`](/tests/test_wand_samples.py)
+  - [`/tests/test_wand_bundle_adjustment.py`](/tests/test_wand_bundle_adjustment.py)
 
 最低限ほしいケース:
 

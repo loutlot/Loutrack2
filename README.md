@@ -1,62 +1,34 @@
 # Loutrack2
 
-Loutrack2 は、複数 Raspberry Pi カメラで反射マーカーを観測し、Host 側で 3D 復元とトラッキング表示まで行うモーションキャプチャ実験リポジトリです。
+Loutrack2 は、複数 Raspberry Pi カメラで反射マーカーを観測し、Host 側で外部較正とトラッキングまで行うモーションキャプチャ実験リポジトリです。
 
-現時点で到達している範囲:
+## 現在の到達点
 
-- Charuco を使った各カメラの内部較正
-- pose capture からの reference ベース similarity extrinsics 生成
-- Host GUI からの blob 調整 / mask 構築 / pose capture / Generate Extrinsics
-- 外部較正後の tracking runtime 起動と JSON ベースの表示確認
+- Charuco ベースの intrinsics（内部較正）生成
+- pose capture ログから `extrinsics_pose_v2.json` を生成
+- Host GUI から blob/mask/capture/extrinsics/tracking を一貫操作
+- tracking runtime の起動と scene snapshot JSON の確認
 
-この README は、初見の人が「何ができていて」「どの順で進めれば tracking 表示まで到達できるか」を把握するための入口です。
-
-## 1. 全体像
-
-Loutrack2 の流れは次の 4 段階です。
-
-1. `src/pi/service/capture_runtime.py` を各 Raspberry Pi で起動して、反射マーカー blob を UDP 送信できる状態にする
-2. `src/camera-calibration/calibrate.py` で各カメラの intrinsics を作る
-3. `src/host/loutrack_gui.py` で pose capture を収録し、`calibration/extrinsics_pose_v2.json` を作る
-4. 同じ GUI から tracking を起動して、scene snapshot JSON で復元結果を確認する
-
-ざっくり言うと:
-
-- Pi は「2D blob を送る係」
-- Host は「較正・同期・三角測量・姿勢推定・表示を担う係」
-
-## 2. リポジトリ構成
-
-- [`/src/pi`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/pi): Raspberry Pi 側の capture サービス
-- [`/src/host`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/host): Host 側の受信、GUI、tracking runtime
-- [`/src/camera-calibration`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/camera-calibration): Charuco 内部較正と pose-capture 外部較正
-- [`/src/calibration`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/calibration): 較正ドメイン型とターゲット定義（新設）
-- [`/calibration`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/calibration): 較正 JSON とボード出力
-- [`/docs`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/docs): 設計メモ、進行中 runbook、完了済み runbook
-- [`/tests`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/tests): 回帰テスト
-
-### 2.1 正規入口
+## 正規入口
 
 - Host GUI: `host.loutrack_gui` / `src/host/loutrack_gui.py`
 - Session orchestration: `host.wand_session` (`CalibrationSession`, `CalibrationSessionConfig`)
 - Pi runtime: `pi.service.capture_runtime` / `src/pi/service/capture_runtime.py`
 - Wand target model: `calibration.targets.wand`
-- 契約維持対象: `/api/*`, `schema/control.json`, `schema/messages.json`
 
-## 3. 前提
+API/プロトコルの契約として、`/api/*`、`schema/control.json`、`schema/messages.json` は維持対象です。
 
-必要なもの:
+## リポジトリ構成
 
-- Host マシン 1 台
-- Raspberry Pi カメラ 2 台以上
-- 各 Pi で `src/pi/service/capture_runtime.py` が動くこと
-- Host と Pi が同一ネットワークで通信できること
-- 各 Pi に `linuxptp` が導入済みで、`pi-cam-01` を Grandmaster、他 Pi を client とする PTP が常時追従していること
-- Charuco ボード
+- [`src/pi`](src/pi): Pi 側キャプチャサービス
+- [`src/host`](src/host): Host 側 GUI / runtime / orchestration
+- [`src/camera-calibration`](src/camera-calibration): intrinsics / extrinsics CLI
+- [`src/calibration`](src/calibration): 較正ドメイン型と target 定義
+- [`calibration`](calibration): 較正 JSON 出力
+- [`schema`](schema): 制御/メッセージ schema
+- [`tests`](tests): 回帰テスト
 
-`linuxptp` はパッケージ導入だけでは不十分です。`ptp4l` / `phc2sys` を `pi-cam-01` 側 GM、他 Pi 側 client として常時動かし、`pmc -u -b 0 "GET TIME_STATUS_NP"` が読める状態を前提にします。
-
-Python 依存はルートの `requirements.txt` で入ります。
+## セットアップ
 
 ```bash
 python3 -m venv .venv --system-site-packages
@@ -65,11 +37,17 @@ pip install -U pip
 pip install -r requirements.txt
 ```
 
-## 4. 最短で tracking 表示まで行く手順
+前提:
 
-### Step 1. 各 Pi で capture を起動
+- Host 1 台 + Pi カメラ 2 台以上
+- Host/Pi が同一ネットワークで疎通
+- Pi は `linuxptp` 運用（`pi-cam-01` を Grandmaster、他を slave）
 
-Pi ごとに `camera_id` を分けて起動します。
+PTP の詳細は [`src/pi/README.md`](src/pi/README.md) を参照してください。
+
+## 最短手順（tracking 表示まで）
+
+### 1. Pi を起動
 
 ```bash
 .venv/bin/python src/pi/service/capture_runtime.py \
@@ -77,118 +55,59 @@ Pi ごとに `camera_id` を分けて起動します。
   --udp-dest <HOST_IP>:5000
 ```
 
-別の Pi では `pi-cam-02` のように変えます。
+別 Pi は `--camera-id pi-cam-02` のように変えて起動します。
 
-ポイント:
-
-- PTP の初期設定は `pi-cam-01` で `sudo ./src/pi/setup_ptp.sh master`、他 Pi で `sudo ./src/pi/setup_ptp.sh slave` を使うと最短です。標準運用は `software` timestamping で、`hardware` は実験用です
-- Loutrack が入れた PTP 設定を全部戻すときは `sudo ./src/pi/revert_ptp.sh` を使います
-- `pi-cam-01` の wall clock が怪しいときは、session 前に `sudo ./src/pi/manual_ntp_sync.sh` で一度だけ手動 NTP 同期してから PTP に戻せます
-- `Generate Extrinsics` の GUI 既定 `Pair Window (us)` は `2000` です
-- 制御ポートは既定で `8554`
-- UDP は既定で `5000`
-- MJPEG サーバーは既定で `8555` で起動します（`--mjpeg-port 0` で無効化）
-- MJPEG は headless でも利用できます（`--debug-preview` は不要）
-- MJPEG の描画負荷は `set_preview` API で ON/OFF できます（起動直後は render OFF）
-- UDP frame には既存キーに加えて `timestamp_source` が入り、`timestamp` は露光寄りの時刻を優先して出力します
-- `--debug-preview` は通常運用で ON にして、blob 調整や mask 構築の見え方を Pi 側画面で確認します
-- Pi 側 runtime は single pipeline 化され、camera backend は原則 1 本だけを維持します
-- `ping` diagnostics では `clock_sync` と `timestamping` を返し、PTP 健全性と timestamp source を確認できます
-
-Pi 側の詳細は [`/src/pi/README.md`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/pi/README.md) を参照してください。
-
-MJPEG 描画を有効化する例（GUI なしの暫定運用）:
-
-```bash
-PYTHONPATH=src .venv/bin/python -m host.control \
-  --ip <PI_IP> \
-  --camera-id pi-cam-01 \
-  set_preview \
-  --render-enabled true \
-  --overlay-blob true \
-  --overlay-mask true \
-  --overlay-text true \
-  --overlay-charuco true
-```
-
-### Step 2. 各カメラの内部較正を作る
-
-まず Charuco ボードを準備し、各カメラごとに intrinsics を作ります。
-
-ボード生成:
+### 2. intrinsics を作成
 
 ```bash
 python src/camera-calibration/charuco_board.py \
   --output "./calibration/boards/charuco_6x8_30mm_a4.pdf" \
   --write-metadata
-```
 
-内部較正:
-
-```bash
 python src/camera-calibration/calibrate.py \
   --camera pi-cam-01 \
   --square-length-mm <実測値> \
   --output "./calibration/calibration_intrinsics_v1_pi-cam-01.json"
 ```
 
-最低限そろえるファイル:
-
-- `calibration/calibration_intrinsics_v1_pi-cam-01.json`
-- `calibration/calibration_intrinsics_v1_pi-cam-02.json`
-
-内部較正の詳細は [`/src/camera-calibration/README.md`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/camera-calibration/README.md) を参照してください。
-
-### Step 3. Host GUI を起動
-
-Host で次を実行します。
+### 3. Host GUI を起動
 
 ```bash
 python src/host/loutrack_gui.py --host 0.0.0.0 --port 8765 --udp-port 5000
 ```
 
-ブラウザで以下を開きます。
+ブラウザで `http://<HOST_IP>:8765/` を開きます。
 
-- `http://<HOST_IP>:8765/`
-- `0.0.0.0` は Host 側の待受アドレスです。Pi 側 `--udp-dest` には `0.0.0.0:5000` ではなく、必ず Host の実 IP (`<HOST_IP>:5000`) を指定します。
+### 4. GUI で extrinsics を生成
 
-GUI は calibration ページと tracking ページを持っています。
+推奨フロー:
 
-2026-03-16 UI 更新（`src/host/loutrack_gui.py`）:
+1. `Refresh`
+2. カメラ選択
+3. `Ping`
+4. `Blob Detection Adjustment`
+5. `Mask Adjustment` (`Build Mask`)
+6. `Pose Capture`（開始/停止）
+7. `Floor / Metric`（数秒）
+8. `Generate Extrinsics`
 
-- GUI 全体がブラウザの表示領域（幅・高さ）に追従するように固定 `1300x900` を廃止し、`100vw/100vh` ベースに変更
-- Calibration 系ページ（Blob / Mask / Pose）の左右 `div.panel` 分割比を共通クラス化して統一
-- `Mask Build` ページにも MJPEG プレビューグリッドを追加（新規 `mjpegGridMask`）
+### 5. Tracking を起動
 
-### Step 4. GUI で外部較正を作る
+GUI の tracking ページで `Start Tracking` を実行し、scene snapshot の更新を確認します。
 
-GUI 上では、基本的に次の順で進めます。
+## 主要出力ファイル
 
-1. `Refresh` でカメラ一覧を更新
-2. 対象カメラを選択
-3. `Ping` で `ack=true` を確認
-4. `Blob Detection Adjustment` で threshold / circularity / blob diameter / exposure などを調整
-5. `Mask Adjustment` で `Build Mask`
-6. `Pose Capture` セクションで `Start Pose Capture`
-7. 単一点ターゲットを空間全体で動かして pose log を収録
-8. `Stop Pose Capture` で収録を止める
-9. wand を床に静置して `Capture Floor / Metric` を数秒だけ実行
-10. `Generate Extrinsics` で pose + wand floor/metric をまとめて解く
+- `calibration/calibration_intrinsics_v1_<camera_id>.json`
+- `calibration/extrinsics_pose_v2.json`
+- `logs/extrinsics_pose_capture.jsonl`
+- `logs/extrinsics_wand_metric.jsonl`
+- `logs/loutrack_gui_settings.json`
 
-既定の重要パス:
+GUI 設定は `logs/loutrack_gui_settings.json` が唯一の保存先です。旧 `logs/wand_gui_settings.json` は起動時に 1 回だけ移行・削除されます。
 
-- pose 収録ログ: `logs/extrinsics_pose_capture.jsonl`
-- wand metric/floor 収録ログ: `logs/extrinsics_wand_metric.jsonl`
-- GUI 設定: `logs/loutrack_gui_settings.json`（起動時に旧 `logs/wand_gui_settings.json` があれば 1 回だけ自動移行）
-- 外部較正出力: `calibration/extrinsics_pose_v2.json`
+## よく使う CLI
 
-GUI の workflow は、当該 log ファイルがすでに存在する場合も `Pose Capture` / `Floor / Metric` を完了扱いにします。途中で GUI を再起動しても、同じ log path を指していればそのまま `Generate Extrinsics` を再開できます。
-
-Intrinsics タブでは、MJPEG quick-fill ボタンで選んだカメラの `Camera ID` / `MJPEG URL` をその場で反映し、表示中 preview もそのカメラへ即切り替えます。`Send Feed` 操作は不要です。intrinsics 画面のカメラ操作は focus / exposure / gain / fps に絞り、threshold など blob 調整は calibration 側で行います。定期 state refresh は intrinsics の保存済み `Camera ID` を自動復元しないため、作業中のカメラ選択が `pi-cam-01` に戻ることはありません。
-
-`Generate Extrinsics` は、pose log 不足や single-blob 観測不足でも HTTP 400 で処理を止めず、GUI の status に `ok: false` と `pose_log_summary` を返します。これにより、どの camera に何行あり、single-blob row が何件あるかを見ながらそのまま切り分けできます。
-
-外部較正を CLI で直接作る場合:
+外部較正を CLI で実行:
 
 ```bash
 .venv/bin/python src/camera-calibration/calibrate_extrinsics.py \
@@ -198,9 +117,7 @@ Intrinsics タブでは、MJPEG quick-fill ボタンで選んだカメラの `Ca
   --output calibration/extrinsics_pose_v2.json
 ```
 
-床置き wand の log が揃っていれば、`Generate Extrinsics` は similarity `pose` に加えて `metric` / `world` も解きます。wand log が無い場合だけ `metric` / `world` は `unresolved` のまま残ります。
-
-床置き wand だけを CLI で短時間収録したい場合:
+床置き wand 収録のみ実行:
 
 ```bash
 .venv/bin/python src/host/auxiliary/capture_wand_floor.py \
@@ -208,156 +125,40 @@ Intrinsics タブでは、MJPEG quick-fill ボタンで選んだカメラの `Ca
   --duration-s 3.0
 ```
 
-`pose.solve_summary` には reprojection 指標に加えて、非 anchor 観測の timestamp 差分統計
-`matched_delta_us_p50` / `matched_delta_us_p90` / `matched_delta_us_max` も保存されます。
+## テスト
 
-`calibration/extrinsics_pose_v2.json` を `matplotlib` で 3D 可視化したい場合は、次で PNG 出力できます。
-
-```bash
-.venv/bin/python src/host/auxiliary/view_extrinsics_3d.py \
-  --extrinsics calibration/extrinsics_pose_v2.json \
-  --intrinsics-dir calibration \
-  --save logs/extrinsics_pose_v2_view.png
-```
-
-pose log の「悪化が時間起因か、位置起因か」を切り分けたい場合は、次の分析 CLI を使えます。
+最小 smoke:
 
 ```bash
-.venv/bin/python src/camera-calibration/analyze_pose_segments.py \
-  --intrinsics calibration \
-  --extrinsics calibration/extrinsics_pose_v2.json \
-  --pose-log logs/extrinsics_pose_capture.jsonl \
-  --pair-window-us 2000 \
-  --output logs/extrinsics_pose_segments_analysis.json
+PYTHONPATH=src .venv/bin/python -m pytest tests/test_refactor_compatibility.py
 ```
 
-この出力には、時間セグメント、anchor 画像グリッド、3D 位置軸ごとの reprojection 誤差集計と、
-`diagnosis.likely_driver` による時間優勢 / 位置優勢のヒントが入ります。
-
-悪い時間帯だけ除外して再 solve を試したい場合は、次で pose log を再生成できます。
+主要回帰:
 
 ```bash
-.venv/bin/python src/camera-calibration/filter_pose_log_segments.py \
-  --intrinsics calibration \
-  --extrinsics calibration/extrinsics_pose_v2.json \
-  --pose-log logs/extrinsics_pose_capture.jsonl \
-  --output logs/extrinsics_pose_capture_filtered.jsonl \
-  --pair-window-us 2000 \
-  --median-ratio-threshold 1.5
+PYTHONPATH=src .venv/bin/python -m pytest \
+  tests/test_extrinsics_gui_v2.py \
+  tests/test_tracking_runtime.py \
+  tests/test_calibration_session.py \
+  tests/test_pi_blob_detector.py \
+  tests/test_pi_capture_controls.py \
+  tests/test_pi_control_e2e.py \
+  tests/test_pi_backend_unavailable.py \
+  tests/test_pi_udp_emitter.py \
+  tests/test_extrinsics_pose_v2.py \
+  tests/test_extrinsics_samples.py \
+  tests/test_refactor_compatibility.py
 ```
 
-その後、filtered log を使ってもう一度 extrinsics を解きます。
+## 詳細ドキュメント
 
-pose log の 2D 座標だけを各カメラ別の動画にしたい場合は、次を使います。
+- Host 実装: [`src/host/README.md`](src/host/README.md)
+- Pi 実装: [`src/pi/README.md`](src/pi/README.md)
+- Camera calibration: [`src/camera-calibration/README.md`](src/camera-calibration/README.md)
+- Deploy: [`src/deploy/README.md`](src/deploy/README.md)
+- 運用 runbook: [`docs`](docs)
 
-```bash
-.venv/bin/python src/host/auxiliary/render_pose_log_2d.py \
-  --log logs/extrinsics_pose_capture.jsonl \
-  --output-dir logs/pose_trace_videos
-```
+## 更新メモ（2026-03-17）
 
-Pi 側の debug preview は camera pipeline と分離された best-effort 描画です。capture backend の再起動や preview handoff は行わず、同じ camera stream から idle / mask build / capture を処理します。高負荷時は preview frame を drop して capture を優先します。
-また、`capture` / `pose_capture` / `wand_metric_capture` の全 mode で static mask が必須です。`Build Mask` 後に `READY` へ入っていないカメラは `start` できません。
-`pose_capture` の UDP payload は full blobs を保持し、Pi 側では best blob 1 点に潰しません。single-blob row 判定は host 側 `calibrate_extrinsics.py` の reader が `blob_count` と `len(blobs)` を見て行います。
-
-## 5. tracking を起動して表示確認
-
-外部較正が生成済みなら、GUI の tracking ページで `Start Tracking` を押します。
-
-ここで確認できるもの:
-
-- tracking status JSON
-- scene snapshot JSON
-- `frames_processed`
-- `poses_estimated`
-- カメラ情報と raw points
-- 直感的に監視できる tracking confirmation ページ
-
-Tracking タブには組み込みの `three.js` ビューアを使った 3D canvas があり、
-カメラの frustum、rigid body（軸・マーカー・トレイル）と raw points をリアルタイムで描画します。右側には per-camera health card（FPS / latency / blob 平均）と rigids サマリーを並べ、`Start`/`Stop` ボタン越しにトラッキング品質を GUI 上だけで判断できます。  
-このビューアの静的アセットは repo 直下の `static/vendor/three.module.min.js` を HTTP 配信して読み込みます。
-
-今の実装は「tracking runtime が立ち上がり、scene snapshot を返せる」段階です。初見向けにはまずこの JSON が更新されるところまで到達できれば十分です。
-
-## 6. いま理解しておくべきファイル
-
-最初に読む対象を絞るならこの 5 つで十分です。
-
-- [`/src/pi/service/capture_runtime.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/pi/service/capture_runtime.py): Pi 側の 2D blob 検出と送信
-- [`/src/host/loutrack_gui.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/host/loutrack_gui.py): 現在の正規運用入口
-- [`/src/host/tracking_runtime.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/host/tracking_runtime.py): tracking の起動と scene snapshot
-- [`/src/camera-calibration/calibrate.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/camera-calibration/calibrate.py): intrinsics 作成
-- [`/src/camera-calibration/calibrate_extrinsics.py`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/camera-calibration/calibrate_extrinsics.py): pose capture ログから reference ベース extrinsics 作成
-
-## 7. 生成される成果物
-
-実行すると主に次が増えます。
-
-- `calibration/calibration_intrinsics_v1_<camera_id>.json`
-- `calibration/extrinsics_pose_v2.json`
-- `logs/extrinsics_pose_capture.jsonl`
-- `logs/extrinsics_wand_metric.jsonl`
-- `logs/loutrack_gui_settings.json`
-
-README を読む側は、まずこの 5 つが何者かを把握すると迷いにくいです。
-
-## 8. 詰まりやすい点
-
-- `Refresh` してもカメラが出ない
-  - Pi 側の `capture_runtime.py` が起動しているか
-  - `--udp-dest` やネットワーク経路が合っているか
-  - GUI は `Refresh` 実行時に「現在のチェックなし (`camera_ids=[]`)」を受け取るとカメラ絞り込みを解除し、全発見カメラを再表示する（古い選択IDで空一覧に固定されない）
-- `Ping` が通らない
-  - Host から Pi の `8554/tcp` に届いているか
-  - `camera_id` と実機の対応が崩れていないか
-  - `src/deploy/hosts.ini` の IP と `camera_id` が、Pi 側 `capture_runtime.py --camera-id ...` の実起動値と一致しているか
-  - `ping` の `clock_sync.status` が `unknown` / `degraded` のまま張り付いていないか
-  - `ping` が通っても GUI に反映されない場合は、まず `Refresh` を押してから対象カメラのチェック状態を確認する
-  - `Refresh` / `Ping` を押したとき、GUI サーバーのターミナルに `[loutrack_gui] POST /api/command ...` が出るかを確認する（出ない場合はブラウザ側の実行エラーを疑う）
-- `sudo systemctl stop systemd-timesyncd` や `disable` が必要になるケースがある
-- ボタンを押しても無反応に見える
-  - `Last Result` に `load_state: ...` / `command_ping: ...` 形式のエラーが出ていないか確認する
-- `set_exposure` / `set_focus` を送っても Pi preview が変わらない
-  - Pi 側 `picamera2` backend は manual exposure 時に `AeEnable=false`、manual focus 時に `AfMode=Manual` が必要
-  - このリポジトリではその manual 制御を有効化済みなので、古いプロセスが残っている場合は Pi 側 `capture_runtime.py` を再起動する
-- extrinsics が生成できない
-  - `calibration/` に対象カメラ分の intrinsics があるか
-- `logs/extrinsics_pose_capture.jsonl` に複数カメラの単点観測が入っているか
-- tracking が始まらない
-  - `calibration/extrinsics_pose_v2.json` ができているか
-
-### 直近の実装アップデート（2026-03）
-
-- `src/pi/service/capture_runtime.py` の frame timestamp を露光寄りに寄せ、`sensor_metadata` がある場合はそれを優先、無い場合だけ `capture_dequeue` fallback にするよう更新
-- UDP frame schema は互換を維持したまま `timestamp_source` を追加し、`ping` diagnostics には `clock_sync` / `timestamping` を追加
-- `pi-cam-01` を固定 Grandmaster とする PTP 前提を導入し、Pi 側 OS prerequisite に `linuxptp` を追加
-- `pose.solve_summary` に `matched_delta_us_p50` / `matched_delta_us_p90` / `matched_delta_us_max` を追加し、reprojection と timing quality を並べて確認できるよう更新
-- `Generate Extrinsics` を clean-slate でリライトし、`references/jyjblrd` ベースの `pose_capture -> camera row 化 -> 隣接 pair F/E 初期化 -> BA` へ置換
-- 正式出力を `calibration/extrinsics_pose_v2.json` へ変更し、top-level を `pose / metric / world` に分離
-- `src/camera-calibration/calibrate_extrinsics.py` / `tests/...` など多数更新（省略）
-
-## 9. 詳細ドキュメント
-
-- Host モジュール概要: [`/src/host/README.md`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/host/README.md)
-- 内部較正: [`/src/camera-calibration/README.md`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/camera-calibration/README.md)
-- GUI operator runbook: [`/docs/10_in_progress/gui_runbook.md`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/docs/10_in_progress/gui_runbook.md)
-- wand 4点 / referenceベース extrinsics 再設計計画: [`/docs/10_in_progress/wand_4point_extrinsics_plan.md`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/docs/10_in_progress/wand_4point_extrinsics_plan.md)
-- jyjblrd ベース extrinsics migration 計画: [`/docs/10_in_progress/jyjblrd_extrinsics_migration_plan.md`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/docs/10_in_progress/jyjblrd_extrinsics_migration_plan.md)
-- wand 運用 runbook: [`/docs/20_completed/24_next_steps_wand_runbook.md`](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/docs/20_completed/24_next_steps_wand_runbook.md)
-
-## 10. 現状の位置づけ
-
-このリポジトリは「calibration から tracking 表示までの実働フロー」が通った段階です。いまの README は、実装の全詳細を説明するよりも、初見の人が次の 2 点を短時間で理解できるようにすることを目的にしています。
-
-- 何をどの順で起動すればよいか
-
-## 11. 更新履歴
-
-- 2026-03-16: 旧互換入口（`src/host/wand_gui.py`, `src/pi/capture.py`, `src/wand_model.py`）を削除し、`loutrack_gui` / `pi.service.capture_runtime` / `calibration.targets.wand` へ一本化。
-- 2026-03-16: GUI 設定は `logs/loutrack_gui_settings.json` を唯一の保存先とし、旧 `logs/wand_gui_settings.json` は起動時に 1 回だけ移行して削除する方式へ変更。
-- 2026-03-16: `context/request.md` を整理し、内容を見やすくしました。
-- どのファイルが入力で、どの JSON が出力なのか
-
-- 2026-03-16 追記: Floor / Metric ページの capture card を中央固定から上寄せ左配置に変更し、他ビューと同じ配置感に統一（`src/host/loutrack_gui.py`）。
-- 2026-03-16 追記: `src/host` のうち本流から直接使わない CLI 補助スクリプトを `src/host/auxiliary/` へ移動し、ホスト本体の入口を見分けやすく整理。
-- 2026-03-16 追記: `schema/` を現行実装に合わせて更新し、UDP frame schema に `timestamp_source` / `capture_mode` / `blob_count` / `quality` を反映、外部較正の現行出力 schema として `calibration_extrinsics_v2.json` を追加。
+- README をゼロベースで再構成（導線を quickstart 中心へ整理）
+- 旧互換入口の説明を除去し、新正規入口だけを掲載
