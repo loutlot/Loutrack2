@@ -157,6 +157,88 @@ def set_preview(
     return send_request(ip, port, req, timeout=timeout)
 
 
+def intrinsics_start(
+    ip: str,
+    port: int,
+    camera_id: str,
+    *,
+    square_length_mm: float,
+    marker_length_mm: float | None = None,
+    squares_x: int = 6,
+    squares_y: int = 8,
+    min_frames: int = 25,
+    cooldown_s: float = 1.5,
+    request_id: Optional[str] = None,
+    timeout: float = 5.0,
+) -> Dict[str, Any]:
+    params: Dict[str, Any] = {
+        "camera_id": str(camera_id),
+        "square_length_mm": float(square_length_mm),
+        "squares_x": int(squares_x),
+        "squares_y": int(squares_y),
+        "min_frames": int(min_frames),
+        "cooldown_s": float(cooldown_s),
+    }
+    if marker_length_mm is not None:
+        params["marker_length_mm"] = float(marker_length_mm)
+    req: Dict[str, Any] = {"cmd": "intrinsics_start", "camera_id": camera_id, "params": params}
+    if request_id:
+        req["request_id"] = request_id
+    return send_request(ip, port, req, timeout=timeout)
+
+
+def intrinsics_stop(
+    ip: str,
+    port: int,
+    camera_id: str,
+    request_id: Optional[str] = None,
+    timeout: float = 5.0,
+) -> Dict[str, Any]:
+    req: Dict[str, Any] = {"cmd": "intrinsics_stop", "camera_id": camera_id}
+    if request_id:
+        req["request_id"] = request_id
+    return send_request(ip, port, req, timeout=timeout)
+
+
+def intrinsics_clear(
+    ip: str,
+    port: int,
+    camera_id: str,
+    request_id: Optional[str] = None,
+    timeout: float = 5.0,
+) -> Dict[str, Any]:
+    req: Dict[str, Any] = {"cmd": "intrinsics_clear", "camera_id": camera_id}
+    if request_id:
+        req["request_id"] = request_id
+    return send_request(ip, port, req, timeout=timeout)
+
+
+def intrinsics_calibrate(
+    ip: str,
+    port: int,
+    camera_id: str,
+    request_id: Optional[str] = None,
+    timeout: float = 15.0,
+) -> Dict[str, Any]:
+    req: Dict[str, Any] = {"cmd": "intrinsics_calibrate", "camera_id": camera_id}
+    if request_id:
+        req["request_id"] = request_id
+    return send_request(ip, port, req, timeout=timeout)
+
+
+def intrinsics_status(
+    ip: str,
+    port: int,
+    camera_id: str,
+    request_id: Optional[str] = None,
+    timeout: float = 5.0,
+) -> Dict[str, Any]:
+    req: Dict[str, Any] = {"cmd": "intrinsics_status", "camera_id": camera_id}
+    if request_id:
+        req["request_id"] = request_id
+    return send_request(ip, port, req, timeout=timeout)
+
+
 def _parse_bool_arg(value: str) -> bool:
     raw = str(value).strip().lower()
     if raw in {"1", "true", "t", "yes", "y", "on"}:

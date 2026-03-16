@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import queue
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -95,6 +97,8 @@ def test_control_server_ping_includes_blob_diagnostics_and_runtime() -> None:
         "charuco": True,
     }
     assert result["charuco_config"]["dictionary"] == "DICT_6X6_250"
+    assert "intrinsics_start" in result["supported_commands"]
+    assert "intrinsics_status" in result["supported_commands"]
     assert result["blob_diagnostics"]["threshold"] == 200
     assert result["clock_sync"]["status"] in {"locked", "degraded", "unknown"}
     assert result["clock_sync"]["role"] in {"master", "slave", "unknown"}
@@ -365,3 +369,163 @@ def test_debug_preview_close_window_preserves_enabled() -> None:
     preview._initialized = True
     preview.close_window()
     assert preview.enabled is True
+
+
+def test_intrinsics_start_dispatch_sets_pipeline_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=False))
+    captured: dict[str, object] = {}
+
+    class _FakePipeline:
+        def set_intrinsics_session(self, session):
+            captured["session"] = session
+
+    def _fake_start(config) -> None:
+        captured["config"] = config
+
+    def _fake_status_payload() -> dict[str, object]:
+        return {
+            "phase": "capturing",
+            "camera_id": "pi-cam-01",
+            "frames_captured": 0,
+            "frames_needed": 25,
+            "frames_target": 50,
+            "frames_rejected_cooldown": 0,
+            "frames_rejected_spatial": 0,
+            "frames_rejected_detection": 0,
+            "grid_coverage": [[0, 0, 0], [0, 0, 0], [0, 0, 0]],
+            "last_error": None,
+            "calibration_result": None,
+        }
+
+    monkeypatch.setattr(server, "_ensure_pipeline_started", lambda: _FakePipeline())
+    monkeypatch.setattr(server._intrinsics_session, "start", _fake_start)
+    monkeypatch.setattr(server._intrinsics_session, "status_payload", _fake_status_payload)
+
+    response = server._dispatch_intrinsics_start(
+        "req-1",
+        "pi-cam-01",
+        {
+            "camera_id": "pi-cam-01",
+            "square_length_mm": 30.0,
+            "marker_length_mm": 22.5,
+            "squares_x": 6,
+            "squares_y": 8,
+            "min_frames": 25,
+            "cooldown_s": 1.5,
+        },
+    )
+
+    assert response["ack"] is True
+    assert "config" in captured
+    assert "session" in captured
+
+
+def test_processing_worker_uses_raw_frame_for_detection_and_intrinsics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frame_queue: queue.Queue[object] = queue.Queue(maxsize=2)
+    calls: dict[str, int] = {}
+
+    class _SpyIntrinsics:
+        def consume_frame(self, frame: np.ndarray) -> None:
+            calls["intrinsics_frame_id"] = id(frame)
+
+    def _fake_detect_blobs(
+        frame: np.ndarray,
+        *,
+        threshold: int,
+        mask: np.ndarray | None,
+        min_diameter_px: float | None,
+        max_diameter_px: float | None,
+        circularity_min: float,
+    ):
+        _ = (threshold, mask, min_diameter_px, max_diameter_px, circularity_min)
+        calls["detect_frame_id"] = id(frame)
+        return [], {
+            "threshold": 200,
+            "min_diameter_px": None,
+            "max_diameter_px": None,
+            "circularity_min": 0.0,
+            "raw_contour_count": 0,
+            "accepted_blob_count": 0,
+            "rejected_by_diameter": 0,
+            "rejected_by_circularity": 0,
+            "last_blob_count": 0,
+        }
+
+    monkeypatch.setattr(capture_mod, "detect_blobs", _fake_detect_blobs)
+
+    worker = capture_mod._ProcessingWorker(
+        camera_id="pi-cam-01",
+        udp_host="127.0.0.1",
+        udp_port=5000,
+        frame_queue=frame_queue,
+        preview_worker=None,
+        log_fn=lambda _msg: None,
+    )
+    worker.set_intrinsics_session(_SpyIntrinsics())
+    worker.start()
+    frame = np.zeros((24, 32, 3), dtype=np.uint8)
+    try:
+        frame_queue.put(
+            capture_mod._FramePacket(
+                captured_frame=capture_mod.CapturedFrame(
+                    image=frame,
+                    timestamp_us=1,
+                    timestamp_source="capture_dequeue",
+                ),
+                captured_monotonic_ns=time.monotonic_ns(),
+            )
+        )
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            if "detect_frame_id" in calls and "intrinsics_frame_id" in calls:
+                break
+            time.sleep(0.01)
+    finally:
+        worker.stop()
+
+    assert calls.get("detect_frame_id") == id(frame)
+    assert calls.get("intrinsics_frame_id") == id(frame)
+
+
+def test_charuco_overlay_draw_requires_minimum_six_corners(monkeypatch: pytest.MonkeyPatch) -> None:
+    renderer = capture_mod._CharucoOverlayRenderer()
+    draw_calls = {"count": 0}
+
+    class _FakeAruco:
+        def detectMarkers(self, gray, dictionary, parameters=None):
+            _ = (gray, dictionary, parameters)
+            corners = [np.zeros((4, 1, 2), dtype=np.float32) for _ in range(4)]
+            ids = np.arange(4, dtype=np.int32).reshape(-1, 1)
+            return corners, ids, None
+
+        def interpolateCornersCharuco(self, marker_corners, marker_ids, gray, board):
+            _ = (marker_corners, marker_ids, gray, board)
+            corners = np.zeros((5, 1, 2), dtype=np.float32)
+            ids = np.arange(5, dtype=np.int32).reshape(-1, 1)
+            return corners, ids, None
+
+        def drawDetectedCornersCharuco(self, image, corners, ids):
+            _ = (image, corners, ids)
+            draw_calls["count"] += 1
+
+    fake_aruco = _FakeAruco()
+    monkeypatch.setattr(renderer, "_resources", lambda _cfg: (fake_aruco, object(), object()))
+    monkeypatch.setattr(capture_mod, "_create_aruco_detector_parameters", lambda _aruco: object())
+    canvas = np.zeros((64, 64, 3), dtype=np.uint8)
+
+    renderer.draw(canvas, capture_mod.PreviewCharucoConfig())
+    assert draw_calls["count"] == 0
+
+    class _FakeArucoSix(_FakeAruco):
+        def interpolateCornersCharuco(self, marker_corners, marker_ids, gray, board):
+            _ = (marker_corners, marker_ids, gray, board)
+            corners = np.zeros((6, 1, 2), dtype=np.float32)
+            ids = np.arange(6, dtype=np.int32).reshape(-1, 1)
+            return corners, ids, None
+
+    fake_aruco_six = _FakeArucoSix()
+    monkeypatch.setattr(renderer, "_resources", lambda _cfg: (fake_aruco_six, object(), object()))
+    renderer.draw(canvas, capture_mod.PreviewCharucoConfig())
+    assert draw_calls["count"] == 1

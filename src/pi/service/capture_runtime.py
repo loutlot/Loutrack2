@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import queue
 import importlib
+import importlib.util
 import json
 import math
 import os
@@ -58,6 +59,9 @@ DEFAULT_CHARUCO_SQUARES_X = 6
 DEFAULT_CHARUCO_SQUARES_Y = 8
 DEFAULT_CHARUCO_SQUARE_LENGTH_MM = 30.0
 DEFAULT_CHARUCO_MARKER_LENGTH_MM = 22.5
+DEFAULT_INTRINSICS_TARGET_FRAMES = 50
+DEFAULT_INTRINSICS_SPATIAL_THRESHOLD_PX = 40.0
+CHARUCO_DETECTION_MIN_CORNERS = 6
 PREVIEW_STOP_TIMEOUT_SECONDS = 2.0
 PROCESSING_QUEUE_MAXSIZE = 2
 PREVIEW_QUEUE_MAXSIZE = 1
@@ -84,6 +88,11 @@ SCHEMA_COMMANDS = {
     "mask_start",
     "mask_stop",
     "set_preview",
+    "intrinsics_start",
+    "intrinsics_stop",
+    "intrinsics_clear",
+    "intrinsics_calibrate",
+    "intrinsics_status",
     "led_on",
     "led_off",
     "set_resolution",
@@ -104,6 +113,11 @@ MVP_SUPPORTED_COMMANDS = {
     "mask_start",
     "mask_stop",
     "set_preview",
+    "intrinsics_start",
+    "intrinsics_stop",
+    "intrinsics_clear",
+    "intrinsics_calibrate",
+    "intrinsics_status",
 }
 
 
@@ -199,6 +213,16 @@ def get_default_backend() -> str:
     return "picamera2" if running_on_raspberry_pi() else "dummy"
 
 
+def _load_intrinsics_calibrate_module() -> Any:
+    script_path = Path(__file__).resolve().parents[2] / "camera-calibration" / "calibrate.py"
+    spec = importlib.util.spec_from_file_location("_pi_intrinsics_calibrate", script_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"failed_to_load_calibrate_module: {script_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _latest_queue_put(target_queue: queue.Queue[object], item: object) -> int:
     dropped = 0
     while True:
@@ -284,6 +308,269 @@ def _finalize_static_mask_from_hits(
 
     mask = mask_uint8.astype(bool)
     return mask, int(np.count_nonzero(mask))
+
+
+@dataclass(frozen=True)
+class _IntrinsicsCaptureConfig:
+    camera_id: str
+    square_length_mm: float
+    marker_length_mm: float
+    squares_x: int
+    squares_y: int
+    min_frames: int
+    cooldown_s: float
+    dictionary: str = DEFAULT_CHARUCO_DICTIONARY
+    target_frames: int = DEFAULT_INTRINSICS_TARGET_FRAMES
+    spatial_threshold_px: float = DEFAULT_INTRINSICS_SPATIAL_THRESHOLD_PX
+
+
+class _IntrinsicsCaptureSession:
+    def __init__(
+        self,
+        *,
+        camera_id: str,
+        log_fn: Callable[[str], None],
+    ) -> None:
+        self._camera_id = camera_id
+        self._log = log_fn
+        self._lock = threading.Lock()
+        self._phase = "idle"
+        self._config: _IntrinsicsCaptureConfig | None = None
+        self._board: Any = None
+        self._dictionary: Any = None
+        self._cal_module: Any = None
+        self._generation = 0
+        self._captured_corners: list[np.ndarray] = []
+        self._captured_ids: list[np.ndarray] = []
+        self._image_size: tuple[int, int] | None = None
+        self._last_capture_time = 0.0
+        self._last_captured_corners: np.ndarray | None = None
+        self._grid_coverage = np.zeros((3, 3), dtype=int)
+        self._calibration_result: dict[str, object] | None = None
+        self._last_error: str | None = None
+        self._rejected_cooldown = 0
+        self._rejected_spatial = 0
+        self._rejected_detection = 0
+
+    def start(self, config: _IntrinsicsCaptureConfig) -> None:
+        marker_mm = float(config.marker_length_mm)
+        square_mm = float(config.square_length_mm)
+        if marker_mm <= 0.0 or square_mm <= 0.0:
+            raise ValueError("invalid_request: intrinsics square/marker lengths must be > 0")
+        if marker_mm >= square_mm:
+            raise ValueError("invalid_request: intrinsics marker_length_mm must be smaller than square_length_mm")
+        if int(config.squares_x) < 2 or int(config.squares_y) < 2:
+            raise ValueError("invalid_request: intrinsics squares_x/squares_y must be >= 2")
+        if int(config.min_frames) < 5:
+            raise ValueError("invalid_request: intrinsics min_frames must be >= 5")
+        if float(config.cooldown_s) <= 0.0:
+            raise ValueError("invalid_request: intrinsics cooldown_s must be > 0")
+
+        cal_module = self._ensure_cal_module()
+        dictionary = cal_module.get_dictionary(config.dictionary)
+        board = cal_module.create_charuco_board(
+            squares_x=int(config.squares_x),
+            squares_y=int(config.squares_y),
+            square_length=float(config.square_length_mm) / 1000.0,
+            marker_length=float(config.marker_length_mm) / 1000.0,
+            dictionary=dictionary,
+        )
+
+        with self._lock:
+            self._phase = "capturing"
+            self._config = _IntrinsicsCaptureConfig(
+                camera_id=str(config.camera_id),
+                square_length_mm=float(config.square_length_mm),
+                marker_length_mm=float(config.marker_length_mm),
+                squares_x=int(config.squares_x),
+                squares_y=int(config.squares_y),
+                min_frames=int(config.min_frames),
+                cooldown_s=float(config.cooldown_s),
+                dictionary=str(config.dictionary),
+                target_frames=int(config.target_frames),
+                spatial_threshold_px=float(config.spatial_threshold_px),
+            )
+            self._board = board
+            self._dictionary = dictionary
+            self._generation += 1
+            self._reset_capture_state_locked()
+
+    def stop(self) -> None:
+        with self._lock:
+            if self._phase == "capturing":
+                self._phase = "idle"
+
+    def clear(self) -> None:
+        with self._lock:
+            self._reset_capture_state_locked()
+            if self._phase in {"done", "error"}:
+                self._phase = "idle"
+
+    def calibrate(self) -> dict[str, object]:
+        with self._lock:
+            config = self._config
+            board = self._board
+            if config is None or board is None:
+                raise ValueError("invalid_request: intrinsics_start is required first")
+            if len(self._captured_corners) < int(config.min_frames):
+                raise ValueError(
+                    f"invalid_request: intrinsics requires at least {config.min_frames} frames "
+                    f"(got {len(self._captured_corners)})"
+                )
+            corners = [corner.copy() for corner in self._captured_corners]
+            ids = [ids_i.copy() for ids_i in self._captured_ids]
+            image_size = self._image_size
+            self._phase = "calibrating"
+            self._last_error = None
+
+        if image_size is None:
+            with self._lock:
+                self._phase = "error"
+                self._last_error = "calibration_failed: no_image_size"
+            raise RuntimeError("calibration_failed: no_image_size")
+
+        cal_module = self._ensure_cal_module()
+        try:
+            rms, camera_matrix, dist_coeffs, rvecs, tvecs = cal_module.calibrate_camera_charuco(
+                corners, ids, board, image_size
+            )
+            per_view_errors = cal_module.compute_per_view_errors(
+                corners, ids, board, camera_matrix, dist_coeffs, rvecs, tvecs
+            )
+            total_points = sum(len(corner) for corner in corners)
+            cal_config = cal_module.CalibrateConfig(
+                camera=str(config.camera_id),
+                output=None,
+                square_length_mm=float(config.square_length_mm),
+                marker_length_mm=float(config.marker_length_mm),
+                squares_x=int(config.squares_x),
+                squares_y=int(config.squares_y),
+                dictionary=str(config.dictionary),
+                input_dir=None,
+                self_test=False,
+                self_test_views=30,
+                seed=0,
+                min_frames=int(config.min_frames),
+            )
+            output = cal_module.build_output_json(
+                camera_id=str(config.camera_id),
+                camera_matrix=camera_matrix,
+                dist_coeffs=dist_coeffs,
+                rms_error=rms,
+                image_size=image_size,
+                config=cal_config,
+                per_view_errors=per_view_errors,
+                total_points=total_points,
+                num_valid_frames=len(corners),
+            )
+        except Exception as exc:
+            with self._lock:
+                self._phase = "error"
+                self._last_error = f"calibration_failed: {exc}"
+            raise
+
+        with self._lock:
+            self._calibration_result = cast(dict[str, object], output)
+            self._phase = "done"
+            self._last_error = None
+        return cast(dict[str, object], output)
+
+    def consume_frame(self, frame: np.ndarray) -> None:
+        with self._lock:
+            phase = self._phase
+            config = self._config
+            board = self._board
+            dictionary = self._dictionary
+            generation = self._generation
+
+        if phase != "capturing" or config is None or board is None or dictionary is None:
+            return
+
+        cal_module = self._ensure_cal_module()
+        corners, ids = cal_module.detect_charuco_corners(frame, board, dictionary)
+
+        with self._lock:
+            if generation != self._generation or self._phase != "capturing":
+                return
+            if len(self._captured_corners) >= int(config.target_frames):
+                return
+            if corners is None or ids is None or len(corners) < CHARUCO_DETECTION_MIN_CORNERS:
+                self._rejected_detection += 1
+                return
+
+            now = time.perf_counter()
+            if now - self._last_capture_time < float(config.cooldown_s):
+                self._rejected_cooldown += 1
+                return
+
+            if self._last_captured_corners is not None:
+                n = min(len(corners), len(self._last_captured_corners))
+                if n > 0:
+                    disp = float(
+                        np.mean(
+                            np.linalg.norm(
+                                corners[:n].reshape(-1, 2) - self._last_captured_corners[:n].reshape(-1, 2),
+                                axis=1,
+                            )
+                        )
+                    )
+                    if disp < float(config.spatial_threshold_px):
+                        self._rejected_spatial += 1
+                        return
+
+            cx = min(2, int(np.mean(corners[:, 0, 0]) / max(1, frame.shape[1]) * 3.0))
+            cy = min(2, int(np.mean(corners[:, 0, 1]) / max(1, frame.shape[0]) * 3.0))
+            self._captured_corners.append(corners.copy())
+            self._captured_ids.append(ids.copy())
+            self._last_capture_time = now
+            self._last_captured_corners = corners.copy()
+            self._grid_coverage[cy, cx] += 1
+            self._image_size = (int(frame.shape[1]), int(frame.shape[0]))
+
+    def status_payload(self) -> dict[str, object]:
+        with self._lock:
+            config = self._config
+            return {
+                "phase": self._phase,
+                "camera_id": self._camera_id,
+                "frames_captured": len(self._captured_corners),
+                "frames_needed": int(config.min_frames) if config is not None else 25,
+                "frames_target": int(config.target_frames) if config is not None else DEFAULT_INTRINSICS_TARGET_FRAMES,
+                "frames_rejected_cooldown": int(self._rejected_cooldown),
+                "frames_rejected_spatial": int(self._rejected_spatial),
+                "frames_rejected_detection": int(self._rejected_detection),
+                "grid_coverage": self._grid_coverage.tolist(),
+                "last_error": self._last_error,
+                "calibration_result": self._calibration_result,
+            }
+
+    def is_active(self) -> bool:
+        with self._lock:
+            return self._phase == "capturing"
+
+    def _reset_capture_state_locked(self) -> None:
+        self._captured_corners = []
+        self._captured_ids = []
+        self._image_size = None
+        self._last_capture_time = 0.0
+        self._last_captured_corners = None
+        self._grid_coverage = np.zeros((3, 3), dtype=int)
+        self._calibration_result = None
+        self._last_error = None
+        self._rejected_cooldown = 0
+        self._rejected_spatial = 0
+        self._rejected_detection = 0
+
+    def _ensure_cal_module(self) -> Any:
+        with self._lock:
+            module = self._cal_module
+        if module is not None:
+            return module
+        module = _load_intrinsics_calibrate_module()
+        with self._lock:
+            if self._cal_module is None:
+                self._cal_module = module
+            return self._cal_module
 
 
 @dataclass(frozen=True)
@@ -914,7 +1201,7 @@ class _CharucoOverlayRenderer:
                     charuco_ids = result[2]
         if charuco_corners is None or charuco_ids is None:
             return
-        if len(charuco_corners) < 4:
+        if len(charuco_corners) < CHARUCO_DETECTION_MIN_CORNERS:
             return
 
         draw_charuco = getattr(aruco, "drawDetectedCornersCharuco", None)
@@ -1819,6 +2106,7 @@ class _ProcessingWorker:
         self._state_label = STATE_IDLE
         self._stream_mode: str | None = None
         self._mask_build_request: _MaskBuildRequest | None = None
+        self._intrinsics_session: _IntrinsicsCaptureSession | None = None
         self._last_detection_stats: dict[str, object] = {
             "threshold": self._threshold,
             "min_diameter_px": self._min_diameter_px,
@@ -1901,6 +2189,10 @@ class _ProcessingWorker:
         with self._lock:
             self._mask_build_request = request
 
+    def set_intrinsics_session(self, session: _IntrinsicsCaptureSession | None) -> None:
+        with self._lock:
+            self._intrinsics_session = session
+
     def get_last_detection_stats(self) -> dict[str, object]:
         with self._lock:
             return dict(self._last_detection_stats)
@@ -1967,6 +2259,7 @@ class _ProcessingWorker:
                 state_label = self._state_label
                 stream_mode = self._stream_mode
                 mask_build_request = self._mask_build_request
+                intrinsics_session = self._intrinsics_session
                 sock = self._socket
 
             if mask_build_request is not None:
@@ -1975,7 +2268,15 @@ class _ProcessingWorker:
                 except Exception as exc:  # noqa: BLE001
                     self._log(f"mask build failed: {exc}")
 
+            if intrinsics_session is not None:
+                try:
+                    # Invariant: intrinsics detection always consumes the raw frame.
+                    intrinsics_session.consume_frame(packet.captured_frame.image)
+                except Exception as exc:  # noqa: BLE001
+                    self._log(f"intrinsics frame consume failed: {exc}")
+
             applied_mask = None if state_label == STATE_MASK_INIT else mask
+            # Invariant: blob detection always consumes the raw frame (not preview overlays).
             blobs, stats = detect_blobs(
                 packet.captured_frame.image,
                 threshold=threshold,
@@ -2088,6 +2389,7 @@ class _CapturePipeline:
         self._started = False
         self._stream_mode: str | None = None
         self._mask_build_active = False
+        self._intrinsics_active = False
         self._mjpeg_render_enabled: bool = False
         self._desired_fps = float(DEFAULT_TARGET_FPS)
         self._desired_exposure_us: int | None = None
@@ -2256,6 +2558,12 @@ class _CapturePipeline:
     def set_mjpeg_enabled(self, enabled: bool) -> None:
         self.set_mjpeg_render_enabled(enabled)
 
+    def set_intrinsics_session(self, session: _IntrinsicsCaptureSession | None) -> None:
+        with self._lock:
+            self._intrinsics_active = session is not None and session.is_active()
+        self._processing_worker.set_intrinsics_session(session)
+        self._refresh_activity()
+
     def get_runtime_diagnostics(self) -> dict[str, object]:
         runtime = {}
         runtime.update(self._camera_worker.get_runtime_diagnostics())
@@ -2298,9 +2606,10 @@ class _CapturePipeline:
             desired_fps = max(1.0, float(self._desired_fps))
             stream_mode = self._stream_mode
             mask_build_active = self._mask_build_active
+            intrinsics_active = self._intrinsics_active
             preview_enabled = self._preview_worker is not None
             mjpeg_render_enabled = self._mjpeg_render_enabled
-        if stream_mode is not None or mask_build_active:
+        if stream_mode is not None or mask_build_active or intrinsics_active:
             return desired_fps
         if preview_enabled or mjpeg_render_enabled:
             return min(desired_fps, IDLE_PREVIEW_FPS)
@@ -2311,6 +2620,7 @@ class _CapturePipeline:
             should_run = bool(
                 self._stream_mode is not None
                 or self._mask_build_active
+                or self._intrinsics_active
                 or self._preview_worker is not None
                 or self._mjpeg_render_enabled
             )
@@ -2464,6 +2774,10 @@ class ControlServer:
         self._mask_warning: str | None = None
         self._preview_render_config: PreviewRenderConfig = PreviewRenderConfig()
         self._charuco_renderer = _CharucoOverlayRenderer()
+        self._intrinsics_session = _IntrinsicsCaptureSession(
+            camera_id=self._config.camera_id,
+            log_fn=self._log,
+        )
         self._mjpeg_render_off_jpeg: bytes = _build_placeholder_jpeg("MJPEG render off")
         self._mjpeg_waiting_jpeg: bytes = _build_placeholder_jpeg("MJPEG waiting for frame")
         self._debug_preview: DebugPreview | None = (
@@ -2977,6 +3291,11 @@ class ControlServer:
             "mask_start": lambda: self._handle_mask_start(request_id, request_camera_id, params),
             "mask_stop": lambda: self._handle_mask_stop(request_id, request_camera_id),
             "set_preview": lambda: self._dispatch_set_preview(request_id, request_camera_id, params),
+            "intrinsics_start": lambda: self._dispatch_intrinsics_start(request_id, request_camera_id, params),
+            "intrinsics_stop": lambda: self._dispatch_intrinsics_stop(request_id, request_camera_id, params),
+            "intrinsics_clear": lambda: self._dispatch_intrinsics_clear(request_id, request_camera_id, params),
+            "intrinsics_calibrate": lambda: self._dispatch_intrinsics_calibrate(request_id, request_camera_id, params),
+            "intrinsics_status": lambda: self._dispatch_intrinsics_status(request_id, request_camera_id, params),
         }
         handler = handlers.get(cmd)
         if handler is None:
@@ -3373,6 +3692,264 @@ class ControlServer:
             request_id=request_id,
             request_camera_id=request_camera_id,
             result={"preview": self._preview_config_payload()},
+        )
+
+    def _dispatch_intrinsics_start(
+        self,
+        request_id: str,
+        request_camera_id: str,
+        params: dict[str, object],
+    ) -> dict[str, object]:
+        allowed = {
+            "camera_id",
+            "square_length_mm",
+            "marker_length_mm",
+            "squares_x",
+            "squares_y",
+            "min_frames",
+            "cooldown_s",
+        }
+        unknown = sorted(set(params.keys()) - allowed)
+        if unknown:
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message=f"invalid_request: intrinsics_start unknown keys ({','.join(unknown)})",
+            )
+
+        camera_id_obj = params.get("camera_id", self._config.camera_id)
+        if not isinstance(camera_id_obj, str) or camera_id_obj.strip() != self._config.camera_id:
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message=(
+                    "invalid_request: intrinsics_start.camera_id must match this runtime "
+                    f"({self._config.camera_id})"
+                ),
+            )
+
+        square_raw = params.get("square_length_mm", DEFAULT_CHARUCO_SQUARE_LENGTH_MM)
+        marker_raw = params.get("marker_length_mm")
+        squares_x_raw = params.get("squares_x", DEFAULT_CHARUCO_SQUARES_X)
+        squares_y_raw = params.get("squares_y", DEFAULT_CHARUCO_SQUARES_Y)
+        min_frames_raw = params.get("min_frames", 25)
+        cooldown_raw = params.get("cooldown_s", 1.5)
+
+        if not isinstance(square_raw, (int, float)) or float(square_raw) <= 0.0:
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message="invalid_request: intrinsics_start.square_length_mm must be > 0",
+            )
+        marker_value: float
+        if marker_raw is None:
+            marker_value = float(square_raw) * 0.75
+        elif isinstance(marker_raw, (int, float)):
+            marker_value = float(marker_raw)
+        else:
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message="invalid_request: intrinsics_start.marker_length_mm must be number or null",
+            )
+        if marker_value <= 0.0:
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message="invalid_request: intrinsics_start.marker_length_mm must be > 0",
+            )
+        if marker_value >= float(square_raw):
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message=(
+                    "invalid_request: intrinsics_start.marker_length_mm "
+                    "must be smaller than square_length_mm"
+                ),
+            )
+
+        if not isinstance(squares_x_raw, int) or int(squares_x_raw) < 2:
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message="invalid_request: intrinsics_start.squares_x must be integer >= 2",
+            )
+        if not isinstance(squares_y_raw, int) or int(squares_y_raw) < 2:
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message="invalid_request: intrinsics_start.squares_y must be integer >= 2",
+            )
+        if not isinstance(min_frames_raw, int) or int(min_frames_raw) < 5:
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message="invalid_request: intrinsics_start.min_frames must be integer >= 5",
+            )
+        if not isinstance(cooldown_raw, (int, float)) or float(cooldown_raw) <= 0.0:
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message="invalid_request: intrinsics_start.cooldown_s must be > 0",
+            )
+
+        try:
+            pipeline = self._ensure_pipeline_started()
+            config = _IntrinsicsCaptureConfig(
+                camera_id=self._config.camera_id,
+                square_length_mm=float(square_raw),
+                marker_length_mm=float(marker_value),
+                squares_x=int(squares_x_raw),
+                squares_y=int(squares_y_raw),
+                min_frames=int(min_frames_raw),
+                cooldown_s=float(cooldown_raw),
+            )
+            self._intrinsics_session.start(config)
+            pipeline.set_intrinsics_session(self._intrinsics_session)
+        except BackendUnavailableError as exc:
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_BACKEND_UNAVAILABLE,
+                error_message=f"backend_unavailable: {exc}",
+            )
+        except ValueError as exc:
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message=str(exc),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INTERNAL,
+                error_message=f"internal_error: intrinsics_start_failed: {exc}",
+            )
+        return self._ok_response(
+            request_id=request_id,
+            request_camera_id=request_camera_id,
+            result=self._intrinsics_session.status_payload(),
+        )
+
+    def _dispatch_intrinsics_stop(
+        self,
+        request_id: str,
+        request_camera_id: str,
+        params: dict[str, object],
+    ) -> dict[str, object]:
+        if params:
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message="invalid_request: intrinsics_stop does not accept params",
+            )
+        self._intrinsics_session.stop()
+        pipeline = self._pipeline
+        if pipeline is not None:
+            pipeline.set_intrinsics_session(None)
+        return self._ok_response(
+            request_id=request_id,
+            request_camera_id=request_camera_id,
+            result=self._intrinsics_session.status_payload(),
+        )
+
+    def _dispatch_intrinsics_clear(
+        self,
+        request_id: str,
+        request_camera_id: str,
+        params: dict[str, object],
+    ) -> dict[str, object]:
+        if params:
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message="invalid_request: intrinsics_clear does not accept params",
+            )
+        self._intrinsics_session.clear()
+        pipeline = self._pipeline
+        if pipeline is not None:
+            if self._intrinsics_session.is_active():
+                pipeline.set_intrinsics_session(self._intrinsics_session)
+            else:
+                pipeline.set_intrinsics_session(None)
+        return self._ok_response(
+            request_id=request_id,
+            request_camera_id=request_camera_id,
+            result=self._intrinsics_session.status_payload(),
+        )
+
+    def _dispatch_intrinsics_calibrate(
+        self,
+        request_id: str,
+        request_camera_id: str,
+        params: dict[str, object],
+    ) -> dict[str, object]:
+        if params:
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message="invalid_request: intrinsics_calibrate does not accept params",
+            )
+        pipeline = self._pipeline
+        if pipeline is not None:
+            pipeline.set_intrinsics_session(None)
+        try:
+            calibration_result = self._intrinsics_session.calibrate()
+        except ValueError as exc:
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message=str(exc),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INTERNAL,
+                error_message=f"internal_error: intrinsics_calibration_failed: {exc}",
+            )
+        return self._ok_response(
+            request_id=request_id,
+            request_camera_id=request_camera_id,
+            result={
+                **self._intrinsics_session.status_payload(),
+                "calibration_result": calibration_result,
+            },
+        )
+
+    def _dispatch_intrinsics_status(
+        self,
+        request_id: str,
+        request_camera_id: str,
+        params: dict[str, object],
+    ) -> dict[str, object]:
+        if params:
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message="invalid_request: intrinsics_status does not accept params",
+            )
+        return self._ok_response(
+            request_id=request_id,
+            request_camera_id=request_camera_id,
+            result=self._intrinsics_session.status_payload(),
         )
 
     def _handle_mask_start(self, request_id: str, request_camera_id: str, params: dict[str, object]) -> dict[str, object]:
@@ -3803,6 +4380,7 @@ class ControlServer:
         snapshot = pipeline.get_preview_snapshot()
         if snapshot is None:
             return self._mjpeg_waiting_jpeg
+        # Overlay rendering is display-only. Detection paths consume raw frames upstream.
         canvas = _render_preview_canvas(
             frame=snapshot.frame,
             blobs=snapshot.blobs,
@@ -3979,6 +4557,7 @@ class ControlServer:
                 "stream_active": False,
             }
         )
+        diagnostics["supported_commands"] = sorted(MVP_SUPPORTED_COMMANDS)
         return self._ok_response(request_id, request_camera_id, result=diagnostics)
 
     def _get_clock_sync_diagnostics(self) -> dict[str, object]:

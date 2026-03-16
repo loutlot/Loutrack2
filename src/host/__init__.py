@@ -63,6 +63,11 @@ from .control import (
     set_blob_diameter,
     set_circularity_min,
     set_preview,
+    intrinsics_start,
+    intrinsics_stop,
+    intrinsics_clear,
+    intrinsics_calibrate,
+    intrinsics_status,
 )
 
 __all__ = [
@@ -119,6 +124,11 @@ __all__ = [
     "set_blob_diameter",
     "set_circularity_min",
     "set_preview",
+    "intrinsics_start",
+    "intrinsics_stop",
+    "intrinsics_clear",
+    "intrinsics_calibrate",
+    "intrinsics_status",
     "WAND_NAME",
     "WAND_MARKER_DIAMETER_MM",
     "WAND_OUTER_SHORT_MM",

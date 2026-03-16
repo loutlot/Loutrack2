@@ -8,6 +8,7 @@ import sys
 import time
 import threading
 import importlib.util
+import urllib.request
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -24,14 +25,12 @@ if __package__ in (None, ""):
     from host.logger import FrameLogger
     from host.tracking_runtime import TrackingRuntime
     from host.wand_session import CalibrationSession, CalibrationSessionConfig
-    from host.intrinsics_capture import IntrinsicsCapture, IntrinsicsConfig
     from host.extrinsics_methods import ExtrinsicsMethodRegistry, build_default_extrinsics_registry
 else:
     from .receiver import UDPReceiver
     from .logger import FrameLogger
     from .tracking_runtime import TrackingRuntime
     from .wand_session import CalibrationSession, CalibrationSessionConfig
-    from .intrinsics_capture import IntrinsicsCapture, IntrinsicsConfig
     from .extrinsics_methods import ExtrinsicsMethodRegistry, build_default_extrinsics_registry
 
 
@@ -836,6 +835,9 @@ HTML_PAGE = """<!doctype html>
             <label>Wand Metric Log Path
               <input id="wandMetricLogPath" type="text" value="logs/extrinsics_wand_metric.jsonl">
             </label>
+            <div style="margin-top:6px">
+              <button id="resetWandLogPath" class="btn-ghost btn-sm" type="button">Reset to latest</button>
+            </div>
           </div>
           <div class="btn-row" style="justify-content:center">
             <button id="captureWandMetric" class="btn-teal">Capture Floor / Metric</button>
@@ -854,8 +856,13 @@ HTML_PAGE = """<!doctype html>
               <div class="panel-title">Generation Parameters</div>
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 14px">
                 <label>Intrinsics Dir<input id="intrinsicsPath" type="text" value="calibration"></label>
-                <label>Pose Log Path<input id="logPath" type="text" value="logs/extrinsics_pose_capture.jsonl"></label>
-                <label>Wand Metric Log<input id="generateWandMetricLogPath" type="text" value="logs/extrinsics_wand_metric.jsonl"></label>
+                <label>Pose Log Path
+                  <input id="logPath" type="text" value="logs/extrinsics_pose_capture.jsonl">
+                  <button id="resetPoseLogPath" class="btn-ghost btn-sm" type="button" style="margin-top:6px">Reset to latest</button>
+                </label>
+                <label>Wand Metric Log
+                  <input id="generateWandMetricLogPath" type="text" value="logs/extrinsics_wand_metric.jsonl">
+                </label>
                 <label>Output Path<input id="outputPath" type="text" value="calibration/extrinsics_pose_v2.json"></label>
                 <label>Pair Window (us)<input id="pairWindowUs" type="number" min="1" step="100" value="2000"></label>
                 <label>Min Pairs<input id="minPairs" type="number" min="1" step="1" value="8"></label>
@@ -1008,7 +1015,38 @@ HTML_PAGE = """<!doctype html>
       return THREE;
     }
     const sliders = ["exposure", "gain", "fps", "focus", "threshold", "circularity", "blobMin", "blobMax", "maskThreshold", "maskSeconds"];
-    const sliderNames = new Set(sliders);
+    const mainControlInputIds = [...sliders, "wandMetricSeconds"];
+    const intrinsicsControlInputIds = ["intFocus", "intExposure", "intGain", "intFps"];
+    const CONTROL_DEFAULTS = {
+      exposure_us: 12000,
+      gain: 8.0,
+      fps: 56,
+      focus: 5.215,
+      threshold: 200,
+      circularity_min: 0.0,
+      blob_min_diameter_px: 0,
+      blob_max_diameter_px: 0,
+      mask_threshold: 200,
+      mask_seconds: 0.5,
+      wand_metric_seconds: 3.0,
+    };
+    const INPUT_TO_CONTROL_KEY = {
+      exposure: "exposure_us",
+      gain: "gain",
+      fps: "fps",
+      focus: "focus",
+      threshold: "threshold",
+      circularity: "circularity_min",
+      blobMin: "blob_min_diameter_px",
+      blobMax: "blob_max_diameter_px",
+      maskThreshold: "mask_threshold",
+      maskSeconds: "mask_seconds",
+      wandMetricSeconds: "wand_metric_seconds",
+      intFocus: "focus",
+      intExposure: "exposure_us",
+      intGain: "gain",
+      intFps: "fps",
+    };
     const stepOrder = ["blob", "mask", "wand", "floor", "extrinsics"];
     const stepLabels = {
       blob: "Blob",
@@ -1028,6 +1066,10 @@ HTML_PAGE = """<!doctype html>
       blobMax: document.getElementById("blobMaxValue"),
       maskThreshold: document.getElementById("maskThresholdValue"),
       maskSeconds: document.getElementById("maskSecondsValue"),
+      intFocus: document.getElementById("intFocusValue"),
+      intExposure: document.getElementById("intExposureValue"),
+      intGain: document.getElementById("intGainValue"),
+      intFps: document.getElementById("intFpsValue"),
     };
     const elements = {
       exposure: document.getElementById("exposure"),
@@ -1046,7 +1088,9 @@ HTML_PAGE = """<!doctype html>
       status: document.getElementById("status"),
       intrinsicsPath: document.getElementById("intrinsicsPath"),
       logPath: document.getElementById("logPath"),
+      resetPoseLogPath: document.getElementById("resetPoseLogPath"),
       wandMetricLogPath: document.getElementById("wandMetricLogPath"),
+      resetWandLogPath: document.getElementById("resetWandLogPath"),
       generateWandMetricLogPath: document.getElementById("generateWandMetricLogPath"),
       outputPath: document.getElementById("outputPath"),
       pairWindowUs: document.getElementById("pairWindowUs"),
@@ -1084,6 +1128,10 @@ HTML_PAGE = """<!doctype html>
       pageTracking: document.getElementById("pageTracking"),
       intCameraId: document.getElementById("intCameraId"),
       intMjpegUrl: document.getElementById("intMjpegUrl"),
+      intFocus: document.getElementById("intFocus"),
+      intExposure: document.getElementById("intExposure"),
+      intGain: document.getElementById("intGain"),
+      intFps: document.getElementById("intFps"),
       intSquareMm: document.getElementById("intSquareMm"),
       intMarkerMm: document.getElementById("intMarkerMm"),
       intSquaresX: document.getElementById("intSquaresX"),
@@ -1123,7 +1171,6 @@ HTML_PAGE = """<!doctype html>
       trackingExtrinsicsPath: document.getElementById("trackingExtrinsicsPath"),
     };
     let trackingViewer = createTrackingViewer();
-    const sliderUpdateTimers = {};
     function createTrackingViewer() {
       const canvas = elements.trackingViewerCanvas;
       const overlay = elements.trackingViewerEmpty;
@@ -1432,6 +1479,14 @@ HTML_PAGE = """<!doctype html>
     const SLIDER_DEBOUNCE_MS = 200;
     let activePage = "calibration";
     let loadStateInFlight = false;
+    let settingsSnapshot = null;
+    let persistedSelectedCameraIds = [];
+    let initialUiState = { active_page: "calibration", active_view: "cameras" };
+    const draftPatchTimers = {};
+    let controlsUpdateTimer = null;
+    let controlsUpdateContext = "controls";
+    let controlsUpdateTargetMode = "selected";
+    const controlState = { ...CONTROL_DEFAULTS };
 
     function reportUiError(context, error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1449,43 +1504,152 @@ HTML_PAGE = """<!doctype html>
     }
 
     function selectedCameraIds() {
-      return [...document.querySelectorAll("input[data-camera]:checked")].map((item) => item.dataset.camera);
+      const cameraInputs = [...document.querySelectorAll("input[data-camera]")];
+      if (cameraInputs.length === 0) {
+        return [...new Set(persistedSelectedCameraIds)];
+      }
+      return [...new Set(cameraInputs
+        .filter((item) => item.checked)
+        .map((item) => item.dataset.camera)
+        .filter((cameraId) => Boolean(cameraId)))];
     }
 
-    function normalizedBlobRange() {
-      let minValue = Number(elements.blobMin.value);
-      let maxValue = Number(elements.blobMax.value);
+    function toFiniteNumber(rawValue, fallbackValue) {
+      const parsed = Number(rawValue);
+      return Number.isFinite(parsed) ? parsed : fallbackValue;
+    }
 
-      minValue = Number.isFinite(minValue) && minValue > 0 ? minValue : 0;
-      maxValue = Number.isFinite(maxValue) && maxValue > 0 ? maxValue : 0;
-
+    function syncControlStateConstraints() {
+      let minValue = toFiniteNumber(controlState.blob_min_diameter_px, 0);
+      let maxValue = toFiniteNumber(controlState.blob_max_diameter_px, 0);
+      minValue = minValue > 0 ? minValue : 0;
+      maxValue = maxValue > 0 ? maxValue : 0;
       if (minValue > 0 && maxValue > 0 && minValue > maxValue) {
         maxValue = minValue;
-        elements.blobMax.value = String(maxValue);
-        values.blobMax.textContent = elements.blobMax.value;
       }
+      controlState.blob_min_diameter_px = minValue;
+      controlState.blob_max_diameter_px = maxValue;
+    }
 
+    function setControlStateFromCalibrationDraft(calibrationDraft = {}) {
+      controlState.exposure_us = toFiniteNumber(calibrationDraft.exposure_us, CONTROL_DEFAULTS.exposure_us);
+      controlState.gain = toFiniteNumber(calibrationDraft.gain, CONTROL_DEFAULTS.gain);
+      controlState.fps = toFiniteNumber(calibrationDraft.fps, CONTROL_DEFAULTS.fps);
+      controlState.focus = toFiniteNumber(calibrationDraft.focus, CONTROL_DEFAULTS.focus);
+      controlState.threshold = toFiniteNumber(calibrationDraft.threshold, CONTROL_DEFAULTS.threshold);
+      controlState.circularity_min = toFiniteNumber(calibrationDraft.circularity_min, CONTROL_DEFAULTS.circularity_min);
+      controlState.blob_min_diameter_px = toFiniteNumber(
+        calibrationDraft.blob_min_diameter_px ?? 0,
+        CONTROL_DEFAULTS.blob_min_diameter_px
+      );
+      controlState.blob_max_diameter_px = toFiniteNumber(
+        calibrationDraft.blob_max_diameter_px ?? 0,
+        CONTROL_DEFAULTS.blob_max_diameter_px
+      );
+      controlState.mask_threshold = toFiniteNumber(calibrationDraft.mask_threshold, CONTROL_DEFAULTS.mask_threshold);
+      controlState.mask_seconds = toFiniteNumber(calibrationDraft.mask_seconds, CONTROL_DEFAULTS.mask_seconds);
+      controlState.wand_metric_seconds = toFiniteNumber(
+        calibrationDraft.wand_metric_seconds,
+        CONTROL_DEFAULTS.wand_metric_seconds
+      );
+      syncControlStateConstraints();
+    }
+
+    function renderControlInputsFromState() {
+      syncControlStateConstraints();
+      const assignmentMap = {
+        exposure: controlState.exposure_us,
+        gain: controlState.gain,
+        fps: controlState.fps,
+        focus: controlState.focus,
+        threshold: controlState.threshold,
+        circularity: controlState.circularity_min,
+        blobMin: controlState.blob_min_diameter_px,
+        blobMax: controlState.blob_max_diameter_px,
+        maskThreshold: controlState.mask_threshold,
+        maskSeconds: controlState.mask_seconds,
+        wandMetricSeconds: controlState.wand_metric_seconds,
+        intFocus: controlState.focus,
+        intExposure: controlState.exposure_us,
+        intGain: controlState.gain,
+        intFps: controlState.fps,
+      };
+      Object.entries(assignmentMap).forEach(([id, value]) => {
+        const input = elements[id];
+        if (!input) return;
+        input.value = String(value);
+      });
+      const valueMap = {
+        exposure: controlState.exposure_us,
+        gain: controlState.gain,
+        fps: controlState.fps,
+        focus: controlState.focus,
+        threshold: controlState.threshold,
+        circularity: controlState.circularity_min,
+        blobMin: controlState.blob_min_diameter_px,
+        blobMax: controlState.blob_max_diameter_px,
+        maskThreshold: controlState.mask_threshold,
+        maskSeconds: controlState.mask_seconds,
+        intFocus: controlState.focus,
+        intExposure: controlState.exposure_us,
+        intGain: controlState.gain,
+        intFps: controlState.fps,
+      };
+      Object.entries(valueMap).forEach(([id, value]) => {
+        if (values[id]) {
+          values[id].textContent = String(value);
+        }
+      });
+    }
+
+    function calibrationDraftPayload() {
+      syncControlStateConstraints();
+      const minValue = controlState.blob_min_diameter_px;
+      const maxValue = controlState.blob_max_diameter_px;
       return {
-        min: minValue > 0 ? minValue : null,
-        max: maxValue > 0 ? maxValue : null,
+        exposure_us: controlState.exposure_us,
+        gain: controlState.gain,
+        fps: controlState.fps,
+        focus: controlState.focus,
+        threshold: controlState.threshold,
+        circularity_min: controlState.circularity_min,
+        blob_min_diameter_px: minValue > 0 ? minValue : null,
+        blob_max_diameter_px: maxValue > 0 ? maxValue : null,
+        mask_threshold: controlState.mask_threshold,
+        mask_seconds: controlState.mask_seconds,
+        wand_metric_seconds: controlState.wand_metric_seconds,
       };
     }
 
-    function configPayload() {
-      const blobRange = normalizedBlobRange();
+    function configPayload(cameraIds) {
+      const payload = calibrationDraftPayload();
+      payload.camera_ids = Array.isArray(cameraIds) ? cameraIds : selectedCameraIds();
+      return payload;
+    }
+
+    function intrinsicsDraftPayload() {
+      const markerVal = elements.intMarkerMm ? elements.intMarkerMm.value.trim() : "";
       return {
-        camera_ids: selectedCameraIds(),
-        exposure_us: Number(elements.exposure.value),
-        gain: Number(elements.gain.value),
-        fps: Number(elements.fps.value),
-        focus: Number(elements.focus.value),
-        threshold: Number(elements.threshold.value),
-        circularity_min: Number(elements.circularity.value),
-        blob_min_diameter_px: blobRange.min,
-        blob_max_diameter_px: blobRange.max,
-        mask_threshold: Number(elements.maskThreshold.value),
-        mask_seconds: Number(elements.maskSeconds.value),
-        wand_metric_seconds: Number(elements.wandMetricSeconds.value),
+        camera_id: elements.intCameraId?.value.trim() || "pi-cam-01",
+        mjpeg_url: elements.intMjpegUrl?.value.trim() || "",
+        square_length_mm: elements.intSquareMm?.value ?? "",
+        marker_length_mm: markerVal !== "" ? elements.intMarkerMm.value : null,
+        squares_x: elements.intSquaresX?.value ?? "",
+        squares_y: elements.intSquaresY?.value ?? "",
+        min_frames: elements.intMinFrames?.value ?? "",
+        cooldown_s: elements.intCooldown?.value ?? "",
+      };
+    }
+
+    function extrinsicsDraftPayload() {
+      return {
+        intrinsics_path: elements.intrinsicsPath?.value ?? "",
+        pose_log_path: elements.logPath?.value ?? "",
+        wand_metric_log_path: elements.generateWandMetricLogPath?.value ?? "",
+        output_path: elements.outputPath?.value ?? "",
+        pair_window_us: elements.pairWindowUs?.value ?? "",
+        wand_pair_window_us: elements.wandPairWindowUs?.value ?? "",
+        min_pairs: elements.minPairs?.value ?? "",
       };
     }
 
@@ -1785,13 +1949,34 @@ HTML_PAGE = """<!doctype html>
     let activeView = "cameras";
 
     // Views that require Pi preview to be ON
-    const PREVIEW_ON_VIEWS = new Set(["cameras", "blob", "floor"]);
+    const PREVIEW_ON_VIEWS = new Set(["cameras", "blob", "mask", "floor", "intrinsics"]);
     // Views that explicitly turn Pi preview OFF
     const PREVIEW_OFF_VIEWS = new Set(["pose", "tracking"]);
 
     function showStatus(msg, variant) {
       if (!elements.status) return;
       elements.status.textContent = msg;
+    }
+
+    function buildIntrinsicsCharucoPayload() {
+      const squaresX = Number(elements.intSquaresX?.value ?? 6);
+      const squaresY = Number(elements.intSquaresY?.value ?? 8);
+      const squareLength = Number(elements.intSquareMm?.value ?? 30);
+      const markerLengthRaw = elements.intMarkerMm?.value?.trim() || "";
+
+      const payload = {
+        dictionary: "DICT_6X6_250",
+        squares_x: Number.isFinite(squaresX) && squaresX >= 2 ? squaresX : 6,
+        squares_y: Number.isFinite(squaresY) && squaresY >= 2 ? squaresY : 8,
+        square_length_mm: Number.isFinite(squareLength) && squareLength > 0 ? squareLength : 30,
+      };
+      if (markerLengthRaw !== "") {
+        const markerLength = Number(markerLengthRaw);
+        if (Number.isFinite(markerLength) && markerLength > 0) {
+          payload.marker_length_mm = markerLength;
+        }
+      }
+      return payload;
     }
 
     function renderMjpegGrids(cameras) {
@@ -1832,12 +2017,23 @@ HTML_PAGE = """<!doctype html>
       // Toggle Pi MJPEG preview based on page
       if (PREVIEW_ON_VIEWS.has(viewName) || PREVIEW_OFF_VIEWS.has(viewName)) {
         const renderEnabled = PREVIEW_ON_VIEWS.has(viewName);
-        postJson("/api/command", {
+        const isIntrinsicsView = viewName === "intrinsics";
+        const overlays =
+          isIntrinsicsView
+            ? { blob: false, mask: false, text: true, charuco: true }
+            : { blob: true, mask: true, text: true, charuco: false };
+        const requestPayload = {
           command: "set_preview",
           render_enabled: renderEnabled,
+          overlays,
           camera_ids: selectedCameraIds(),
-        }).catch(() => {});
+        };
+        if (isIntrinsicsView) {
+          requestPayload.charuco = buildIntrinsicsCharucoPayload();
+        }
+        postJson("/api/command", requestPayload).catch(() => {});
       }
+      persistUiState().catch(() => {});
     }
 
     function setActivePage(pageName) {
@@ -1851,6 +2047,7 @@ HTML_PAGE = """<!doctype html>
       elements.tabCalibration.classList.toggle("active", activePage === "calibration");
       elements.tabTracking.classList.toggle("active", activePage === "tracking");
       elements.tabIntrinsics.classList.toggle("active", activePage === "intrinsics");
+      persistUiState().catch(() => {});
     }
 
     function renderSidebar(state) {
@@ -1982,39 +2179,12 @@ HTML_PAGE = """<!doctype html>
         throw new Error(`state_fetch_failed status=${response.status}`);
       }
       const state = await response.json();
-      const configMap = {
-        exposure: state.config.exposure_us,
-        gain: state.config.gain,
-        fps: state.config.fps,
-        focus: state.config.focus,
-        threshold: state.config.threshold,
-        circularity: state.config.circularity_min,
-        blobMin: state.config.blob_min_diameter_px ?? 0,
-        blobMax: state.config.blob_max_diameter_px ?? 0,
-        maskThreshold: state.config.mask_threshold,
-        maskSeconds: state.config.mask_seconds,
-        wandMetricSeconds: state.config.wand_metric_seconds ?? 3.0,
-      };
-      sliders.forEach((name) => {
-        if (document.activeElement === elements[name] || sliderUpdateTimers[name]) {
-          return;
-        }
-        elements[name].value = configMap[name];
-      });
-      sliders.forEach((name) => {
-        values[name].textContent = elements[name].value;
-      });
-      if (document.activeElement !== elements.wandMetricSeconds) {
-        elements.wandMetricSeconds.value = String(state.config.wand_metric_seconds ?? 3.0);
-      }
-      if (state.workflow?.pose_capture_log_path) {
-        elements.logPath.value = state.workflow.pose_capture_log_path;
-      }
-      if (state.workflow?.wand_metric_log_path) {
-        elements.wandMetricLogPath.value = state.workflow.wand_metric_log_path;
-        elements.generateWandMetricLogPath.value = state.workflow.wand_metric_log_path;
-      }
       renderCameraRows(state.cameras || []);
+      if (persistedSelectedCameraIds.length > 0) {
+        document.querySelectorAll("input[data-camera]").forEach((checkbox) => {
+          checkbox.checked = persistedSelectedCameraIds.includes(checkbox.dataset.camera || "");
+        });
+      }
       renderCameraSummary(state.cameras || []);
       renderWorkflow(state);
       elements.status.textContent = JSON.stringify(state.last_result, null, 2);
@@ -2031,27 +2201,6 @@ HTML_PAGE = """<!doctype html>
       renderExtrinsicsQuality(state.workflow || {});
       renderCamerasSummaryBar(state);
       await loadTracking();
-      // Restore intrinsics form fields from saved settings.
-      // Keep camera selection local to the current UI session so quick camera
-      // switching is not overwritten by periodic state refreshes.
-      const is = state.intrinsics_settings;
-      if (is && Date.now() > intFieldsUserEdited) {
-        const fields = [
-          ["intMjpegUrl", is.mjpeg_url],
-          ["intSquareMm", is.square_length_mm],
-          ["intMarkerMm", is.marker_length_mm != null ? is.marker_length_mm : ""],
-          ["intSquaresX", is.squares_x],
-          ["intSquaresY", is.squares_y],
-          ["intMinFrames", is.min_frames],
-          ["intCooldown", is.cooldown_s],
-        ];
-        for (const [id, val] of fields) {
-          const el = elements[id];
-          if (el && document.activeElement !== el && val != null && val !== "") {
-            el.value = val;
-          }
-        }
-      }
     }
 
     async function postJson(url, payload) {
@@ -2078,6 +2227,116 @@ HTML_PAGE = """<!doctype html>
       return body;
     }
 
+    async function getJson(url) {
+      let response;
+      try {
+        response = await fetch(url, { method: "GET" });
+      } catch (error) {
+        throw new Error(`network_error url=${url} reason=${error instanceof Error ? error.message : String(error)}`);
+      }
+      if (!response.ok) {
+        throw new Error(`request_failed url=${url} reason=http_${response.status}`);
+      }
+      try {
+        return await response.json();
+      } catch (error) {
+        throw new Error(`invalid_json_response url=${url} status=${response.status}`);
+      }
+    }
+
+    async function saveDraftPatch(patch, context) {
+      try {
+        const nextSettings = await postJson("/api/settings/draft", patch);
+        settingsSnapshot = nextSettings;
+      } catch (error) {
+        reportUiError(context || "settings_draft", error);
+      }
+    }
+
+    function queueDraftPatch(key, delayMs, patchFactory, context) {
+      if (draftPatchTimers[key]) {
+        clearTimeout(draftPatchTimers[key]);
+      }
+      draftPatchTimers[key] = setTimeout(async () => {
+        draftPatchTimers[key] = null;
+        await saveDraftPatch(patchFactory(), context);
+      }, delayMs);
+    }
+
+    function applySettingsToForm(settings) {
+      settingsSnapshot = settings;
+      const calibrationDraft = settings?.calibration?.draft || {};
+      const intrinsicsDraft = settings?.intrinsics?.draft || {};
+      const extrinsicsDraft = settings?.extrinsics?.draft || {};
+      const ui = settings?.ui || {};
+
+      setControlStateFromCalibrationDraft(calibrationDraft);
+      renderControlInputsFromState();
+
+      const intrinsicsFields = [
+        ["intCameraId", intrinsicsDraft.camera_id],
+        ["intMjpegUrl", intrinsicsDraft.mjpeg_url],
+        ["intSquareMm", intrinsicsDraft.square_length_mm],
+        ["intMarkerMm", intrinsicsDraft.marker_length_mm != null ? intrinsicsDraft.marker_length_mm : ""],
+        ["intSquaresX", intrinsicsDraft.squares_x],
+        ["intSquaresY", intrinsicsDraft.squares_y],
+        ["intMinFrames", intrinsicsDraft.min_frames],
+        ["intCooldown", intrinsicsDraft.cooldown_s],
+      ];
+      intrinsicsFields.forEach(([id, value]) => {
+        const element = elements[id];
+        if (element && value != null) {
+          element.value = String(value);
+        }
+      });
+
+      if (elements.intrinsicsPath && extrinsicsDraft.intrinsics_path != null) {
+        elements.intrinsicsPath.value = String(extrinsicsDraft.intrinsics_path);
+      }
+      if (elements.logPath && extrinsicsDraft.pose_log_path != null) {
+        elements.logPath.value = String(extrinsicsDraft.pose_log_path);
+      }
+      if (elements.wandMetricLogPath && extrinsicsDraft.wand_metric_log_path != null) {
+        elements.wandMetricLogPath.value = String(extrinsicsDraft.wand_metric_log_path);
+      }
+      if (elements.generateWandMetricLogPath && extrinsicsDraft.wand_metric_log_path != null) {
+        elements.generateWandMetricLogPath.value = String(extrinsicsDraft.wand_metric_log_path);
+      }
+      if (elements.outputPath && extrinsicsDraft.output_path != null) {
+        elements.outputPath.value = String(extrinsicsDraft.output_path);
+      }
+      if (elements.pairWindowUs && extrinsicsDraft.pair_window_us != null) {
+        elements.pairWindowUs.value = String(extrinsicsDraft.pair_window_us);
+      }
+      if (elements.wandPairWindowUs && extrinsicsDraft.wand_pair_window_us != null) {
+        elements.wandPairWindowUs.value = String(extrinsicsDraft.wand_pair_window_us);
+      }
+      if (elements.minPairs && extrinsicsDraft.min_pairs != null) {
+        elements.minPairs.value = String(extrinsicsDraft.min_pairs);
+      }
+
+      if (Array.isArray(ui.selected_camera_ids)) {
+        persistedSelectedCameraIds = [...new Set(ui.selected_camera_ids.map((value) => String(value)))];
+      }
+      initialUiState = {
+        active_page: String(ui.active_page || "calibration"),
+        active_view: String(ui.active_view || "cameras"),
+      };
+    }
+
+    async function loadSettings() {
+      const settings = await getJson("/api/settings");
+      applySettingsToForm(settings);
+    }
+
+    async function persistUiState() {
+      await postJson("/api/settings/ui", {
+        active_page: activePage,
+        active_view: activeView,
+        selected_camera_ids: selectedCameraIds(),
+      });
+    }
+
     async function safeLoadState() {
       if (loadStateInFlight) {
         return;
@@ -2092,10 +2351,54 @@ HTML_PAGE = """<!doctype html>
       }
     }
 
+    function cameraIdsForTargetMode(targetMode) {
+      if (targetMode === "intrinsics") {
+        const cameraId = elements.intCameraId?.value?.trim() || "pi-cam-01";
+        return [cameraId];
+      }
+      return selectedCameraIds();
+    }
+
+    async function flushControlUpdates(context, targetMode) {
+      try {
+        await postJson("/api/config", configPayload(cameraIdsForTargetMode(targetMode)));
+        await saveDraftPatch({ calibration: calibrationDraftPayload() }, context);
+      } catch (error) {
+        reportUiError(context, error);
+      }
+    }
+
+    function queueControlUpdates(context, targetMode) {
+      controlsUpdateContext = context;
+      controlsUpdateTargetMode = targetMode;
+      if (controlsUpdateTimer) {
+        clearTimeout(controlsUpdateTimer);
+      }
+      controlsUpdateTimer = setTimeout(async () => {
+        controlsUpdateTimer = null;
+        await flushControlUpdates(controlsUpdateContext, controlsUpdateTargetMode);
+      }, SLIDER_DEBOUNCE_MS);
+    }
+
+    function updateControlStateFromInput(inputId) {
+      const key = INPUT_TO_CONTROL_KEY[inputId];
+      const input = elements[inputId];
+      if (!key || !input) {
+        return;
+      }
+      controlState[key] = toFiniteNumber(input.value, CONTROL_DEFAULTS[key] ?? 0);
+      syncControlStateConstraints();
+      renderControlInputsFromState();
+    }
+
     document.getElementById("applyConfig").addEventListener("click", async () => {
       showStatus("Waiting...");
       try {
-        await postJson("/api/config", configPayload());
+        if (controlsUpdateTimer) {
+          clearTimeout(controlsUpdateTimer);
+          controlsUpdateTimer = null;
+        }
+        await flushControlUpdates("apply_config", "selected");
         await safeLoadState();
         showStatus("Done!");
       } catch (error) {
@@ -2119,14 +2422,30 @@ HTML_PAGE = """<!doctype html>
       });
     });
 
+    document.addEventListener("change", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLInputElement)) {
+        return;
+      }
+      if (target.matches("input[data-camera]")) {
+        persistedSelectedCameraIds = selectedCameraIds();
+        persistUiState().catch(() => {});
+      }
+    });
+
     document.getElementById("captureWandMetric").addEventListener("click", async () => {
       showStatus("Waiting...");
       try {
+        await saveDraftPatch(
+          {
+            calibration: { wand_metric_seconds: controlState.wand_metric_seconds },
+            extrinsics: { wand_metric_log_path: elements.wandMetricLogPath.value },
+          },
+          "wand_metric_draft"
+        );
         await postJson("/api/command", {
           command: "start_wand_metric_capture",
           camera_ids: selectedCameraIds(),
-          duration_s: Number(elements.wandMetricSeconds.value),
-          wand_metric_log_path: elements.wandMetricLogPath.value,
         });
         await safeLoadState();
         showStatus("Done!");
@@ -2138,15 +2457,8 @@ HTML_PAGE = """<!doctype html>
     document.getElementById("generateExtrinsics").addEventListener("click", async () => {
       showStatus("Waiting...");
       try {
-        await postJson("/api/generate_extrinsics", {
-          intrinsics_path: elements.intrinsicsPath.value,
-          pose_log_path: elements.logPath.value,
-          wand_metric_log_path: elements.generateWandMetricLogPath.value,
-          output_path: elements.outputPath.value,
-          pair_window_us: Number(elements.pairWindowUs.value),
-          wand_pair_window_us: Number(elements.wandPairWindowUs.value),
-          min_pairs: Number(elements.minPairs.value),
-        });
+        await saveDraftPatch({ extrinsics: extrinsicsDraftPayload() }, "generate_extrinsics_draft");
+        await postJson("/api/generate_extrinsics", {});
         await safeLoadState();
         showStatus("Done!");
       } catch (error) {
@@ -2157,6 +2469,86 @@ HTML_PAGE = """<!doctype html>
     elements.tabCalibration.addEventListener("click", () => setActivePage("calibration"));
     elements.tabTracking.addEventListener("click", () => setActivePage("tracking"));
     elements.tabIntrinsics.addEventListener("click", () => setActivePage("intrinsics"));
+
+    mainControlInputIds.forEach((id) => {
+      elements[id]?.addEventListener("input", () => {
+        updateControlStateFromInput(id);
+        queueControlUpdates(`control_${id}`, "selected");
+      });
+      elements[id]?.addEventListener("change", async () => {
+        updateControlStateFromInput(id);
+        if (controlsUpdateTimer) {
+          clearTimeout(controlsUpdateTimer);
+          controlsUpdateTimer = null;
+        }
+        await flushControlUpdates(`control_${id}_change`, "selected");
+      });
+    });
+
+    intrinsicsControlInputIds.forEach((id) => {
+      elements[id]?.addEventListener("input", () => {
+        updateControlStateFromInput(id);
+        queueControlUpdates(`control_${id}`, "intrinsics");
+      });
+      elements[id]?.addEventListener("change", async () => {
+        updateControlStateFromInput(id);
+        if (controlsUpdateTimer) {
+          clearTimeout(controlsUpdateTimer);
+          controlsUpdateTimer = null;
+        }
+        await flushControlUpdates(`control_${id}_change`, "intrinsics");
+      });
+    });
+
+    [
+      "intrinsicsPath",
+      "logPath",
+      "generateWandMetricLogPath",
+      "outputPath",
+      "pairWindowUs",
+      "wandPairWindowUs",
+      "minPairs",
+      "wandMetricLogPath",
+    ].forEach((id) => {
+      const handler = () => {
+        if (id === "wandMetricLogPath" && elements.generateWandMetricLogPath) {
+          elements.generateWandMetricLogPath.value = elements.wandMetricLogPath.value;
+        }
+        if (id === "generateWandMetricLogPath" && elements.wandMetricLogPath) {
+          elements.wandMetricLogPath.value = elements.generateWandMetricLogPath.value;
+        }
+        queueDraftPatch(
+          `extrinsics_${id}`,
+          220,
+          () => ({ extrinsics: extrinsicsDraftPayload() }),
+          `extrinsics_${id}`
+        );
+      };
+      elements[id]?.addEventListener("input", handler);
+      elements[id]?.addEventListener("change", async () => {
+        if (draftPatchTimers[`extrinsics_${id}`]) {
+          clearTimeout(draftPatchTimers[`extrinsics_${id}`]);
+          draftPatchTimers[`extrinsics_${id}`] = null;
+        }
+        await saveDraftPatch({ extrinsics: extrinsicsDraftPayload() }, `extrinsics_${id}_change`);
+      });
+    });
+
+    elements.resetPoseLogPath?.addEventListener("click", async () => {
+      await saveDraftPatch({ reset_runtime: ["pose_log_path"] }, "reset_pose_log_path");
+      if (settingsSnapshot?.extrinsics?.draft?.pose_log_path != null) {
+        elements.logPath.value = String(settingsSnapshot.extrinsics.draft.pose_log_path);
+      }
+    });
+
+    elements.resetWandLogPath?.addEventListener("click", async () => {
+      await saveDraftPatch({ reset_runtime: ["wand_metric_log_path"] }, "reset_wand_log_path");
+      const draftWandLog = settingsSnapshot?.extrinsics?.draft?.wand_metric_log_path;
+      if (draftWandLog != null) {
+        elements.wandMetricLogPath.value = String(draftWandLog);
+        elements.generateWandMetricLogPath.value = String(draftWandLog);
+      }
+    });
 
     elements.trackingStart.addEventListener("click", async () => {
       showStatus("Waiting...");
@@ -2184,34 +2576,10 @@ HTML_PAGE = """<!doctype html>
       }
     });
 
-    sliders.forEach((name) => {
-      elements[name].addEventListener("input", () => {
-        values[name].textContent = elements[name].value;
-        if (!sliderNames.has(name)) {
-          return;
-        }
-        if (sliderUpdateTimers[name]) {
-          clearTimeout(sliderUpdateTimers[name]);
-        }
-        sliderUpdateTimers[name] = setTimeout(async () => {
-          try {
-            await postJson("/api/config", configPayload());
-            await safeLoadState();
-          } catch (error) {
-            reportUiError(`slider_${name}`, error);
-          } finally {
-            sliderUpdateTimers[name] = null;
-          }
-        }, SLIDER_DEBOUNCE_MS);
-      });
-    });
-
     // ── Intrinsics tab ────────────────────────────────────────────────
     let intFrameIntervalId = null;
     let intStatusIntervalId = null;
     let intCurrentBlobUrl = null;
-    // Guard: timestamp (ms) until which loadState must NOT overwrite intrinsics fields
-    let intFieldsUserEdited = 0;
 
     function intStopPollers() {
       if (intFrameIntervalId) { clearInterval(intFrameIntervalId); intFrameIntervalId = null; }
@@ -2282,7 +2650,12 @@ HTML_PAGE = """<!doctype html>
                     if (elements.intFrameEmpty) elements.intFrameEmpty.style.display = "none";
                     intStartStatusPoller();
                   }
-                  intFieldsUserEdited = Date.now() + 60000; // block server restore for 60s
+                  queueDraftPatch(
+                    "int_camera_list_patch",
+                    120,
+                    () => ({ intrinsics: intrinsicsDraftPayload() }),
+                    "intrinsics_quick_fill"
+                  );
                 };
               });
             } else {
@@ -2293,27 +2666,50 @@ HTML_PAGE = """<!doctype html>
       }, 1000);
     }
 
-    function intPayload() {
-      const markerVal = elements.intMarkerMm ? elements.intMarkerMm.value.trim() : "";
-      return {
-        camera_id: elements.intCameraId?.value.trim() || "pi-cam-01",
-        mjpeg_url: elements.intMjpegUrl?.value.trim() || "",
-        square_length_mm: Number(elements.intSquareMm?.value ?? 30),
-        marker_length_mm: markerVal !== "" ? Number(markerVal) : null,
-        squares_x: Number(elements.intSquaresX?.value ?? 6),
-        squares_y: Number(elements.intSquaresY?.value ?? 8),
-        min_frames: Number(elements.intMinFrames?.value ?? 25),
-        cooldown_s: Number(elements.intCooldown?.value ?? 1.5),
-      };
-    }
-
-    // Lock fields when user types directly into Camera ID or MJPEG URL
-    elements.intCameraId?.addEventListener("input", () => { intFieldsUserEdited = Date.now() + 60000; });
-    elements.intMjpegUrl?.addEventListener("input", () => { intFieldsUserEdited = Date.now() + 60000; });
+    [
+      "intCameraId",
+      "intMjpegUrl",
+      "intSquareMm",
+      "intMarkerMm",
+      "intSquaresX",
+      "intSquaresY",
+      "intMinFrames",
+      "intCooldown",
+    ].forEach((id) => {
+      elements[id]?.addEventListener("input", () => {
+        queueDraftPatch(
+          `intrinsics_${id}`,
+          200,
+          () => ({ intrinsics: intrinsicsDraftPayload() }),
+          `intrinsics_${id}`
+        );
+        if (activeView === "intrinsics") {
+          postJson("/api/command", {
+            command: "set_preview",
+            render_enabled: true,
+            overlays: { blob: false, mask: false, text: true, charuco: true },
+            charuco: buildIntrinsicsCharucoPayload(),
+            camera_ids: selectedCameraIds(),
+          }).catch(() => {});
+        }
+      });
+      elements[id]?.addEventListener("change", async () => {
+        const timerKey = `intrinsics_${id}`;
+        if (draftPatchTimers[timerKey]) {
+          clearTimeout(draftPatchTimers[timerKey]);
+          draftPatchTimers[timerKey] = null;
+        }
+        await saveDraftPatch({ intrinsics: intrinsicsDraftPayload() }, `${timerKey}_change`);
+      });
+    });
 
     elements.intStart?.addEventListener("click", async () => {
-      intFieldsUserEdited = Date.now() + 60000; // keep user-entered values after start
-      try { await postJson("/api/intrinsics/start", intPayload()); } catch (e) { reportUiError("int_start", e); }
+      try {
+        await saveDraftPatch({ intrinsics: intrinsicsDraftPayload() }, "int_start_draft");
+        await postJson("/api/intrinsics/start", {});
+      } catch (e) {
+        reportUiError("int_start", e);
+      }
     });
     elements.intStop?.addEventListener("click", async () => {
       // Stop server-side capture
@@ -2346,57 +2742,35 @@ HTML_PAGE = """<!doctype html>
     // ── end Intrinsics tab ────────────────────────────────────────────
 
     // ── Intrinsics Camera Controls ────────────────────────────────────
-    const intCamSliders = [
-      { id: "intFocus",    valId: "intFocusValue" },
-      { id: "intExposure", valId: "intExposureValue" },
-      { id: "intGain",     valId: "intGainValue" },
-      { id: "intFps",      valId: "intFpsValue" },
-    ];
-    const intCamTimers = {};
-
-    function intCamConfigPayload() {
-      const blobRange = normalizedBlobRange();
-      return {
-        camera_ids: [elements.intCameraId?.value?.trim() || "pi-cam-01"],
-        focus:            Number(document.getElementById("intFocus")?.value ?? 5.215),
-        exposure_us:      Number(document.getElementById("intExposure")?.value ?? 6400),
-        gain:             Number(document.getElementById("intGain")?.value ?? 6.0),
-        fps:              Number(document.getElementById("intFps")?.value ?? 60),
-        circularity_min:  Number(elements.circularity.value),
-        blob_min_diameter_px: blobRange.min,
-        blob_max_diameter_px: blobRange.max,
-        mask_threshold:   Number(elements.maskThreshold.value),
-        mask_seconds:     Number(elements.maskSeconds.value),
-        wand_metric_seconds: Number(elements.wandMetricSeconds.value),
-      };
-    }
-
-    intCamSliders.forEach(({ id, valId }) => {
-      const input = document.getElementById(id);
-      const span  = document.getElementById(valId);
-      if (!input) return;
-      if (span) span.textContent = input.value;
-      input.addEventListener("input", () => {
-        if (span) span.textContent = input.value;
-        if (intCamTimers[id]) clearTimeout(intCamTimers[id]);
-        intCamTimers[id] = setTimeout(async () => {
-          try { await postJson("/api/config", intCamConfigPayload()); }
-          catch (e) { reportUiError("int_cam_slider_" + id, e); }
-          finally { intCamTimers[id] = null; }
-        }, 200);
-      });
-    });
-
     document.getElementById("intApplyCamera")?.addEventListener("click", async () => {
-      try { await postJson("/api/config", intCamConfigPayload()); }
+      try {
+        if (controlsUpdateTimer) {
+          clearTimeout(controlsUpdateTimer);
+          controlsUpdateTimer = null;
+        }
+        await flushControlUpdates("int_apply_camera", "intrinsics");
+      }
       catch (e) { reportUiError("int_apply_camera", e); }
     });
     // ── end Intrinsics Camera Controls ───────────────────────────────
 
-    setActiveView("cameras");
-    initTrackingViewer();
-    safeLoadState();
-    setInterval(safeLoadState, 3000);
+    (async () => {
+      try {
+        await loadSettings();
+      } catch (error) {
+        reportUiError("load_settings", error);
+      }
+      const initialPage = initialUiState.active_page || "calibration";
+      const initialView = initialUiState.active_view || "cameras";
+      if (initialPage === "calibration" && initialView) {
+        setActiveView(initialView);
+      } else {
+        setActivePage(initialPage);
+      }
+      await initTrackingViewer();
+      await safeLoadState();
+      setInterval(safeLoadState, 3000);
+    })();
   </script>
 </body>
 </html>
@@ -2441,11 +2815,51 @@ class LoutrackGuiState:
         self.latest_extrinsics_path: Path | None = None
         self.latest_extrinsics_quality: Dict[str, Any] | None = None
         self._restore_latest_extrinsics(DEFAULT_EXTRINSICS_OUTPUT_PATH)
-        self._intrinsics: Optional[IntrinsicsCapture] = None
-        self._intrinsics_lock = threading.Lock()
+        self._intrinsics_active_camera_id: str | None = None
+        self._intrinsics_last_saved_signature: tuple[str, float] | None = None
+        settings_bundle = self._load_settings_bundle()
+        ui_payload = settings_bundle.get("ui", {})
+        if isinstance(ui_payload, dict):
+            selected_ids = ui_payload.get("selected_camera_ids", [])
+            if isinstance(selected_ids, list):
+                self.selected_camera_ids = [str(item).strip() for item in selected_ids if str(item).strip()]
 
     @staticmethod
     def _default_settings_payload() -> Dict[str, Any]:
+        calibration_defaults = LoutrackGuiState._default_calibration_payload()
+        intrinsics_defaults = LoutrackGuiState._default_intrinsics_payload()
+        extrinsics_defaults = LoutrackGuiState._default_extrinsics_payload()
+        return {
+            "meta": {"version": 2, "updated_at": int(time.time())},
+            "calibration": {
+                "draft": dict(calibration_defaults),
+                "committed": dict(calibration_defaults),
+            },
+            "intrinsics": {
+                "draft": dict(intrinsics_defaults),
+                "committed": dict(intrinsics_defaults),
+            },
+            "extrinsics": {
+                "draft": dict(extrinsics_defaults),
+                "committed": dict(extrinsics_defaults),
+                "locks": {
+                    "pose_log_path_manual": False,
+                    "wand_metric_log_path_manual": False,
+                },
+            },
+            "ui": {
+                "active_page": "calibration",
+                "active_view": "cameras",
+                "selected_camera_ids": [],
+            },
+            "runtime_hints": {
+                "pose_log_path": str(DEFAULT_POSE_LOG_PATH),
+                "wand_metric_log_path": str(DEFAULT_WAND_METRIC_LOG_PATH),
+            },
+        }
+
+    @staticmethod
+    def _default_calibration_payload() -> Dict[str, Any]:
         return {
             "exposure_us": 12000,
             "gain": 8.0,
@@ -2458,6 +2872,31 @@ class LoutrackGuiState:
             "mask_threshold": 200,
             "mask_seconds": 0.5,
             "wand_metric_seconds": DEFAULT_WAND_METRIC_DURATION_S,
+        }
+
+    @staticmethod
+    def _default_intrinsics_payload() -> Dict[str, Any]:
+        return {
+            "camera_id": "pi-cam-01",
+            "mjpeg_url": "",
+            "square_length_mm": 30.0,
+            "marker_length_mm": None,
+            "squares_x": 6,
+            "squares_y": 8,
+            "min_frames": 25,
+            "cooldown_s": 1.5,
+        }
+
+    @staticmethod
+    def _default_extrinsics_payload() -> Dict[str, Any]:
+        return {
+            "intrinsics_path": "calibration",
+            "pose_log_path": str(DEFAULT_POSE_LOG_PATH),
+            "wand_metric_log_path": str(DEFAULT_WAND_METRIC_LOG_PATH),
+            "output_path": str(DEFAULT_EXTRINSICS_OUTPUT_PATH),
+            "pair_window_us": 2000,
+            "wand_pair_window_us": 8000,
+            "min_pairs": 8,
         }
 
     def _migrate_settings_once(self) -> None:
@@ -2505,23 +2944,464 @@ class LoutrackGuiState:
             return payload
         return {}
 
+    def _write_settings_payload(self, payload: Dict[str, Any]) -> None:
+        payload.setdefault("meta", {})
+        if isinstance(payload["meta"], dict):
+            payload["meta"]["version"] = 2
+            payload["meta"]["updated_at"] = int(time.time())
+        self.settings_path.parent.mkdir(parents=True, exist_ok=True)
+        self.settings_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    @staticmethod
+    def _to_int(value: Any) -> int:
+        if isinstance(value, bool):
+            raise ValueError("boolean is not an integer")
+        if isinstance(value, str):
+            text = value.strip()
+            if text == "":
+                raise ValueError("empty string")
+            return int(float(text)) if "." in text else int(text)
+        return int(value)
+
+    @staticmethod
+    def _to_float(value: Any) -> float:
+        if isinstance(value, bool):
+            raise ValueError("boolean is not a number")
+        if isinstance(value, str):
+            text = value.strip()
+            if text == "":
+                raise ValueError("empty string")
+            return float(text)
+        return float(value)
+
+    @staticmethod
+    def _to_nullable_float(value: Any) -> float | None:
+        if value is None:
+            return None
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return LoutrackGuiState._to_float(value)
+
+    @staticmethod
+    def _to_string(value: Any) -> str:
+        if value is None:
+            return ""
+        return str(value).strip()
+
+    def _normalize_settings_payload(self, raw_payload: Dict[str, Any]) -> Dict[str, Any]:
+        defaults = self._default_settings_payload()
+        if not isinstance(raw_payload, dict):
+            return defaults
+
+        has_new_shape = all(
+            key in raw_payload for key in ("calibration", "intrinsics", "extrinsics", "ui", "runtime_hints")
+        )
+        if has_new_shape:
+            normalized = defaults
+
+            calibration_src = raw_payload.get("calibration")
+            if isinstance(calibration_src, dict):
+                for key in normalized["calibration"]["draft"]:
+                    if key in calibration_src.get("draft", {}):
+                        normalized["calibration"]["draft"][key] = calibration_src["draft"][key]
+                    if key in calibration_src.get("committed", {}):
+                        normalized["calibration"]["committed"][key] = calibration_src["committed"][key]
+
+            intrinsics_src = raw_payload.get("intrinsics")
+            if isinstance(intrinsics_src, dict):
+                for key in normalized["intrinsics"]["draft"]:
+                    if key in intrinsics_src.get("draft", {}):
+                        normalized["intrinsics"]["draft"][key] = intrinsics_src["draft"][key]
+                    if key in intrinsics_src.get("committed", {}):
+                        normalized["intrinsics"]["committed"][key] = intrinsics_src["committed"][key]
+
+            extrinsics_src = raw_payload.get("extrinsics")
+            if isinstance(extrinsics_src, dict):
+                for key in normalized["extrinsics"]["draft"]:
+                    if key in extrinsics_src.get("draft", {}):
+                        normalized["extrinsics"]["draft"][key] = extrinsics_src["draft"][key]
+                    if key in extrinsics_src.get("committed", {}):
+                        normalized["extrinsics"]["committed"][key] = extrinsics_src["committed"][key]
+                locks = extrinsics_src.get("locks", {})
+                if isinstance(locks, dict):
+                    normalized["extrinsics"]["locks"]["pose_log_path_manual"] = bool(
+                        locks.get("pose_log_path_manual", False)
+                    )
+                    normalized["extrinsics"]["locks"]["wand_metric_log_path_manual"] = bool(
+                        locks.get("wand_metric_log_path_manual", False)
+                    )
+
+            ui_src = raw_payload.get("ui")
+            if isinstance(ui_src, dict):
+                normalized["ui"]["active_page"] = str(
+                    ui_src.get("active_page", normalized["ui"]["active_page"])
+                )
+                normalized["ui"]["active_view"] = str(
+                    ui_src.get("active_view", normalized["ui"]["active_view"])
+                )
+                selected_ids = ui_src.get("selected_camera_ids", [])
+                if isinstance(selected_ids, list):
+                    normalized["ui"]["selected_camera_ids"] = [
+                        str(item).strip() for item in selected_ids if str(item).strip()
+                    ]
+
+            hints_src = raw_payload.get("runtime_hints")
+            if isinstance(hints_src, dict):
+                normalized["runtime_hints"]["pose_log_path"] = str(
+                    hints_src.get("pose_log_path", normalized["runtime_hints"]["pose_log_path"])
+                )
+                normalized["runtime_hints"]["wand_metric_log_path"] = str(
+                    hints_src.get("wand_metric_log_path", normalized["runtime_hints"]["wand_metric_log_path"])
+                )
+
+            meta_src = raw_payload.get("meta")
+            if isinstance(meta_src, dict):
+                normalized["meta"]["updated_at"] = int(meta_src.get("updated_at", normalized["meta"]["updated_at"]))
+            return normalized
+
+        # Legacy shape migration.
+        normalized = defaults
+        calibration_keys = set(normalized["calibration"]["draft"].keys())
+        for key in calibration_keys:
+            if key in raw_payload:
+                normalized["calibration"]["draft"][key] = raw_payload[key]
+                normalized["calibration"]["committed"][key] = raw_payload[key]
+
+        intrinsics_src = raw_payload.get("intrinsics", {})
+        if isinstance(intrinsics_src, dict):
+            for key in normalized["intrinsics"]["draft"]:
+                if key in intrinsics_src:
+                    normalized["intrinsics"]["draft"][key] = intrinsics_src[key]
+                    normalized["intrinsics"]["committed"][key] = intrinsics_src[key]
+
+        if "selected_camera_ids" in raw_payload and isinstance(raw_payload["selected_camera_ids"], list):
+            normalized["ui"]["selected_camera_ids"] = [
+                str(item).strip() for item in raw_payload["selected_camera_ids"] if str(item).strip()
+            ]
+        if "active_page" in raw_payload:
+            normalized["ui"]["active_page"] = str(raw_payload["active_page"])
+        if "active_view" in raw_payload:
+            normalized["ui"]["active_view"] = str(raw_payload["active_view"])
+        return normalized
+
+    def _load_settings_bundle(self) -> Dict[str, Any]:
+        raw_payload = self._read_settings_payload()
+        bundle = self._normalize_settings_payload(raw_payload)
+        validation = self._refresh_committed_from_draft(bundle)
+        bundle["validation"] = validation
+        try:
+            self._write_settings_payload(
+                {
+                    "meta": bundle.get("meta", {}),
+                    "calibration": bundle.get("calibration", {}),
+                    "intrinsics": bundle.get("intrinsics", {}),
+                    "extrinsics": bundle.get("extrinsics", {}),
+                    "ui": bundle.get("ui", {}),
+                    "runtime_hints": bundle.get("runtime_hints", {}),
+                }
+            )
+        except Exception:
+            pass
+        return bundle
+
+    def _save_settings_bundle(self, bundle: Dict[str, Any]) -> None:
+        payload = {
+            "meta": bundle.get("meta", {}),
+            "calibration": bundle.get("calibration", {}),
+            "intrinsics": bundle.get("intrinsics", {}),
+            "extrinsics": bundle.get("extrinsics", {}),
+            "ui": bundle.get("ui", {}),
+            "runtime_hints": bundle.get("runtime_hints", {}),
+        }
+        self._write_settings_payload(payload)
+
+    def _validate_calibration(self, draft: Dict[str, Any], committed: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, str]]:
+        next_committed = dict(committed)
+        errors: Dict[str, str] = {}
+        numeric_specs = {
+            "exposure_us": ("int", lambda v: v > 0, "must be integer > 0"),
+            "gain": ("float", lambda v: v > 0.0, "must be > 0"),
+            "fps": ("int", lambda v: v > 0, "must be integer > 0"),
+            "focus": ("float", lambda v: True, "must be numeric"),
+            "threshold": ("int", lambda v: 0 <= v <= 255, "must be in [0,255]"),
+            "circularity_min": ("float", lambda v: 0.0 <= v <= 1.0, "must be in [0,1]"),
+            "mask_threshold": ("int", lambda v: 0 <= v <= 255, "must be in [0,255]"),
+            "mask_seconds": ("float", lambda v: v > 0.0, "must be > 0"),
+            "wand_metric_seconds": ("float", lambda v: v > 0.0, "must be > 0"),
+        }
+        for key, (kind, predicate, message) in numeric_specs.items():
+            if key not in draft:
+                continue
+            raw_value = draft.get(key)
+            try:
+                parsed = self._to_int(raw_value) if kind == "int" else self._to_float(raw_value)
+                if not predicate(parsed):
+                    raise ValueError(message)
+                next_committed[key] = parsed
+            except Exception:
+                errors[key] = message
+
+        for key in ("blob_min_diameter_px", "blob_max_diameter_px"):
+            if key not in draft:
+                continue
+            raw_value = draft.get(key)
+            try:
+                parsed_nullable = self._to_nullable_float(raw_value)
+                if parsed_nullable is not None and parsed_nullable <= 0.0:
+                    raise ValueError("must be > 0 when set")
+                next_committed[key] = parsed_nullable
+            except Exception:
+                errors[key] = "must be empty or > 0"
+
+        min_blob = next_committed.get("blob_min_diameter_px")
+        max_blob = next_committed.get("blob_max_diameter_px")
+        if isinstance(min_blob, (int, float)) and isinstance(max_blob, (int, float)) and min_blob > max_blob:
+            errors["blob_max_diameter_px"] = "must be >= blob_min_diameter_px"
+        return next_committed, errors
+
+    def _validate_intrinsics(self, draft: Dict[str, Any], committed: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, str]]:
+        next_committed = dict(committed)
+        errors: Dict[str, str] = {}
+
+        if "camera_id" in draft:
+            value = self._to_string(draft.get("camera_id"))
+            if value:
+                next_committed["camera_id"] = value
+            else:
+                errors["camera_id"] = "must not be empty"
+        if "mjpeg_url" in draft:
+            value = self._to_string(draft.get("mjpeg_url"))
+            if value:
+                next_committed["mjpeg_url"] = value
+            else:
+                errors["mjpeg_url"] = "must not be empty"
+
+        int_specs = {
+            "squares_x": (2, "must be integer >= 2"),
+            "squares_y": (2, "must be integer >= 2"),
+            "min_frames": (5, "must be integer >= 5"),
+        }
+        for key, (lower_bound, message) in int_specs.items():
+            if key not in draft:
+                continue
+            try:
+                value = self._to_int(draft.get(key))
+                if value < lower_bound:
+                    raise ValueError(message)
+                next_committed[key] = value
+            except Exception:
+                errors[key] = message
+
+        float_specs = {
+            "square_length_mm": (lambda v: v > 0.0, "must be > 0"),
+            "cooldown_s": (lambda v: v > 0.0, "must be > 0"),
+        }
+        for key, (predicate, message) in float_specs.items():
+            if key not in draft:
+                continue
+            try:
+                value = self._to_float(draft.get(key))
+                if not predicate(value):
+                    raise ValueError(message)
+                next_committed[key] = value
+            except Exception:
+                errors[key] = message
+
+        if "marker_length_mm" in draft:
+            try:
+                marker_value = self._to_nullable_float(draft.get("marker_length_mm"))
+                if marker_value is not None and marker_value <= 0.0:
+                    raise ValueError("must be > 0 when set")
+                next_committed["marker_length_mm"] = marker_value
+            except Exception:
+                errors["marker_length_mm"] = "must be empty or > 0"
+
+        square_length = next_committed.get("square_length_mm")
+        marker_length = next_committed.get("marker_length_mm")
+        if (
+            isinstance(square_length, (int, float))
+            and isinstance(marker_length, (int, float))
+            and marker_length >= square_length
+        ):
+            errors["marker_length_mm"] = "must be smaller than square_length_mm"
+        return next_committed, errors
+
+    def _validate_extrinsics(self, draft: Dict[str, Any], committed: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, str]]:
+        next_committed = dict(committed)
+        errors: Dict[str, str] = {}
+        text_keys = ("intrinsics_path", "pose_log_path", "output_path")
+        for key in text_keys:
+            if key not in draft:
+                continue
+            value = self._to_string(draft.get(key))
+            if value:
+                next_committed[key] = value
+            else:
+                errors[key] = "must not be empty"
+
+        if "wand_metric_log_path" in draft:
+            value = self._to_string(draft.get("wand_metric_log_path"))
+            next_committed["wand_metric_log_path"] = value
+
+        int_specs = {
+            "pair_window_us": ("must be integer >= 1", 1),
+            "wand_pair_window_us": ("must be integer >= 1", 1),
+            "min_pairs": ("must be integer >= 1", 1),
+        }
+        for key, (message, lower_bound) in int_specs.items():
+            if key not in draft:
+                continue
+            try:
+                value = self._to_int(draft.get(key))
+                if value < lower_bound:
+                    raise ValueError(message)
+                next_committed[key] = value
+            except Exception:
+                errors[key] = message
+        return next_committed, errors
+
+    def _refresh_committed_from_draft(self, bundle: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
+        calibration = bundle.get("calibration", {})
+        intrinsics = bundle.get("intrinsics", {})
+        extrinsics = bundle.get("extrinsics", {})
+
+        cal_committed, cal_errors = self._validate_calibration(
+            calibration.get("draft", {}),
+            calibration.get("committed", {}),
+        )
+        int_committed, int_errors = self._validate_intrinsics(
+            intrinsics.get("draft", {}),
+            intrinsics.get("committed", {}),
+        )
+        ext_committed, ext_errors = self._validate_extrinsics(
+            extrinsics.get("draft", {}),
+            extrinsics.get("committed", {}),
+        )
+        calibration["committed"] = cal_committed
+        intrinsics["committed"] = int_committed
+        extrinsics["committed"] = ext_committed
+        return {
+            "calibration": cal_errors,
+            "intrinsics": int_errors,
+            "extrinsics": ext_errors,
+        }
+
+    def _apply_draft_patch(self, bundle: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any]:
+        calibration_patch = patch.get("calibration", {})
+        if isinstance(calibration_patch, dict):
+            bundle["calibration"]["draft"].update(calibration_patch)
+
+        intrinsics_patch = patch.get("intrinsics", {})
+        if isinstance(intrinsics_patch, dict):
+            bundle["intrinsics"]["draft"].update(intrinsics_patch)
+
+        extrinsics_patch = patch.get("extrinsics", {})
+        if isinstance(extrinsics_patch, dict):
+            bundle["extrinsics"]["draft"].update(extrinsics_patch)
+            locks = bundle["extrinsics"]["locks"]
+            if "pose_log_path" in extrinsics_patch:
+                locks["pose_log_path_manual"] = True
+            if "wand_metric_log_path" in extrinsics_patch:
+                locks["wand_metric_log_path_manual"] = True
+
+        reset_runtime = patch.get("reset_runtime")
+        if isinstance(reset_runtime, list):
+            hints = bundle.get("runtime_hints", {})
+            for key in reset_runtime:
+                if key == "pose_log_path":
+                    bundle["extrinsics"]["locks"]["pose_log_path_manual"] = False
+                    latest_pose = str(hints.get("pose_log_path", DEFAULT_POSE_LOG_PATH))
+                    bundle["extrinsics"]["draft"]["pose_log_path"] = latest_pose
+                if key == "wand_metric_log_path":
+                    bundle["extrinsics"]["locks"]["wand_metric_log_path_manual"] = False
+                    latest_wand = str(hints.get("wand_metric_log_path", DEFAULT_WAND_METRIC_LOG_PATH))
+                    bundle["extrinsics"]["draft"]["wand_metric_log_path"] = latest_wand
+
+        validation = self._refresh_committed_from_draft(bundle)
+        bundle["validation"] = validation
+        self._save_settings_bundle(bundle)
+        return bundle
+
+    def _update_runtime_hints(
+        self,
+        *,
+        pose_log_path: str | None = None,
+        wand_metric_log_path: str | None = None,
+    ) -> None:
+        bundle = self._load_settings_bundle()
+        hints = bundle["runtime_hints"]
+        locks = bundle["extrinsics"]["locks"]
+        if pose_log_path is not None:
+            hints["pose_log_path"] = str(pose_log_path)
+            if not bool(locks.get("pose_log_path_manual")):
+                bundle["extrinsics"]["draft"]["pose_log_path"] = str(pose_log_path)
+        if wand_metric_log_path is not None:
+            hints["wand_metric_log_path"] = str(wand_metric_log_path)
+            if not bool(locks.get("wand_metric_log_path_manual")):
+                bundle["extrinsics"]["draft"]["wand_metric_log_path"] = str(wand_metric_log_path)
+        validation = self._refresh_committed_from_draft(bundle)
+        bundle["validation"] = validation
+        self._save_settings_bundle(bundle)
+
+    def get_settings(self) -> Dict[str, Any]:
+        bundle = self._load_settings_bundle()
+        return {
+            "calibration": bundle.get("calibration", {}),
+            "intrinsics": bundle.get("intrinsics", {}),
+            "extrinsics": bundle.get("extrinsics", {}),
+            "ui": bundle.get("ui", {}),
+            "runtime_hints": bundle.get("runtime_hints", {}),
+            "validation": bundle.get("validation", {}),
+        }
+
+    def apply_settings_draft(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        bundle = self._load_settings_bundle()
+        bundle = self._apply_draft_patch(bundle, payload)
+        calibration_committed = bundle.get("calibration", {}).get("committed", {})
+        if isinstance(calibration_committed, dict):
+            self.config = self._build_session_config(calibration_committed)
+        return {
+            "ok": True,
+            "calibration": bundle.get("calibration", {}),
+            "intrinsics": bundle.get("intrinsics", {}),
+            "extrinsics": bundle.get("extrinsics", {}),
+            "validation": bundle.get("validation", {}),
+            "runtime_hints": bundle.get("runtime_hints", {}),
+        }
+
+    def apply_settings_ui(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        bundle = self._load_settings_bundle()
+        ui_payload = bundle.get("ui", {})
+        if "active_page" in payload:
+            ui_payload["active_page"] = str(payload.get("active_page") or "calibration")
+        if "active_view" in payload:
+            ui_payload["active_view"] = str(payload.get("active_view") or "cameras")
+        if "selected_camera_ids" in payload:
+            selected_ids = payload.get("selected_camera_ids")
+            if isinstance(selected_ids, list):
+                cleaned = list(dict.fromkeys(str(item).strip() for item in selected_ids if str(item).strip()))
+                ui_payload["selected_camera_ids"] = cleaned
+                self.selected_camera_ids = cleaned
+        bundle["ui"] = ui_payload
+        self._save_settings_bundle(bundle)
+        return {"ok": True, "ui": bundle.get("ui", {})}
+
     def _load_initial_config(self) -> CalibrationSessionConfig:
         config = self._default_config()
-        payload = self._read_settings_payload()
-        if not isinstance(payload, dict):
+        bundle = self._load_settings_bundle()
+        calibration = bundle.get("calibration", {})
+        committed = calibration.get("committed", {}) if isinstance(calibration, dict) else {}
+        if not isinstance(committed, dict):
             return config
-        return self._build_session_config(payload, base_config=config)
+        return self._build_session_config(committed, base_config=config)
 
     def _persist_config(self) -> None:
         payload = self._config_payload()
-        path = self.settings_path
-        try:
-            existing = self._read_settings_payload()
-            existing.update(payload)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
-        except Exception:
-            return
+        bundle = self._load_settings_bundle()
+        bundle["calibration"]["draft"].update(payload)
+        bundle["calibration"]["committed"].update(payload)
+        bundle["validation"] = self._refresh_committed_from_draft(bundle)
+        self._save_settings_bundle(bundle)
 
     def _mask_params(self, config: CalibrationSessionConfig | None = None) -> Dict[str, Any]:
         source = config or self.config
@@ -2835,142 +3715,277 @@ class LoutrackGuiState:
     # ── Intrinsics capture ─────────────────────────────────────────────
 
     def start_intrinsics_capture(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        camera_id = str(payload.get("camera_id", "pi-cam-01")).strip()
-        mjpeg_url = str(payload.get("mjpeg_url", "")).strip()
-        square_length_mm = float(payload.get("square_length_mm", 30.0))
-        marker_length_mm_raw = payload.get("marker_length_mm")
+        bundle = self._load_settings_bundle()
+        if payload:
+            intrinsics_patch = {
+                key: payload[key]
+                for key in (
+                    "camera_id",
+                    "mjpeg_url",
+                    "square_length_mm",
+                    "marker_length_mm",
+                    "squares_x",
+                    "squares_y",
+                    "min_frames",
+                    "cooldown_s",
+                )
+                if key in payload
+            }
+            if intrinsics_patch:
+                bundle = self._apply_draft_patch(bundle, {"intrinsics": intrinsics_patch})
+
+        validation = bundle.get("validation", {}).get("intrinsics", {})
+        if isinstance(validation, dict) and validation:
+            raise ValueError(f"intrinsics settings invalid: {validation}")
+
+        committed = bundle.get("intrinsics", {}).get("committed", {})
+        if not isinstance(committed, dict):
+            committed = self._default_intrinsics_payload()
+        camera_id = str(committed.get("camera_id", "pi-cam-01")).strip()
+        if not camera_id:
+            raise ValueError("intrinsics camera_id is required")
+        self._intrinsics_assert_capability(camera_id)
+        square_length_mm = float(committed.get("square_length_mm", 30.0))
+        marker_length_mm_raw = committed.get("marker_length_mm")
         marker_length_mm = float(marker_length_mm_raw) if marker_length_mm_raw is not None else None
-        squares_x = int(payload.get("squares_x", 6))
-        squares_y = int(payload.get("squares_y", 8))
-        min_frames = int(payload.get("min_frames", 25))
-        cooldown_s = float(payload.get("cooldown_s", 1.5))
+        squares_x = int(committed.get("squares_x", 6))
+        squares_y = int(committed.get("squares_y", 8))
+        min_frames = int(committed.get("min_frames", 25))
+        cooldown_s = float(committed.get("cooldown_s", 1.5))
 
-        if not mjpeg_url:
-            raise ValueError("mjpeg_url is required")
-        if square_length_mm <= 0:
-            raise ValueError("square_length_mm must be > 0")
-
-        config = IntrinsicsConfig(
-            camera_id=camera_id,
-            mjpeg_url=mjpeg_url,
+        status = self._intrinsics_send_command(
+            camera_id,
+            "intrinsics_start",
             square_length_mm=square_length_mm,
             marker_length_mm=marker_length_mm,
             squares_x=squares_x,
             squares_y=squares_y,
             min_frames=min_frames,
             cooldown_s=cooldown_s,
-            output_dir=PROJECT_ROOT / "calibration",
         )
-        with self._intrinsics_lock:
-            if self._intrinsics is not None:
-                self._intrinsics.stop()
-            self._intrinsics = IntrinsicsCapture(config)
-            self._intrinsics.start()
-        self._persist_intrinsics_settings(payload)
-        return {"ok": True, "camera_id": camera_id}
+        self._intrinsics_active_camera_id = camera_id
+        self._persist_intrinsics_settings(committed)
+        output_path = self._save_intrinsics_result_if_ready(camera_id, status)
+        if output_path is not None:
+            status["output_path"] = output_path
+        return {"ok": True, "camera_id": camera_id, "status": status}
 
     def stop_intrinsics_capture(self) -> Dict[str, Any]:
-        with self._intrinsics_lock:
-            cap = self._intrinsics
-        if cap is not None:
-            cap.stop()
+        camera_id = self._intrinsics_active_camera_id or self._intrinsics_camera_from_settings()
+        if camera_id:
+            self._intrinsics_send_command(camera_id, "intrinsics_stop")
+        self._intrinsics_active_camera_id = None
         return {"ok": True}
 
     def clear_intrinsics_frames(self) -> Dict[str, Any]:
-        with self._intrinsics_lock:
-            cap = self._intrinsics
-        if cap is not None:
-            cap.clear()
-        return {"ok": True}
+        camera_id = self._intrinsics_active_camera_id or self._intrinsics_camera_from_settings()
+        if not camera_id:
+            raise ValueError("No intrinsics camera configured")
+        status = self._intrinsics_send_command(camera_id, "intrinsics_clear")
+        return {"ok": True, "status": status}
 
     def trigger_intrinsics_calibration(self) -> Dict[str, Any]:
-        with self._intrinsics_lock:
-            cap = self._intrinsics
-        if cap is None:
-            raise ValueError("No active intrinsics capture session")
-        cap.trigger_calibration()
-        return {"ok": True}
+        camera_id = self._intrinsics_active_camera_id or self._intrinsics_camera_from_settings()
+        if not camera_id:
+            raise ValueError("No intrinsics camera configured")
+        status = self._intrinsics_send_command(camera_id, "intrinsics_calibrate")
+        output_path = self._save_intrinsics_result_if_ready(camera_id, status)
+        if output_path is not None:
+            status["output_path"] = output_path
+        return {"ok": True, "status": status}
 
     def discard_intrinsics_capture(self) -> Dict[str, Any]:
-        with self._intrinsics_lock:
-            if self._intrinsics is not None:
-                self._intrinsics.stop()
-                self._intrinsics = None
+        camera_id = self._intrinsics_active_camera_id or self._intrinsics_camera_from_settings()
+        if camera_id:
+            try:
+                self._intrinsics_send_command(camera_id, "intrinsics_stop")
+            except Exception:
+                pass
+        self._intrinsics_active_camera_id = None
+        self._intrinsics_last_saved_signature = None
         return {"ok": True}
 
     def get_intrinsics_status(self) -> Dict[str, Any]:
-        with self._intrinsics_lock:
-            cap = self._intrinsics
-        if cap is None:
-            targets = self.session.discover_targets(None)
-            camera_list = [{"camera_id": t.camera_id, "ip": t.ip} for t in targets]
-            return {
-                "phase": "idle",
-                "camera_id": None,
-                "frames_captured": 0,
-                "frames_needed": 25,
-                "frames_target": 50,
-                "frames_rejected_cooldown": 0,
-                "frames_rejected_spatial": 0,
-                "frames_rejected_detection": 0,
-                "grid_coverage": [[0, 0, 0], [0, 0, 0], [0, 0, 0]],
-                "last_error": None,
-                "calibration_result": None,
-                "output_path": None,
-                "cameras": camera_list,
-            }
-        status = cap.get_status()
         targets = self.session.discover_targets(None)
-        status["cameras"] = [{"camera_id": t.camera_id, "ip": t.ip} for t in targets]
+        camera_list = [{"camera_id": t.camera_id, "ip": t.ip} for t in targets]
+        camera_id = self._intrinsics_active_camera_id or self._intrinsics_camera_from_settings()
+        if not camera_id:
+            status = self._intrinsics_idle_status(None)
+            status["cameras"] = camera_list
+            return status
+
+        status = self._intrinsics_idle_status(camera_id)
+        try:
+            target = self._intrinsics_find_target(camera_id)
+            if target is None:
+                raise ValueError(f"intrinsics camera not discovered: {camera_id}")
+            remote_status = self._intrinsics_send_command(camera_id, "intrinsics_status")
+            status.update(remote_status)
+        except Exception as exc:
+            status["phase"] = "error"
+            status["last_error"] = str(exc)
+
+        output_path = self._save_intrinsics_result_if_ready(camera_id, status)
+        status["output_path"] = output_path
+        status["cameras"] = camera_list
         return status
 
     def get_intrinsics_jpeg(self) -> Optional[bytes]:
-        with self._intrinsics_lock:
-            cap = self._intrinsics
-        if cap is None:
+        bundle = self._load_settings_bundle()
+        intrinsics = bundle.get("intrinsics", {})
+        draft = intrinsics.get("draft", {}) if isinstance(intrinsics, dict) else {}
+        committed = intrinsics.get("committed", {}) if isinstance(intrinsics, dict) else {}
+        mjpeg_url = ""
+        if isinstance(draft, dict):
+            mjpeg_url = str(draft.get("mjpeg_url", "")).strip()
+        if not mjpeg_url and isinstance(committed, dict):
+            mjpeg_url = str(committed.get("mjpeg_url", "")).strip()
+        if not mjpeg_url:
             return None
-        return cap.get_latest_jpeg()
+        return self._fetch_single_mjpeg_frame(mjpeg_url)
+
+    def _intrinsics_idle_status(self, camera_id: str | None) -> Dict[str, Any]:
+        return {
+            "phase": "idle",
+            "camera_id": camera_id,
+            "frames_captured": 0,
+            "frames_needed": 25,
+            "frames_target": 50,
+            "frames_rejected_cooldown": 0,
+            "frames_rejected_spatial": 0,
+            "frames_rejected_detection": 0,
+            "grid_coverage": [[0, 0, 0], [0, 0, 0], [0, 0, 0]],
+            "last_error": None,
+            "calibration_result": None,
+            "output_path": None,
+        }
+
+    def _intrinsics_camera_from_settings(self) -> str | None:
+        bundle = self._load_settings_bundle()
+        committed = bundle.get("intrinsics", {}).get("committed", {})
+        if not isinstance(committed, dict):
+            return None
+        camera_id = str(committed.get("camera_id", "")).strip()
+        return camera_id or None
+
+    def _intrinsics_find_target(self, camera_id: str) -> Any | None:
+        for target in self.session.discover_targets(None):
+            if str(target.camera_id).strip() == camera_id:
+                return target
+        return None
+
+    def _intrinsics_assert_capability(self, camera_id: str) -> None:
+        target = self._intrinsics_find_target(camera_id)
+        if target is None:
+            raise ValueError(f"intrinsics camera not discovered: {camera_id}")
+        ping_resp = self.session._broadcast([target], "ping").get(camera_id, {})
+        if not bool(ping_resp.get("ack")):
+            raise ValueError(ping_resp.get("error") or ping_resp.get("error_message") or "ping failed")
+        result = ping_resp.get("result", {})
+        supported_obj = result.get("supported_commands") if isinstance(result, dict) else None
+        supported = set(supported_obj) if isinstance(supported_obj, list) else set()
+        required = {
+            "intrinsics_start",
+            "intrinsics_stop",
+            "intrinsics_clear",
+            "intrinsics_calibrate",
+            "intrinsics_status",
+        }
+        missing = sorted(required - supported)
+        if missing:
+            raise ValueError(
+                "intrinsics capability missing on Pi. "
+                f"camera_id={camera_id} missing={','.join(missing)}"
+            )
+
+    def _intrinsics_send_command(self, camera_id: str, fn_name: str, **kwargs: Any) -> Dict[str, Any]:
+        target = self._intrinsics_find_target(camera_id)
+        if target is None:
+            raise ValueError(f"intrinsics camera not discovered: {camera_id}")
+        response = self.session._broadcast([target], fn_name, **kwargs).get(camera_id, {})
+        if not bool(response.get("ack")):
+            raise ValueError(response.get("error") or response.get("error_message") or f"{fn_name} failed")
+        result = response.get("result", {})
+        return result if isinstance(result, dict) else {}
+
+    def _save_intrinsics_result_if_ready(self, camera_id: str, status: Dict[str, Any]) -> str | None:
+        calibration_result = status.get("calibration_result")
+        if status.get("phase") != "done" or not isinstance(calibration_result, dict):
+            return None
+        signature = (
+            camera_id,
+            hash(json.dumps(calibration_result, ensure_ascii=False, sort_keys=True)),
+        )
+        output_path = PROJECT_ROOT / "calibration" / f"calibration_intrinsics_v1_{camera_id}.json"
+        if self._intrinsics_last_saved_signature != signature:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(
+                json.dumps(calibration_result, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            self._intrinsics_last_saved_signature = signature
+        return str(output_path)
+
+    def _fetch_single_mjpeg_frame(self, url: str) -> Optional[bytes]:
+        try:
+            with urllib.request.urlopen(url, timeout=1.5) as response:
+                content_type = str(response.headers.get("Content-Type", ""))
+                boundary = b""
+                for part in content_type.split(";"):
+                    token = part.strip()
+                    if token.startswith("boundary="):
+                        boundary = token.split("=", 1)[1].encode("utf-8")
+                        break
+
+                content_length = -1
+                while True:
+                    line = response.readline()
+                    if not line:
+                        return None
+                    stripped = line.strip()
+                    if stripped.lower().startswith(b"content-length:"):
+                        try:
+                            content_length = int(stripped.split(b":", 1)[1].strip())
+                        except Exception:
+                            content_length = -1
+                    if stripped == b"":
+                        break
+
+                if content_length > 0:
+                    data = response.read(content_length)
+                    _ = response.read(2)
+                    return bytes(data) if data else None
+
+                data = bytearray()
+                deadline = time.monotonic() + 1.2
+                while time.monotonic() < deadline:
+                    line = response.readline()
+                    if not line:
+                        break
+                    if boundary and boundary in line:
+                        break
+                    data.extend(line)
+                frame = bytes(data).strip()
+                return frame if frame else None
+        except Exception:
+            return None
 
     def _persist_intrinsics_settings(self, payload: Dict[str, Any]) -> None:
-        path = self.settings_path
-        try:
-            existing = self._read_settings_payload()
-            marker_mm_raw = payload.get("marker_length_mm")
-            existing["intrinsics"] = {
-                "camera_id": str(payload.get("camera_id", "pi-cam-01")),
-                "mjpeg_url": str(payload.get("mjpeg_url", "")),
-                "square_length_mm": float(payload.get("square_length_mm", 30.0)),
-                "marker_length_mm": float(marker_mm_raw) if marker_mm_raw is not None else None,
-                "squares_x": int(payload.get("squares_x", 6)),
-                "squares_y": int(payload.get("squares_y", 8)),
-                "min_frames": int(payload.get("min_frames", 25)),
-                "cooldown_s": float(payload.get("cooldown_s", 1.5)),
-            }
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
-        except Exception:
-            pass
+        bundle = self._load_settings_bundle()
+        bundle["intrinsics"]["draft"].update(payload)
+        bundle["intrinsics"]["committed"].update(payload)
+        bundle["validation"] = self._refresh_committed_from_draft(bundle)
+        self._save_settings_bundle(bundle)
 
     def _load_intrinsics_settings(self) -> Dict[str, Any]:
-        defaults: Dict[str, Any] = {
-            "camera_id": "pi-cam-01",
-            "mjpeg_url": "",
-            "square_length_mm": 30.0,
-            "marker_length_mm": None,
-            "squares_x": 6,
-            "squares_y": 8,
-            "min_frames": 25,
-            "cooldown_s": 1.5,
-        }
-        try:
-            payload = self._read_settings_payload()
-            saved = payload.get("intrinsics", {}) if isinstance(payload, dict) else {}
-            if isinstance(saved, dict):
-                for k in defaults:
-                    if k in saved:
-                        defaults[k] = saved[k]
-        except Exception:
-            pass
+        defaults: Dict[str, Any] = self._default_intrinsics_payload()
+        bundle = self._load_settings_bundle()
+        intrinsics = bundle.get("intrinsics", {})
+        draft = intrinsics.get("draft", {}) if isinstance(intrinsics, dict) else {}
+        if isinstance(draft, dict):
+            for key in defaults:
+                if key in draft:
+                    defaults[key] = draft[key]
         return defaults
 
     # ── end Intrinsics capture ─────────────────────────────────────────
@@ -2994,6 +4009,12 @@ class LoutrackGuiState:
         raw_camera_ids = payload.get("camera_ids")
         if raw_camera_ids is None:
             self.selected_camera_ids = []
+            try:
+                bundle = self._load_settings_bundle()
+                bundle["ui"]["selected_camera_ids"] = []
+                self._save_settings_bundle(bundle)
+            except Exception:
+                pass
             return
         if not isinstance(raw_camera_ids, list):
             raise ValueError("camera_ids must be a list")
@@ -3002,6 +4023,13 @@ class LoutrackGuiState:
             for camera_id in raw_camera_ids
             if str(camera_id).strip()
         ]
+        self.selected_camera_ids = list(dict.fromkeys(self.selected_camera_ids))
+        try:
+            bundle = self._load_settings_bundle()
+            bundle["ui"]["selected_camera_ids"] = list(self.selected_camera_ids)
+            self._save_settings_bundle(bundle)
+        except Exception:
+            pass
 
     def apply_config(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         self._sync_selected_camera_ids(payload)
@@ -3035,12 +4063,19 @@ class LoutrackGuiState:
             render_enabled = payload.get("render_enabled")
             if render_enabled is not None:
                 kwargs["render_enabled"] = bool(render_enabled)
+            overlays = payload.get("overlays")
+            if isinstance(overlays, dict):
+                kwargs["overlays"] = overlays
+            charuco = payload.get("charuco")
+            if isinstance(charuco, dict):
+                kwargs["charuco"] = charuco
             result = self.session._broadcast(targets, "set_preview", **kwargs)
             self._update_camera_status({command: result})
             self.last_result = {command: result}
             return self.last_result
         if command in ("start", "start_pose_capture"):
             log_path = self._start_capture_log("pose_capture")
+            self._update_runtime_hints(pose_log_path=str(log_path))
             result = self.session._broadcast(targets, "start", mode="pose_capture")
             payload_out: Dict[str, Any] = {command: result, "capture_log": {"path": str(log_path)}}
             if not self._all_acked(result):
@@ -3051,13 +4086,18 @@ class LoutrackGuiState:
             self.last_result = payload_out
             return self.last_result
         if command == "start_wand_metric_capture":
-            duration_s = float(payload.get("duration_s", self.config.duration_s))
+            bundle = self._load_settings_bundle()
+            committed_calibration = bundle.get("calibration", {}).get("committed", {})
+            committed_extrinsics = bundle.get("extrinsics", {}).get("committed", {})
+            default_duration = committed_calibration.get("wand_metric_seconds", self.config.duration_s)
+            duration_s = float(payload.get("duration_s", default_duration))
             if duration_s <= 0.0:
                 raise ValueError("duration_s must be > 0")
-            wand_log_raw = str(payload.get("wand_metric_log_path", "")).strip()
+            wand_log_raw = str(payload.get("wand_metric_log_path", committed_extrinsics.get("wand_metric_log_path", ""))).strip()
             if wand_log_raw:
                 self.wand_metric_log_path = self._resolve_project_path(wand_log_raw, DEFAULT_WAND_METRIC_LOG_PATH)
             log_path = self._start_capture_log("wand_metric_capture")
+            self._update_runtime_hints(wand_metric_log_path=str(log_path))
             result = self.session._broadcast(targets, "start", mode="wand_metric_capture")
             payload_out = {
                 command: result,
@@ -3077,9 +4117,17 @@ class LoutrackGuiState:
             self._cancel_capture_timer()
             result = self.session._broadcast(targets, "stop")
             payload_out = {command: result}
+            with self.lock:
+                active_kind = self._active_capture_kind
             stop_meta = self._stop_capture_log()
             if stop_meta is not None:
                 payload_out["capture_log"] = stop_meta
+                log_file = stop_meta.get("log_file") if isinstance(stop_meta, dict) else None
+                if isinstance(log_file, str):
+                    if command == "stop_wand_metric_capture" or active_kind == "wand_metric_capture":
+                        self._update_runtime_hints(wand_metric_log_path=log_file)
+                    else:
+                        self._update_runtime_hints(pose_log_path=log_file)
             self._update_camera_status({command: result})
             self.last_result = payload_out
             return self.last_result
@@ -3092,18 +4140,47 @@ class LoutrackGuiState:
         return self.last_result
 
     def generate_extrinsics(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        bundle = self._load_settings_bundle()
+        if payload:
+            extrinsics_patch = {
+                key: payload[key]
+                for key in (
+                    "intrinsics_path",
+                    "pose_log_path",
+                    "wand_metric_log_path",
+                    "output_path",
+                    "pair_window_us",
+                    "wand_pair_window_us",
+                    "min_pairs",
+                )
+                if key in payload
+            }
+            if "log_path" in payload and "pose_log_path" not in extrinsics_patch:
+                extrinsics_patch["pose_log_path"] = payload["log_path"]
+            if extrinsics_patch:
+                bundle = self._apply_draft_patch(bundle, {"extrinsics": extrinsics_patch})
+        validation = bundle.get("validation", {}).get("extrinsics", {})
+        if isinstance(validation, dict) and validation:
+            raise ValueError(f"extrinsics settings invalid: {validation}")
+
+        committed_extrinsics = bundle.get("extrinsics", {}).get("committed", {})
+        if not isinstance(committed_extrinsics, dict):
+            committed_extrinsics = self._default_extrinsics_payload()
+
         extrinsics_method = str(payload.get("extrinsics_method", "blob_pose_v2")).strip() or "blob_pose_v2"
-        intrinsics_raw = str(payload.get("intrinsics_path", "calibration")).strip()
-        log_raw = str(payload.get("pose_log_path", payload.get("log_path", str(DEFAULT_POSE_LOG_PATH)))).strip()
-        output_raw = str(payload.get("output_path", str(DEFAULT_EXTRINSICS_OUTPUT_PATH))).strip()
+        intrinsics_raw = str(committed_extrinsics.get("intrinsics_path", "calibration")).strip()
+        log_raw = str(committed_extrinsics.get("pose_log_path", str(DEFAULT_POSE_LOG_PATH))).strip()
+        output_raw = str(committed_extrinsics.get("output_path", str(DEFAULT_EXTRINSICS_OUTPUT_PATH))).strip()
         intrinsics_path = self._resolve_project_path(intrinsics_raw, Path("calibration"))
         resolved_log_path = self._resolve_project_path(log_raw, DEFAULT_POSE_LOG_PATH)
-        wand_log_raw = str(payload.get("wand_metric_log_path", str(self.wand_metric_log_path))).strip()
+        wand_log_raw = str(
+            committed_extrinsics.get("wand_metric_log_path", str(self.wand_metric_log_path))
+        ).strip()
         resolved_output = self._resolve_project_path(output_raw, DEFAULT_EXTRINSICS_OUTPUT_PATH)
         resolved_wand_log_path = self._resolve_project_path(wand_log_raw, DEFAULT_WAND_METRIC_LOG_PATH)
-        pair_window_us = int(payload.get("pair_window_us", 2000))
-        min_pairs = int(payload.get("min_pairs", 8))
-        wand_pair_window_us = int(payload.get("wand_pair_window_us", 8000))
+        pair_window_us = int(committed_extrinsics.get("pair_window_us", 2000))
+        min_pairs = int(committed_extrinsics.get("min_pairs", 8))
+        wand_pair_window_us = int(committed_extrinsics.get("wand_pair_window_us", 8000))
         if pair_window_us < 1:
             raise ValueError("pair_window_us must be >= 1")
         if min_pairs < 1:
@@ -3194,6 +4271,10 @@ class LoutrackGuiState:
         self.latest_extrinsics_path = resolved_output
         self.latest_extrinsics_quality = quality_summary
         self.last_result = {"generate_extrinsics": summary}
+        self._update_runtime_hints(
+            pose_log_path=str(resolved_log_path),
+            wand_metric_log_path=str(resolved_wand_log_path),
+        )
         return self.last_result
 
     @staticmethod
@@ -3369,6 +4450,12 @@ class LoutrackGuiState:
                 stop_meta = self._stop_capture_log()
                 if stop_meta is not None:
                     payload_out["capture_log"] = stop_meta
+                    log_file = stop_meta.get("log_file") if isinstance(stop_meta, dict) else None
+                    if isinstance(log_file, str):
+                        if capture_kind == "pose_capture":
+                            self._update_runtime_hints(pose_log_path=log_file)
+                        elif capture_kind == "wand_metric_capture":
+                            self._update_runtime_hints(wand_metric_log_path=log_file)
                 self._update_camera_status({"stop": result})
                 self.last_result = payload_out
             finally:
@@ -3402,6 +4489,9 @@ class LoutrackGuiHandler(BaseHTTPRequestHandler):
         if path == "/api/state":
             self._send_json(self.state.get_state())
             return
+        if path == "/api/settings":
+            self._send_json(self.state.get_settings())
+            return
         if path == "/api/tracking/status":
             self._send_json(self.state.get_tracking_status())
             return
@@ -3431,6 +4521,12 @@ class LoutrackGuiHandler(BaseHTTPRequestHandler):
             payload = self._read_json()
             if self.path == "/api/config":
                 self._send_json(self.state.apply_config(payload))
+                return
+            if self.path == "/api/settings/draft":
+                self._send_json(self.state.apply_settings_draft(payload))
+                return
+            if self.path == "/api/settings/ui":
+                self._send_json(self.state.apply_settings_ui(payload))
                 return
             if self.path == "/api/command":
                 self._debug_log(
