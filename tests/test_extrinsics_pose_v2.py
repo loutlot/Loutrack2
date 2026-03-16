@@ -315,3 +315,54 @@ def test_solver_resolves_metric_and_world_with_wand_log(tmp_path: Path) -> None:
     assert result["pose"]["solve_summary"]["matched_delta_us_max"] == 900
     for row in result["pose"]["camera_poses"]:
         assert 0.8 <= float(row["focal_scale"]) <= 1.2
+
+
+def test_solver_payload_paths_do_not_expose_absolute_directories(tmp_path: Path) -> None:
+    intrinsics_dir = tmp_path / "calibration"
+    intrinsics_dir.mkdir()
+    _write_intrinsics(intrinsics_dir / "calibration_intrinsics_v1_pi-cam-01.json", "pi-cam-01")
+    _write_intrinsics(intrinsics_dir / "calibration_intrinsics_v1_pi-cam-02.json", "pi-cam-02")
+
+    k = np.array([[900.0, 0.0, 640.0], [0.0, 900.0, 480.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+    rvec_cam2 = np.array([0.0, np.deg2rad(10.0), 0.0], dtype=np.float64)
+    tvec_cam2 = np.array([0.30, 0.02, 0.01], dtype=np.float64)
+
+    pose_log = tmp_path / "extrinsics_pose_capture_abs.jsonl"
+    with pose_log.open("w", encoding="utf-8") as handle:
+        handle.write(json.dumps({"_type": "header", "schema_version": "1.0"}) + "\n")
+        for frame_index in range(12):
+            point_w = np.array(
+                [-0.20 + frame_index * 0.015, -0.04 + frame_index * 0.006, 1.8 + (frame_index % 4) * 0.05],
+                dtype=np.float64,
+            )
+            uv1 = _project(point_w, np.zeros(3, dtype=np.float64), np.zeros(3, dtype=np.float64), k)
+            uv2 = _project(point_w, rvec_cam2, tvec_cam2, k)
+            timestamp = 1_700_002_000_000_000 + frame_index * 16_000
+            _write_pose_frame(
+                handle,
+                "pi-cam-01",
+                frame_index,
+                timestamp,
+                [{"x": float(uv1[0]), "y": float(uv1[1]), "area": 80.0}],
+                blob_count=1,
+            )
+            _write_pose_frame(
+                handle,
+                "pi-cam-02",
+                frame_index,
+                timestamp + 900,
+                [{"x": float(uv2[0]), "y": float(uv2[1]), "area": 80.0}],
+                blob_count=1,
+            )
+
+    output_path = intrinsics_dir / "extrinsics_pose_v2.json"
+    result = _mod.solve_extrinsics(
+        intrinsics_path=intrinsics_dir.resolve(),
+        pose_log_path=pose_log.resolve(),
+        output_path=output_path.resolve(),
+        min_pairs=8,
+    )
+
+    assert "/tmp/" not in result["pose_capture_log_path"]
+    assert str(Path.home()) not in result["pose_capture_log_path"]
+    assert result["pose_capture_log_path"].endswith("extrinsics_pose_capture_abs.jsonl")

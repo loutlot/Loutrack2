@@ -51,6 +51,18 @@ class CameraRow:
     matched_delta_us: List[int | None]
 
 
+def _sanitize_path_for_payload(path_value: str | Path) -> str:
+    path = Path(path_value)
+    if not path.is_absolute():
+        return path.as_posix()
+    cwd = Path.cwd().resolve()
+    try:
+        return path.resolve().relative_to(cwd).as_posix()
+    except ValueError:
+        # Keep payload portable and avoid leaking machine-local absolute directories.
+        return path.name
+
+
 def _extract_frame_payload(entry: Dict[str, Any]) -> Dict[str, Any] | None:
     if entry.get("_type") == "frame" and isinstance(entry.get("data"), dict):
         return entry["data"]
@@ -598,7 +610,7 @@ def serialize_extrinsics_pose_v2(
         "schema_version": "2.0",
         "method": "reference_pose_capture",
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "pose_capture_log_path": str(Path(pose_log_path)),
+        "pose_capture_log_path": _sanitize_path_for_payload(pose_log_path),
         "camera_order": list(camera_order),
         "pose": {
             "frame": "similarity_camera",
@@ -622,7 +634,7 @@ def serialize_extrinsics_pose_v2(
         "world": world_payload,
     }
     if wand_metric_log_path is not None:
-        payload["wand_metric_log_path"] = str(Path(wand_metric_log_path))
+        payload["wand_metric_log_path"] = _sanitize_path_for_payload(wand_metric_log_path)
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -666,7 +678,7 @@ def _resolved_metric_payload(
         "frame": "metric_camera",
         "scale_m_per_unit": float(scale_meta.get("scale_m_per_unit", 1.0)),
         "source": scale_meta.get("scale_source"),
-        "wand_metric_log_path": str(wand_metric_log_path),
+        "wand_metric_log_path": _sanitize_path_for_payload(wand_metric_log_path),
         "wand_metric_frames": int(scale_meta.get("wand_metric_frames", 0) or 0),
         "camera_poses": _serialize_camera_pose_rows(
             camera_order,
