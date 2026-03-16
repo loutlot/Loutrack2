@@ -464,7 +464,7 @@ python src/host/wand_gui.py --host 0.0.0.0 --port 8765 --udp-port 5000
 ### Extrinsics 3D 可視化
 
 ```bash
-.venv/bin/python src/host/view_extrinsics_3d.py \
+.venv/bin/python src/host/auxiliary/view_extrinsics_3d.py \
   --extrinsics calibration/extrinsics_pose_v2.json \
   --intrinsics-dir calibration \
   --save logs/extrinsics_pose_v2_view.png

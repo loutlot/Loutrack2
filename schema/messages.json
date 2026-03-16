@@ -14,8 +14,13 @@
     "timestamp": {
       "type": "integer",
       "minimum": 0,
-      "description": "Unix epoch timestamp in microseconds (int64). Represents the frame capture completion time, PTP-synchronized if available.",
+      "description": "Unix epoch timestamp in microseconds (int64). Represents the published capture timestamp.",
       "examples": [1708594800000000]
+    },
+    "timestamp_source": {
+      "type": "string",
+      "enum": ["sensor_metadata", "capture_dequeue"],
+      "description": "Source used to derive the public timestamp"
     },
     "frame_index": {
       "type": "integer",
@@ -23,6 +28,21 @@
       "maximum": 4294967295,
       "description": "Monotonically increasing frame counter per camera (uint32). Used as secondary pairing key if timestamp fails.",
       "examples": [0, 1, 2]
+    },
+    "capture_mode": {
+      "type": "string",
+      "enum": ["capture", "pose_capture", "wand_metric_capture"],
+      "description": "Capture mode active when this frame was emitted"
+    },
+    "blob_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of accepted blobs. Present for pose_capture frames."
+    },
+    "quality": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Single-point pose-capture quality score. Present for pose_capture frames."
     },
     "blobs": {
       "type": "array",
@@ -49,5 +69,18 @@
       }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "capture_mode": { "const": "pose_capture" }
+        },
+        "required": ["capture_mode"]
+      },
+      "then": {
+        "required": ["blob_count", "quality"]
+      }
+    }
+  ],
   "additionalProperties": false
 }

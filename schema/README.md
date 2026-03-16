@@ -1,6 +1,7 @@
 # schema - JSON Schema定義
 
-Pi↔Host間のメッセージフォーマットと較正データのJSON Schema定義。
+Pi↔Host 間メッセージと較正成果物の参照用 JSON Schema。
+現状はランタイムでこのディレクトリを直接読みませんが、現行 wire format / 出力形式に合わせて保守します。
 
 ## ファイル一覧
 
@@ -12,7 +13,11 @@ PiからHostへ送信されるフレームデータのフォーマット。
 {
   "camera_id": "pi-cam-01",
   "timestamp": 1708594800000000,
+  "timestamp_source": "sensor_metadata",
   "frame_index": 42,
+  "capture_mode": "pose_capture",
+  "blob_count": 2,
+  "quality": 0.91,
   "blobs": [
     {"x": 100.5, "y": 200.3, "area": 50.0},
     {"x": 300.0, "y": 400.0, "area": 45.0}
@@ -24,7 +29,11 @@ PiからHostへ送信されるフレームデータのフォーマット。
 |-----------|-----|------|------|
 | `camera_id` | string | ✅ | カメラ/Pi識別子 |
 | `timestamp` | integer | ✅ | Unix時間 (マイクロ秒, int64) |
+| `timestamp_source` | string | | `sensor_metadata` または `capture_dequeue` |
 | `frame_index` | integer | ✅ | フレーム連番 (uint32) |
+| `capture_mode` | string | | `capture` / `pose_capture` / `wand_metric_capture` |
+| `blob_count` | integer | | `pose_capture` 時のみ付与される accepted blob 数 |
+| `quality` | number | | `pose_capture` 時のみ付与される単点観測 quality |
 | `blobs` | array | ✅ | 検出されたマーカーblob配列 |
 | `blobs[].x` | number | ✅ | X座標 (ピクセル) |
 | `blobs[].y` | number | ✅ | Y座標 (ピクセル) |
@@ -69,7 +78,7 @@ HostからPiへ送信する制御コマンド。TCP/JSON (JSON-RPC風)。
 | `error_code` | integer | | エラーコード (ack=false時) |
 | `error_message` | string | | エラーメッセージ |
 
-**使用可能コマンド**:
+**schema 上のコマンド集合**:
 | コマンド | パラメータ | 説明 |
 |----------|-----------|------|
 | `start` | `mode` | キャプチャ開始 |
@@ -81,8 +90,14 @@ HostからPiへ送信する制御コマンド。TCP/JSON (JSON-RPC風)。
 | `set_threshold` | `value` | blob 二値化しきい値（0-255） |
 | `set_blob_diameter` | `min_px`, `max_px` | blob 直径pxフィルタ |
 | `set_circularity_min` | `value` | blob circularity 下限（0-1） |
-| `led_on` / `led_off` | `ir`, `status_r/g/b` | LED制御 |
+| `mask_start` | `threshold`, `seconds`, `hit_ratio?`, `min_area?`, `dilate?` | static mask 構築開始 |
+| `mask_stop` | - | static mask 構築停止 |
+| `set_preview` | `render_enabled`, `overlays`, `charuco` | MJPEG preview / overlay 制御 |
 | `ping` | - | 生存確認 |
+
+補足:
+- `control.json` の enum は schema 上の集合で、実際に受理するコマンドは [capture.py](/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/pi/capture.py#L74) の `SCHEMA_COMMANDS` / `MVP_SUPPORTED_COMMANDS` に従います。
+- `led_on` / `led_off` / `set_resolution` は schema enum に残っていますが、現行 MVP では未サポートです。
 
 ---
 
@@ -143,52 +158,65 @@ Charucoボードを使用した内部較正の成果物。
 
 ---
 
-### calibration_extrinsics_v1.json - カメラ外部較正
+### calibration_extrinsics_v2.json - カメラ外部較正
 
-wand 収録ログから推定した world-to-camera extrinsics。
-参照カメラは `rotation_matrix = I`, `translation_m = [0, 0, 0]`。
+現行の本流出力は `reference_pose_capture` ベースの `v2` です。
+`pose` / `metric` / `world` を top-level で分離して持ちます。
 
 ```json
 {
-  "schema_version": "1.0",
-  "reference_camera_id": "pi-cam-01",
-  "created_at": "2026-03-08T12:00:00Z",
-  "wand": {
-    "name": "wand_l_b5_v1",
-    "marker_diameter_mm": 14.0,
-    "points_mm": [[0, 0, 0], [182, 0, 0], [0, 128.5, 0], [0, 257, 0]]
-  },
-  "cameras": [
-    {
-      "camera_id": "pi-cam-01",
-      "rotation_matrix": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
-      "translation_m": [0, 0, 0]
-    },
-    {
-      "camera_id": "pi-cam-02",
-      "rotation_matrix": [[0.99, 0.01, 0.1], [0.0, 1.0, 0.0], [-0.1, 0.0, 0.99]],
-      "translation_m": [0.52, 0.0, 0.02],
-      "quality": {
-        "pair_count": 84,
-        "median_reproj_error_px": 0.48,
-        "baseline_m": 0.52
+  "schema_version": "2.0",
+  "method": "reference_pose_capture",
+  "created_at": "2026-03-14T20:25:10.710719+00:00",
+  "pose_capture_log_path": "logs/extrinsics_pose_capture.jsonl",
+  "camera_order": ["pi-cam-01", "pi-cam-02"],
+  "pose": {
+    "frame": "similarity_camera",
+    "camera_poses": [
+      {
+        "camera_id": "pi-cam-01",
+        "R": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+        "t": [0, 0, 0],
+        "focal_scale": 0.88,
+        "median_reproj_error_px": 2.57
       }
+    ],
+    "solve_summary": {
+      "usable_rows": 1277,
+      "median_reproj_error_px": 2.52
     }
-  ]
+  },
+  "metric": {
+    "status": "resolved",
+    "frame": "metric_camera",
+    "scale_m_per_unit": 6.58,
+    "source": "wand_floor_metric"
+  },
+  "world": {
+    "status": "resolved",
+    "frame": "world",
+    "to_world_matrix": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
+    "floor_plane": {"normal": [0, 0, 1], "offset": 0, "axis": "Z"},
+    "source": "wand_floor_metric"
+  }
 }
 ```
 
 | フィールド | 型 | 必須 | 説明 |
 |-----------|-----|------|------|
-| `schema_version` | string | ✅ | スキーマバージョン ("1.0") |
-| `reference_camera_id` | string | ✅ | ワールド座標系の基準カメラ |
+| `schema_version` | string | ✅ | スキーマバージョン (`"2.0"`) |
+| `method` | string | ✅ | 現在は `reference_pose_capture` |
 | `created_at` | string | ✅ | 推定実施日時 (ISO 8601) |
-| `wand` | object | ✅ | wand 定義（名称、blob径、3D点） |
-| `session_meta` | object | | 収録ログや pair 窓などの補助情報 |
-| `cameras[]` | array | ✅ | カメラごとの world-to-camera extrinsics |
-| `cameras[].rotation_matrix` | 3x3 array | ✅ | 回転行列 `R` |
-| `cameras[].translation_m` | 3 array | ✅ | 並進ベクトル `t`（メートル） |
-| `cameras[].quality` | object | | inlier比、再投影誤差、基線長など |
+| `pose_capture_log_path` | string | ✅ | 単点 pose capture ログ |
+| `camera_order` | array | ✅ | 出力 camera 順序 |
+| `pose` | object | ✅ | similarity camera frame の解 |
+| `metric` | object | ✅ | scale 解決後の metric frame 情報 |
+| `world` | object | ✅ | floor / world 軸アライン後の情報 |
+| `wand_metric_log_path` | string | | floor / metric で使った wand log |
+
+### calibration_extrinsics_v1.json - 旧 schema
+
+`v1` は旧 wand 直解き系の参照用として残していますが、現行の `Generate Extrinsics` 出力は `v2` を使います。
 
 ---
 

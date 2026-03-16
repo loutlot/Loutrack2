@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict
 
-MODULE_SRC_ROOT = Path(__file__).resolve().parents[1]
+MODULE_SRC_ROOT = Path(__file__).resolve().parents[2]
 if __package__ in (None, ""):
     if str(MODULE_SRC_ROOT) not in sys.path:
         sys.path.insert(0, str(MODULE_SRC_ROOT))

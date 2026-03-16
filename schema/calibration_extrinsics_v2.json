@@ -1,0 +1,196 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://loutrack2.local/schema/calibration_extrinsics_v2.json",
+  "title": "Camera Extrinsic Calibration v2",
+  "description": "Schema for the current pose-capture based multi-camera extrinsic calibration output",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "method",
+    "created_at",
+    "pose_capture_log_path",
+    "camera_order",
+    "pose",
+    "metric",
+    "world"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "2.0"
+    },
+    "method": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "pose_capture_log_path": {
+      "type": "string"
+    },
+    "wand_metric_log_path": {
+      "type": "string"
+    },
+    "camera_order": {
+      "type": "array",
+      "minItems": 2,
+      "items": { "type": "string" }
+    },
+    "pose": {
+      "type": "object",
+      "required": ["frame", "camera_poses", "solve_summary"],
+      "properties": {
+        "frame": { "type": "string" },
+        "camera_poses": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "#/definitions/camera_pose" }
+        },
+        "solve_summary": {
+          "type": "object",
+          "properties": {
+            "captured_rows": { "type": "integer" },
+            "complete_rows": { "type": "integer" },
+            "pair_overlaps": {
+              "type": "object",
+              "additionalProperties": { "type": "integer" }
+            },
+            "iterations": { "type": "integer" },
+            "ba_cost": { "type": "number" },
+            "status": { "type": "integer" },
+            "success": { "type": "boolean" },
+            "message": { "type": "string" },
+            "usable_rows": { "type": "integer" },
+            "median_reproj_error_px": { "type": "number" },
+            "p90_reproj_error_px": { "type": "number" },
+            "matched_delta_us_p50": { "type": ["integer", "null"] },
+            "matched_delta_us_p90": { "type": ["integer", "null"] },
+            "matched_delta_us_max": { "type": ["integer", "null"] }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "metric": {
+      "type": "object",
+      "required": ["status", "source"],
+      "properties": {
+        "status": { "type": "string", "enum": ["resolved", "unresolved"] },
+        "frame": { "type": ["string", "null"] },
+        "scale_m_per_unit": { "type": ["number", "null"] },
+        "source": { "type": ["string", "null"] },
+        "wand_metric_log_path": { "type": "string" },
+        "wand_metric_frames": { "type": "integer" },
+        "camera_poses": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/camera_pose" }
+        },
+        "validation": { "$ref": "#/definitions/validation" },
+        "shape_rms_error_mm": { "type": ["number", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "world": {
+      "type": "object",
+      "required": ["status", "frame", "to_world_matrix", "floor_plane", "source"],
+      "properties": {
+        "status": { "type": "string", "enum": ["resolved", "unresolved"] },
+        "frame": { "type": ["string", "null"] },
+        "to_world_matrix": {
+          "type": ["array", "null"],
+          "minItems": 4,
+          "maxItems": 4,
+          "items": {
+            "type": "array",
+            "minItems": 4,
+            "maxItems": 4,
+            "items": { "type": "number" }
+          }
+        },
+        "floor_plane": {
+          "type": ["object", "null"],
+          "properties": {
+            "normal": {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 3,
+              "items": { "type": "number" }
+            },
+            "offset": { "type": "number" },
+            "axis": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "source": { "type": ["string", "null"] },
+        "origin_world": {
+          "type": ["array", "null"],
+          "items": { "type": "number" }
+        },
+        "origin_marker": { "type": ["string", "null"] },
+        "aligned_axis_world": {
+          "type": ["array", "null"],
+          "items": { "type": "number" }
+        },
+        "validation": { "$ref": "#/definitions/world_validation" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "definitions": {
+    "camera_pose": {
+      "type": "object",
+      "required": ["camera_id", "R", "t", "focal_scale", "median_reproj_error_px"],
+      "properties": {
+        "camera_id": { "type": "string" },
+        "R": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": { "type": "number" }
+          }
+        },
+        "t": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": { "type": "number" }
+        },
+        "focal_scale": { "type": "number" },
+        "median_reproj_error_px": { "type": ["number", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "validation": {
+      "type": "object",
+      "properties": {
+        "median_reproj_error_px": { "type": "number" },
+        "p90_reproj_error_px": { "type": "number" },
+        "positive_depth_ratio": { "type": "number" },
+        "baseline_range_m": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": { "type": "number" }
+        },
+        "floor_residual_mm": { "type": "number" },
+        "world_up_consistency": { "type": "number" }
+      },
+      "additionalProperties": true
+    },
+    "world_validation": {
+      "type": "object",
+      "properties": {
+        "floor_residual_mm": { "type": "number" },
+        "world_up_consistency": { "type": "number" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

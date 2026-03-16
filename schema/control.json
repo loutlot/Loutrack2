@@ -160,27 +160,35 @@
           },
           "additionalProperties": false
         }
-      }
+      },
+      "additionalProperties": false
     },
-    "params_led": {
+    "params_mask_start": {
       "type": "object",
-      "description": "Parameters for LED control",
+      "description": "Parameters for static mask initialization",
+      "required": ["threshold", "seconds"],
       "properties": {
-        "ir": {
-          "type": "boolean",
-          "description": "IR flash LED (GPIO 6)"
+        "threshold": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
         },
-        "status_r": {
-          "type": "boolean",
-          "description": "Status LED Red (GPIO 26)"
+        "seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0
         },
-        "status_g": {
-          "type": "boolean",
-          "description": "Status LED Green (GPIO 22)"
+        "hit_ratio": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
         },
-        "status_b": {
-          "type": "boolean",
-          "description": "Status LED Blue (GPIO 5)"
+        "min_area": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "dilate": {
+          "type": "integer",
+          "minimum": 0
         }
       }
     }
@@ -204,7 +212,7 @@
         },
         "params": {
           "type": "object",
-          "description": "Command-specific parameters"
+          "description": "Command-specific parameters. Runtime validation is command-specific."
         }
       },
       "additionalProperties": false

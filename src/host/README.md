@@ -290,7 +290,7 @@ python3 src/host/wand_gui.py --host <HOST_IP> --port 8765
 床置き wand の短時間収録だけを CLI で行う場合:
 
 ```bash
-.venv/bin/python src/host/capture_wand_floor.py \
+.venv/bin/python src/host/auxiliary/capture_wand_floor.py \
   --output logs/extrinsics_wand_metric.jsonl \
   --duration-s 3.0
 ```
