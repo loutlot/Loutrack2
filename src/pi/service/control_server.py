@@ -665,7 +665,7 @@ class ControlServer:
             "intrinsics_start": lambda: self._dispatch_intrinsics_start(request_id, request_camera_id, params),
             "intrinsics_stop": lambda: self._dispatch_intrinsics_stop(request_id, request_camera_id, params),
             "intrinsics_clear": lambda: self._dispatch_intrinsics_clear(request_id, request_camera_id, params),
-            "intrinsics_calibrate": lambda: self._dispatch_intrinsics_calibrate(request_id, request_camera_id, params),
+            "intrinsics_get_corners": lambda: self._dispatch_intrinsics_get_corners(request_id, request_camera_id, params),
             "intrinsics_status": lambda: self._dispatch_intrinsics_status(request_id, request_camera_id, params),
         }
         handler = handlers.get(cmd)
@@ -1263,7 +1263,7 @@ class ControlServer:
             result=self._intrinsics_session.status_payload(),
         )
 
-    def _dispatch_intrinsics_calibrate(
+    def _dispatch_intrinsics_get_corners(
         self,
         request_id: str,
         request_camera_id: str,
@@ -1274,34 +1274,13 @@ class ControlServer:
                 request_id=request_id,
                 request_camera_id=request_camera_id,
                 error_code=ERROR_INVALID_REQUEST,
-                error_message="invalid_request: intrinsics_calibrate does not accept params",
+                error_message="invalid_request: intrinsics_get_corners does not accept params",
             )
-        pipeline = self._pipeline
-        if pipeline is not None:
-            pipeline.set_intrinsics_session(None)
-        try:
-            calibration_result = self._intrinsics_session.calibrate()
-        except ValueError as exc:
-            return self._error_response(
-                request_id=request_id,
-                request_camera_id=request_camera_id,
-                error_code=ERROR_INVALID_REQUEST,
-                error_message=str(exc),
-            )
-        except Exception as exc:  # noqa: BLE001
-            return self._error_response(
-                request_id=request_id,
-                request_camera_id=request_camera_id,
-                error_code=ERROR_INTERNAL,
-                error_message=f"internal_error: intrinsics_calibration_failed: {exc}",
-            )
+        result = self._intrinsics_session.get_pending_corners()
         return self._ok_response(
             request_id=request_id,
             request_camera_id=request_camera_id,
-            result={
-                **self._intrinsics_session.status_payload(),
-                "calibration_result": calibration_result,
-            },
+            result=result,
         )
 
     def _dispatch_intrinsics_status(

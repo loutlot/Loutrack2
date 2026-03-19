@@ -134,74 +134,29 @@ class _IntrinsicsCaptureSession:
             if self._phase in {"done", "error"}:
                 self._phase = "idle"
 
-    def calibrate(self) -> dict[str, object]:
+    def get_pending_corners(self) -> dict[str, object]:
+        """Return all buffered corner sets and image metadata; does not clear the buffer."""
         with self._lock:
-            config = self._config
-            board = self._board
-            if config is None or board is None:
-                raise ValueError("invalid_request: intrinsics_start is required first")
-            if len(self._captured_corners) < int(config.min_frames):
-                raise ValueError(
-                    f"invalid_request: intrinsics requires at least {config.min_frames} frames "
-                    f"(got {len(self._captured_corners)})"
-                )
-            corners = [corner.copy() for corner in self._captured_corners]
-            ids = [ids_i.copy() for ids_i in self._captured_ids]
-            image_size = self._image_size
-            self._phase = "calibrating"
-            self._last_error = None
-
-        if image_size is None:
-            with self._lock:
-                self._phase = "error"
-                self._last_error = "calibration_failed: no_image_size"
-            raise RuntimeError("calibration_failed: no_image_size")
-
-        cal_module = self._ensure_cal_module()
-        try:
-            rms, camera_matrix, dist_coeffs, rvecs, tvecs = cal_module.calibrate_camera_charuco(
-                corners, ids, board, image_size
-            )
-            per_view_errors = cal_module.compute_per_view_errors(
-                corners, ids, board, camera_matrix, dist_coeffs, rvecs, tvecs
-            )
-            total_points = sum(len(corner) for corner in corners)
-            cal_config = cal_module.CalibrateConfig(
-                camera=str(config.camera_id),
-                output=None,
-                square_length_mm=float(config.square_length_mm),
-                marker_length_mm=float(config.marker_length_mm),
-                squares_x=int(config.squares_x),
-                squares_y=int(config.squares_y),
-                dictionary=str(config.dictionary),
-                input_dir=None,
-                self_test=False,
-                self_test_views=30,
-                seed=0,
-                min_frames=int(config.min_frames),
-            )
-            output = cal_module.build_output_json(
-                camera_id=str(config.camera_id),
-                camera_matrix=camera_matrix,
-                dist_coeffs=dist_coeffs,
-                rms_error=rms,
-                image_size=image_size,
-                config=cal_config,
-                per_view_errors=per_view_errors,
-                total_points=total_points,
-                num_valid_frames=len(corners),
-            )
-        except Exception as exc:
-            with self._lock:
-                self._phase = "error"
-                self._last_error = f"calibration_failed: {exc}"
-            raise
-
-        with self._lock:
-            self._calibration_result = cast(dict[str, object], output)
-            self._phase = "done"
-            self._last_error = None
-        return cast(dict[str, object], output)
+            frames = [
+                {
+                    "corners": c.tolist(),
+                    "ids": i.tolist(),
+                }
+                for c, i in zip(self._captured_corners, self._captured_ids)
+            ]
+            image_size = list(self._image_size) if self._image_size else None
+            return {
+                "frames": frames,
+                "count": len(frames),
+                "image_size": image_size,
+                "phase": self._phase,
+                "frames_captured": len(self._captured_corners),
+                "frames_rejected_cooldown": self._rejected_cooldown,
+                "frames_rejected_spatial": self._rejected_spatial,
+                "frames_rejected_detection": self._rejected_detection,
+                "grid_coverage": self._grid_coverage.tolist(),
+                "last_error": self._last_error,
+            }
 
     def consume_frame(self, frame: np.ndarray) -> None:
         with self._lock:

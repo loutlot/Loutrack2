@@ -433,18 +433,20 @@ def calibrate_camera_charuco(
     if not callable(calibrate_fn):
         raise SystemExit("OpenCV calibrateCameraCharuco API not found")
     
+    flags = cv2.CALIB_RATIONAL_MODEL  # 8-coefficient model: k1,k2,p1,p2,k3,k4,k5,k6
+
     # Try different API signatures
     try:
         # Modern API: calibrateCameraCharuco(charucoCorners, charucoIds, board, imageSize, cameraMatrix, distCoeffs)
         result: Any = calibrate_fn(
-            all_corners, all_ids, board, image_size, None, None
+            all_corners, all_ids, board, image_size, None, None, flags=flags
         )
         retval, camera_matrix, dist_coeffs, rvecs, tvecs = result
     except TypeError:
         try:
             # Alternative signature
             result: Any = calibrate_fn(
-                all_corners, all_ids, board, image_size, np.eye(3), np.zeros(5)
+                all_corners, all_ids, board, image_size, np.eye(3), np.zeros(8), flags=flags
             )
             retval, camera_matrix, dist_coeffs, rvecs, tvecs = result
         except TypeError as e:
@@ -688,10 +690,10 @@ def build_output_json(
     cx = float(camera_matrix[0, 2])
     cy = float(camera_matrix[1, 2])
     
-    # Build distortion array (k1, k2, p1, p2, k3, ...)
+    # Build distortion array (k1, k2, p1, p2, k3, k4, k5, k6)
     dist_array = dist_coeffs.flatten().tolist()
-    # Ensure at least 5 coefficients
-    while len(dist_array) < 5:
+    # Ensure at least 8 coefficients (CALIB_RATIONAL_MODEL)
+    while len(dist_array) < 8:
         dist_array.append(0.0)
     
     # Compute quality metrics
@@ -724,6 +726,9 @@ def build_output_json(
             "p1": float(dist_array[2]) if len(dist_array) > 2 else 0.0,
             "p2": float(dist_array[3]) if len(dist_array) > 3 else 0.0,
             "k3": float(dist_array[4]) if len(dist_array) > 4 else 0.0,
+            "k4": float(dist_array[5]) if len(dist_array) > 5 else 0.0,
+            "k5": float(dist_array[6]) if len(dist_array) > 6 else 0.0,
+            "k6": float(dist_array[7]) if len(dist_array) > 7 else 0.0,
             "array": [float(d) for d in dist_array],
         },
         "rms_error": float(rms_error),

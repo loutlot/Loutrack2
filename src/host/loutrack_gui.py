@@ -26,12 +26,14 @@ if __package__ in (None, ""):
     from host.tracking_runtime import TrackingRuntime
     from host.wand_session import CalibrationSession, CalibrationSessionConfig
     from host.extrinsics_methods import ExtrinsicsMethodRegistry, build_default_extrinsics_registry
+    from host.intrinsics_host_session import IntrinsicsHostSession, IntrinsicsHostSessionConfig
 else:
     from .receiver import UDPReceiver
     from .logger import FrameLogger
     from .tracking_runtime import TrackingRuntime
     from .wand_session import CalibrationSession, CalibrationSessionConfig
     from .extrinsics_methods import ExtrinsicsMethodRegistry, build_default_extrinsics_registry
+    from .intrinsics_host_session import IntrinsicsHostSession, IntrinsicsHostSessionConfig
 
 
 DEFAULT_SETTINGS_PATH = Path("logs") / "loutrack_gui_settings.json"
@@ -77,7 +79,10 @@ class LoutrackGuiState:
         self.receiver = receiver
         self.lock = threading.Lock()
         self._uses_default_settings_path = settings_path is None
-        self.settings_path = settings_path or DEFAULT_SETTINGS_PATH
+        default_settings_path = DEFAULT_SETTINGS_PATH
+        if not default_settings_path.is_absolute():
+            default_settings_path = (PROJECT_ROOT / default_settings_path).resolve()
+        self.settings_path = (settings_path or default_settings_path).resolve()
         self._migrate_settings_once()
         self.selected_camera_ids: List[str] = []
         self.config = self._load_initial_config()
@@ -103,8 +108,7 @@ class LoutrackGuiState:
         self.latest_extrinsics_path: Path | None = None
         self.latest_extrinsics_quality: Dict[str, Any] | None = None
         self._restore_latest_extrinsics(DEFAULT_EXTRINSICS_OUTPUT_PATH)
-        self._intrinsics_active_camera_id: str | None = None
-        self._intrinsics_last_saved_signature: tuple[str, float] | None = None
+        self._intrinsics_host_session: IntrinsicsHostSession | None = None
         settings_bundle = self._load_settings_bundle()
         ui_payload = settings_bundle.get("ui", {})
         if isinstance(ui_payload, dict):
@@ -191,6 +195,8 @@ class LoutrackGuiState:
         if not self._uses_default_settings_path:
             return
         old_path = OLD_SETTINGS_PATH
+        if not old_path.is_absolute():
+            old_path = (PROJECT_ROOT / old_path).resolve()
         if not old_path.exists() or old_path == self.settings_path:
             return
         self.settings_path.parent.mkdir(parents=True, exist_ok=True)
@@ -281,10 +287,10 @@ class LoutrackGuiState:
         if not isinstance(raw_payload, dict):
             return defaults
 
-        has_new_shape = all(
-            key in raw_payload for key in ("calibration", "intrinsics", "extrinsics", "ui", "runtime_hints")
+        has_sectioned_shape = any(
+            isinstance(raw_payload.get(key), dict) for key in ("calibration", "intrinsics", "extrinsics")
         )
-        if has_new_shape:
+        if has_sectioned_shape:
             normalized = defaults
 
             calibration_src = raw_payload.get("calibration")
@@ -292,24 +298,41 @@ class LoutrackGuiState:
                 for key in normalized["calibration"]["draft"]:
                     if key in calibration_src.get("draft", {}):
                         normalized["calibration"]["draft"][key] = calibration_src["draft"][key]
+                    elif key in calibration_src:
+                        normalized["calibration"]["draft"][key] = calibration_src[key]
                     if key in calibration_src.get("committed", {}):
                         normalized["calibration"]["committed"][key] = calibration_src["committed"][key]
+                    elif key in calibration_src:
+                        normalized["calibration"]["committed"][key] = calibration_src[key]
+            else:
+                for key in normalized["calibration"]["draft"]:
+                    if key in raw_payload:
+                        normalized["calibration"]["draft"][key] = raw_payload[key]
+                        normalized["calibration"]["committed"][key] = raw_payload[key]
 
             intrinsics_src = raw_payload.get("intrinsics")
             if isinstance(intrinsics_src, dict):
                 for key in normalized["intrinsics"]["draft"]:
                     if key in intrinsics_src.get("draft", {}):
                         normalized["intrinsics"]["draft"][key] = intrinsics_src["draft"][key]
+                    elif key in intrinsics_src:
+                        normalized["intrinsics"]["draft"][key] = intrinsics_src[key]
                     if key in intrinsics_src.get("committed", {}):
                         normalized["intrinsics"]["committed"][key] = intrinsics_src["committed"][key]
+                    elif key in intrinsics_src:
+                        normalized["intrinsics"]["committed"][key] = intrinsics_src[key]
 
             extrinsics_src = raw_payload.get("extrinsics")
             if isinstance(extrinsics_src, dict):
                 for key in normalized["extrinsics"]["draft"]:
                     if key in extrinsics_src.get("draft", {}):
                         normalized["extrinsics"]["draft"][key] = extrinsics_src["draft"][key]
+                    elif key in extrinsics_src:
+                        normalized["extrinsics"]["draft"][key] = extrinsics_src[key]
                     if key in extrinsics_src.get("committed", {}):
                         normalized["extrinsics"]["committed"][key] = extrinsics_src["committed"][key]
+                    elif key in extrinsics_src:
+                        normalized["extrinsics"]["committed"][key] = extrinsics_src[key]
                 locks = extrinsics_src.get("locks", {})
                 if isinstance(locks, dict):
                     normalized["extrinsics"]["locks"]["pose_log_path_manual"] = bool(
@@ -459,10 +482,8 @@ class LoutrackGuiState:
                 errors["camera_id"] = "must not be empty"
         if "mjpeg_url" in draft:
             value = self._to_string(draft.get("mjpeg_url"))
-            if value:
-                next_committed["mjpeg_url"] = value
-            else:
-                errors["mjpeg_url"] = "must not be empty"
+            # MJPEG is optional for frame preview; Pi-side intrinsics capture should still run without it.
+            next_committed["mjpeg_url"] = value
 
         int_specs = {
             "squares_x": (2, "must be integer >= 2"),
@@ -1035,90 +1056,81 @@ class LoutrackGuiState:
         self._intrinsics_assert_capability(camera_id)
         square_length_mm = float(committed.get("square_length_mm", 30.0))
         marker_length_mm_raw = committed.get("marker_length_mm")
-        marker_length_mm = float(marker_length_mm_raw) if marker_length_mm_raw is not None else None
+        marker_length_mm = (
+            float(marker_length_mm_raw)
+            if marker_length_mm_raw is not None
+            else square_length_mm * 0.75
+        )
         squares_x = int(committed.get("squares_x", 6))
         squares_y = int(committed.get("squares_y", 8))
         min_frames = int(committed.get("min_frames", 25))
         cooldown_s = float(committed.get("cooldown_s", 1.5))
+        mjpeg_url = str(committed.get("mjpeg_url", "")).strip()
 
-        status = self._intrinsics_send_command(
-            camera_id,
-            "intrinsics_start",
+        if self._intrinsics_host_session is not None:
+            try:
+                self._intrinsics_host_session.stop()
+            except Exception:
+                pass
+
+        config = IntrinsicsHostSessionConfig(
+            camera_id=camera_id,
+            mjpeg_url=mjpeg_url,
             square_length_mm=square_length_mm,
             marker_length_mm=marker_length_mm,
             squares_x=squares_x,
             squares_y=squares_y,
             min_frames=min_frames,
-            cooldown_s=cooldown_s,
+            poll_interval_s=cooldown_s,
+            output_dir=PROJECT_ROOT / "calibration",
         )
-        self._intrinsics_active_camera_id = camera_id
+        broadcast_fn = lambda fn, **kw: self._intrinsics_send_command(camera_id, fn, **kw)  # noqa: E731
+        self._intrinsics_host_session = IntrinsicsHostSession(config, broadcast_fn)
+        self._intrinsics_host_session.start()
         self._persist_intrinsics_settings(committed)
-        output_path = self._save_intrinsics_result_if_ready(camera_id, status)
-        if output_path is not None:
-            status["output_path"] = output_path
-        return {"ok": True, "camera_id": camera_id, "status": status}
+        return {"ok": True, "camera_id": camera_id, "status": self._intrinsics_host_session.get_status()}
 
     def stop_intrinsics_capture(self) -> Dict[str, Any]:
-        camera_id = self._intrinsics_active_camera_id or self._intrinsics_camera_from_settings()
-        if camera_id:
-            self._intrinsics_send_command(camera_id, "intrinsics_stop")
-        self._intrinsics_active_camera_id = None
+        if self._intrinsics_host_session is not None:
+            self._intrinsics_host_session.stop()
         return {"ok": True}
 
     def clear_intrinsics_frames(self) -> Dict[str, Any]:
-        camera_id = self._intrinsics_active_camera_id or self._intrinsics_camera_from_settings()
-        if not camera_id:
-            raise ValueError("No intrinsics camera configured")
-        status = self._intrinsics_send_command(camera_id, "intrinsics_clear")
-        return {"ok": True, "status": status}
+        if self._intrinsics_host_session is None:
+            raise ValueError("No intrinsics capture session active")
+        self._intrinsics_host_session.clear()
+        return {"ok": True, "status": self._intrinsics_host_session.get_status()}
 
     def trigger_intrinsics_calibration(self) -> Dict[str, Any]:
-        camera_id = self._intrinsics_active_camera_id or self._intrinsics_camera_from_settings()
-        if not camera_id:
-            raise ValueError("No intrinsics camera configured")
-        status = self._intrinsics_send_command(camera_id, "intrinsics_calibrate")
-        output_path = self._save_intrinsics_result_if_ready(camera_id, status)
-        if output_path is not None:
-            status["output_path"] = output_path
-        return {"ok": True, "status": status}
+        if self._intrinsics_host_session is None:
+            raise ValueError("No intrinsics capture session active")
+        self._intrinsics_host_session.trigger_calibration()
+        return {"ok": True, "status": self._intrinsics_host_session.get_status()}
 
     def discard_intrinsics_capture(self) -> Dict[str, Any]:
-        camera_id = self._intrinsics_active_camera_id or self._intrinsics_camera_from_settings()
-        if camera_id:
+        if self._intrinsics_host_session is not None:
             try:
-                self._intrinsics_send_command(camera_id, "intrinsics_stop")
+                self._intrinsics_host_session.stop()
             except Exception:
                 pass
-        self._intrinsics_active_camera_id = None
-        self._intrinsics_last_saved_signature = None
+            self._intrinsics_host_session = None
         return {"ok": True}
 
     def get_intrinsics_status(self) -> Dict[str, Any]:
         targets = self.session.discover_targets(None)
         camera_list = [{"camera_id": t.camera_id, "ip": t.ip} for t in targets]
-        camera_id = self._intrinsics_active_camera_id or self._intrinsics_camera_from_settings()
-        if not camera_id:
+        if self._intrinsics_host_session is None:
             status = self._intrinsics_idle_status(None)
             status["cameras"] = camera_list
             return status
-
-        status = self._intrinsics_idle_status(camera_id)
-        try:
-            target = self._intrinsics_find_target(camera_id)
-            if target is None:
-                raise ValueError(f"intrinsics camera not discovered: {camera_id}")
-            remote_status = self._intrinsics_send_command(camera_id, "intrinsics_status")
-            status.update(remote_status)
-        except Exception as exc:
-            status["phase"] = "error"
-            status["last_error"] = str(exc)
-
-        output_path = self._save_intrinsics_result_if_ready(camera_id, status)
-        status["output_path"] = output_path
+        status = self._intrinsics_host_session.get_status()
         status["cameras"] = camera_list
         return status
 
     def get_intrinsics_jpeg(self) -> Optional[bytes]:
+        if self._intrinsics_host_session is not None:
+            return self._intrinsics_host_session.get_latest_jpeg()
+        # Fallback: no active session — read mjpeg_url from settings for preview
         bundle = self._load_settings_bundle()
         intrinsics = bundle.get("intrinsics", {})
         draft = intrinsics.get("draft", {}) if isinstance(intrinsics, dict) else {}
@@ -1148,14 +1160,6 @@ class LoutrackGuiState:
             "output_path": None,
         }
 
-    def _intrinsics_camera_from_settings(self) -> str | None:
-        bundle = self._load_settings_bundle()
-        committed = bundle.get("intrinsics", {}).get("committed", {})
-        if not isinstance(committed, dict):
-            return None
-        camera_id = str(committed.get("camera_id", "")).strip()
-        return camera_id or None
-
     def _intrinsics_find_target(self, camera_id: str) -> Any | None:
         for target in self.session.discover_targets(None):
             if str(target.camera_id).strip() == camera_id:
@@ -1176,7 +1180,7 @@ class LoutrackGuiState:
             "intrinsics_start",
             "intrinsics_stop",
             "intrinsics_clear",
-            "intrinsics_calibrate",
+            "intrinsics_get_corners",
             "intrinsics_status",
         }
         missing = sorted(required - supported)
@@ -1195,24 +1199,6 @@ class LoutrackGuiState:
             raise ValueError(response.get("error") or response.get("error_message") or f"{fn_name} failed")
         result = response.get("result", {})
         return result if isinstance(result, dict) else {}
-
-    def _save_intrinsics_result_if_ready(self, camera_id: str, status: Dict[str, Any]) -> str | None:
-        calibration_result = status.get("calibration_result")
-        if status.get("phase") != "done" or not isinstance(calibration_result, dict):
-            return None
-        signature = (
-            camera_id,
-            hash(json.dumps(calibration_result, ensure_ascii=False, sort_keys=True)),
-        )
-        output_path = PROJECT_ROOT / "calibration" / f"calibration_intrinsics_v1_{camera_id}.json"
-        if self._intrinsics_last_saved_signature != signature:
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_text(
-                json.dumps(calibration_result, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
-            self._intrinsics_last_saved_signature = signature
-        return str(output_path)
 
     def _fetch_single_mjpeg_frame(self, url: str) -> Optional[bytes]:
         try:
@@ -1856,7 +1842,10 @@ class LoutrackGuiHandler(BaseHTTPRequestHandler):
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
         except ValueError as exc:
-            self._debug_log(f"BAD_REQUEST path={self.path} error={exc}")
+            error_text = str(exc).strip() or "<empty>"
+            self._debug_log(
+                f"BAD_REQUEST path={self.path} error={error_text} type={type(exc).__name__} repr={exc!r}"
+            )
             self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
         except Exception as exc:  # noqa: BLE001
             self._debug_log(f"INTERNAL_ERROR path={self.path} error={exc}")

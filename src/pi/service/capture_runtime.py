@@ -100,7 +100,7 @@ SCHEMA_COMMANDS = {
     "intrinsics_start",
     "intrinsics_stop",
     "intrinsics_clear",
-    "intrinsics_calibrate",
+    "intrinsics_get_corners",
     "intrinsics_status",
     "led_on",
     "led_off",
@@ -125,7 +125,7 @@ MVP_SUPPORTED_COMMANDS = {
     "intrinsics_start",
     "intrinsics_stop",
     "intrinsics_clear",
-    "intrinsics_calibrate",
+    "intrinsics_get_corners",
     "intrinsics_status",
 }
 

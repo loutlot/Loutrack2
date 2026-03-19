@@ -52,7 +52,7 @@ class _FakeSession:
             "intrinsics_start",
             "intrinsics_stop",
             "intrinsics_clear",
-            "intrinsics_calibrate",
+            "intrinsics_get_corners",
             "intrinsics_status",
         ]
         self.intrinsics_status: Dict[str, Any] = {
@@ -66,7 +66,6 @@ class _FakeSession:
             "frames_rejected_detection": 0,
             "grid_coverage": [[0, 0, 0], [0, 0, 0], [0, 0, 0]],
             "last_error": None,
-            "calibration_result": None,
         }
 
     def discover_targets(self, camera_ids=None):
@@ -87,7 +86,6 @@ class _FakeSession:
                 "phase": "capturing",
                 "camera_id": kwargs.get("camera_id", self.intrinsics_status["camera_id"]),
                 "frames_needed": int(kwargs.get("min_frames", 25)),
-                "calibration_result": None,
                 "last_error": None,
             }
             return {target.camera_id: {"ack": True, "result": dict(self.intrinsics_status)} for target in targets}
@@ -102,21 +100,23 @@ class _FakeSession:
                 "frames_rejected_spatial": 0,
                 "frames_rejected_detection": 0,
                 "grid_coverage": [[0, 0, 0], [0, 0, 0], [0, 0, 0]],
-                "calibration_result": None,
                 "last_error": None,
             }
             return {target.camera_id: {"ack": True, "result": dict(self.intrinsics_status)} for target in targets}
-        if fn_name == "intrinsics_calibrate":
-            self.intrinsics_status = {
-                **self.intrinsics_status,
-                "phase": "done",
-                "calibration_result": {
-                    "schema_version": "1.0",
-                    "camera_id": str(self.intrinsics_status.get("camera_id") or "pi-cam-01"),
-                    "rms_error": 0.42,
-                },
+        if fn_name == "intrinsics_get_corners":
+            payload = {
+                "frames": [],
+                "count": 0,
+                "image_size": None,
+                "phase": self.intrinsics_status["phase"],
+                "frames_captured": self.intrinsics_status["frames_captured"],
+                "frames_rejected_cooldown": self.intrinsics_status["frames_rejected_cooldown"],
+                "frames_rejected_spatial": self.intrinsics_status["frames_rejected_spatial"],
+                "frames_rejected_detection": self.intrinsics_status["frames_rejected_detection"],
+                "grid_coverage": self.intrinsics_status["grid_coverage"],
+                "last_error": self.intrinsics_status["last_error"],
             }
-            return {target.camera_id: {"ack": True, "result": dict(self.intrinsics_status)} for target in targets}
+            return {target.camera_id: {"ack": True, "result": payload} for target in targets}
         if fn_name == "intrinsics_status":
             return {target.camera_id: {"ack": True, "result": dict(self.intrinsics_status)} for target in targets}
         if fn_name == "ping":
@@ -492,7 +492,7 @@ def test_set_preview_forwards_overlays_and_charuco(tmp_path: Path) -> None:
     assert kwargs["charuco"]["square_length_mm"] == 60.0
 
 
-def test_intrinsics_start_proxies_to_pi_command(tmp_path: Path) -> None:
+def test_intrinsics_start_sends_start_to_pi_and_creates_session(tmp_path: Path) -> None:
     session = _FakeSession()
     state = LoutrackGuiState(
         session=session,
@@ -518,6 +518,7 @@ def test_intrinsics_start_proxies_to_pi_command(tmp_path: Path) -> None:
     resp = state.start_intrinsics_capture({})
 
     assert resp["ok"] is True
+    assert state._intrinsics_host_session is not None
     assert session.last_broadcast is not None
     assert session.last_broadcast["fn_name"] == "intrinsics_start"
     assert session.last_broadcast["camera_ids"] == ["pi-cam-01"]
@@ -528,11 +529,47 @@ def test_intrinsics_start_proxies_to_pi_command(tmp_path: Path) -> None:
     assert kwargs["squares_y"] == 8
     assert kwargs["min_frames"] == 25
     assert kwargs["cooldown_s"] == 1.5
+    state._intrinsics_host_session.stop()
 
 
-def test_intrinsics_start_rejects_unsupported_pi(tmp_path: Path) -> None:
+def test_intrinsics_start_allows_empty_mjpeg_url(tmp_path: Path) -> None:
     session = _FakeSession()
-    session.supported_commands = ["ping", "start", "stop", "set_preview"]
+    state = LoutrackGuiState(
+        session=session,
+        receiver=_FakeReceiver(),
+        settings_path=tmp_path / "loutrack_gui_settings.json",
+        tracking_runtime=_FakeTrackingRuntime(),
+    )
+    updated = state.apply_settings_draft(
+        {
+            "intrinsics": {
+                "camera_id": "pi-cam-01",
+                "mjpeg_url": "",
+                "square_length_mm": 60,
+                "squares_x": 6,
+                "squares_y": 8,
+                "min_frames": 25,
+                "cooldown_s": 1.5,
+            }
+        }
+    )
+    assert "mjpeg_url" not in updated["validation"]["intrinsics"]
+
+    resp = state.start_intrinsics_capture({})
+
+    assert resp["ok"] is True
+    assert session.last_broadcast is not None
+    assert session.last_broadcast["fn_name"] == "intrinsics_start"
+    state._intrinsics_host_session.stop()
+
+
+def test_intrinsics_start_rejects_pi_missing_get_corners_command(tmp_path: Path) -> None:
+    session = _FakeSession()
+    # Has intrinsics_start/stop/clear/status but not intrinsics_get_corners
+    session.supported_commands = [
+        "ping", "start", "stop", "set_preview",
+        "intrinsics_start", "intrinsics_stop", "intrinsics_clear", "intrinsics_status",
+    ]
     state = LoutrackGuiState(
         session=session,
         receiver=_FakeReceiver(),
@@ -553,12 +590,12 @@ def test_intrinsics_start_rejects_unsupported_pi(tmp_path: Path) -> None:
         state.start_intrinsics_capture({})
     except ValueError as exc:
         assert "intrinsics capability missing on Pi" in str(exc)
+        assert "intrinsics_get_corners" in str(exc)
     else:
-        raise AssertionError("expected ValueError when intrinsics commands are missing")
+        raise AssertionError("expected ValueError when intrinsics_get_corners is missing")
 
 
-def test_intrinsics_calibrate_auto_saves_host_json(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr("host.loutrack_gui.PROJECT_ROOT", tmp_path)
+def test_intrinsics_calibrate_triggers_host_session(tmp_path: Path, monkeypatch) -> None:
     session = _FakeSession()
     state = LoutrackGuiState(
         session=session,
@@ -566,6 +603,46 @@ def test_intrinsics_calibrate_auto_saves_host_json(tmp_path: Path, monkeypatch) 
         settings_path=tmp_path / "loutrack_gui_settings.json",
         tracking_runtime=_FakeTrackingRuntime(),
     )
+
+    calibrate_called: list = []
+
+    class _FakeHostSession:
+        def start(self) -> None:
+            pass
+
+        def stop(self) -> None:
+            pass
+
+        def clear(self) -> None:
+            pass
+
+        def trigger_calibration(self) -> None:
+            calibrate_called.append(True)
+
+        def get_status(self) -> Dict[str, Any]:
+            return {
+                "phase": "capturing",
+                "camera_id": "pi-cam-01",
+                "frames_captured": 0,
+                "frames_needed": 25,
+                "frames_target": 50,
+                "frames_rejected_cooldown": 0,
+                "frames_rejected_spatial": 0,
+                "frames_rejected_detection": 0,
+                "grid_coverage": [[0, 0, 0], [0, 0, 0], [0, 0, 0]],
+                "last_error": None,
+                "calibration_result": None,
+                "output_path": None,
+            }
+
+        def get_latest_jpeg(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "host.loutrack_gui.IntrinsicsHostSession",
+        lambda config, fn: _FakeHostSession(),
+    )
+
     state.apply_settings_draft(
         {
             "intrinsics": {
@@ -578,12 +655,8 @@ def test_intrinsics_calibrate_auto_saves_host_json(tmp_path: Path, monkeypatch) 
     _ = state.start_intrinsics_capture({})
     resp = state.trigger_intrinsics_calibration()
 
-    output_path = tmp_path / "calibration" / "calibration_intrinsics_v1_pi-cam-01.json"
     assert resp["ok"] is True
-    assert output_path.exists()
-    payload = json.loads(output_path.read_text(encoding="utf-8"))
-    assert payload["camera_id"] == "pi-cam-01"
-    assert payload["schema_version"] == "1.0"
+    assert calibrate_called
 
 
 def test_resolve_static_asset_prefers_repo_root_static(tmp_path: Path, monkeypatch) -> None:
