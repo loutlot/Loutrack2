@@ -2282,13 +2282,10 @@ class _CapturePipeline:
 
     def _refresh_activity(self) -> None:
         with self._lock:
-            should_run = bool(
-                self._stream_mode is not None
-                or self._mask_build_active
-                or self._intrinsics_active
-                or self._preview_worker is not None
-                or self._mjpeg_render_enabled
-            )
+            # Keep the capture/runtime loop alive whenever the pipeline is started so
+            # camera status, blob diagnostics, and timestamp health stay fresh even
+            # when preview rendering is disabled.
+            should_run = bool(self._started)
         if should_run:
             self._active_event.set()
         else:

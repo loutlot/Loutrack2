@@ -20,6 +20,7 @@ from src.pi.service.capture_runtime import (  # noqa: E402
     DummyBackend,
     DummyBackendConfig,
     STATE_READY,
+    _CapturePipeline,
     detect_blobs,
     get_default_backend,
     resolve_debug_preview_enabled,
@@ -351,6 +352,37 @@ def test_set_preview_rejects_invalid_params(monkeypatch: pytest.MonkeyPatch) -> 
     )
     assert invalid_type["ack"] is False
     assert invalid_type["error_code"] == 2
+
+
+def test_capture_pipeline_keeps_runtime_alive_when_preview_render_is_off() -> None:
+    pipeline = _CapturePipeline(
+        camera_id="pi-cam-test",
+        udp_host="127.0.0.1",
+        udp_port=5000,
+        backend_factory=lambda: DummyBackend(
+            DummyBackendConfig(width=96, height=72, num_dots=3, seed=7, dot_radius=2)
+        ),
+        debug_preview=None,
+        log_fn=lambda _message: None,
+    )
+
+    try:
+        pipeline.start()
+        runtime: dict[str, object] = {}
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            runtime = pipeline.get_runtime_diagnostics()
+            if float(runtime.get("capture_fps", 0.0) or 0.0) > 0.0 and float(
+                runtime.get("processing_fps", 0.0) or 0.0
+            ) > 0.0:
+                break
+            time.sleep(0.05)
+    finally:
+        pipeline.stop()
+
+    assert float(runtime["capture_fps"]) > 0.0
+    assert float(runtime["processing_fps"]) > 0.0
+    assert runtime["stream_active"] is False
 
 
 def test_resolve_debug_preview_enabled_requires_display(monkeypatch: pytest.MonkeyPatch) -> None:
