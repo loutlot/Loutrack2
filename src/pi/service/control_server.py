@@ -195,13 +195,12 @@ class ControlServer:
             f"debug_preview={'on' if self._config.debug_preview else 'off'} "
             f"mjpeg_port={self._config.mjpeg_port}"
         )
-        if self._config.debug_preview:
-            try:
-                self._ensure_pipeline_started()
-            except BackendUnavailableError as exc:
-                self._log(f"preview pipeline unavailable: {exc}")
-            except Exception as exc:  # noqa: BLE001
-                self._log(f"preview pipeline start failed: {exc}")
+        try:
+            self._ensure_pipeline_started()
+        except BackendUnavailableError as exc:
+            self._log(f"capture pipeline unavailable: {exc}")
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"capture pipeline start failed: {exc}")
 
         if self._config.mjpeg_port > 0:
             try:
@@ -1897,6 +1896,13 @@ class ControlServer:
             pipeline = self._pipeline
             blob_diagnostics = dict(self._last_blob_diagnostics)
             timestamping = dict(self._last_timestamping_diagnostics)
+        if pipeline is None:
+            try:
+                pipeline = self._ensure_pipeline_started()
+            except BackendUnavailableError:
+                pipeline = None
+            except Exception:
+                pipeline = None
         preview_payload = self._preview_config_payload()
         diagnostics["mjpeg_server_enabled"] = bool(self._config.mjpeg_port > 0)
         diagnostics["mjpeg_render_enabled"] = bool(preview_payload.get("render_enabled", False))

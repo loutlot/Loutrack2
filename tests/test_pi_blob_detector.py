@@ -98,32 +98,56 @@ def test_detect_blobs_threshold_255_returns_zero() -> None:
 
 def test_control_server_ping_includes_blob_diagnostics_and_runtime() -> None:
     server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=False))
-    response = server._handle_ping("req-1", "pi-cam-01")
+    try:
+        response = server._handle_ping("req-1", "pi-cam-01")
 
-    assert response["ack"] is True
-    result = response["result"]
-    assert isinstance(result, dict)
-    assert result["debug_preview_enabled"] is False
-    assert result["debug_preview_active"] is False
-    assert result["mjpeg_server_enabled"] is True
+        assert response["ack"] is True
+        result = response["result"]
+        assert isinstance(result, dict)
+        assert result["debug_preview_enabled"] is False
+        assert result["debug_preview_active"] is False
+        assert result["mjpeg_server_enabled"] is True
+        assert result["mjpeg_render_enabled"] is False
+        assert result["preview_overlays"] == {
+            "blob": True,
+            "mask": True,
+            "text": True,
+            "charuco": True,
+        }
+        assert result["charuco_config"]["dictionary"] == "DICT_6X6_250"
+        assert "intrinsics_start" in result["supported_commands"]
+        assert "intrinsics_status" in result["supported_commands"]
+        assert result["blob_diagnostics"]["threshold"] == 200
+        assert result["clock_sync"]["status"] in {"locked", "degraded", "unknown"}
+        assert result["clock_sync"]["role"] in {"master", "slave", "unknown"}
+        assert result["clock_sync"]["timestamping_mode"] in {"software", "hardware", "unknown"}
+        assert result["runtime"]["capture_fps"] >= 0.0
+        assert result["runtime"]["processing_queue_depth"] >= 0
+    finally:
+        server.shutdown()
+
+
+def test_control_server_ping_starts_pipeline_for_runtime_diagnostics() -> None:
+    server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=False))
+
+    try:
+        deadline = time.monotonic() + 1.0
+        result: dict[str, object] = {}
+        while time.monotonic() < deadline:
+            response = server._handle_ping("req-1", "pi-cam-01")
+            result = response["result"]
+            if float(result["runtime"]["capture_fps"]) > 0.0 and float(
+                result["runtime"]["processing_fps"]
+            ) > 0.0:
+                break
+            time.sleep(0.05)
+    finally:
+        server.shutdown()
+
+    assert float(result["runtime"]["capture_fps"]) > 0.0
+    assert float(result["runtime"]["processing_fps"]) > 0.0
     assert result["mjpeg_render_enabled"] is False
-    assert result["preview_overlays"] == {
-        "blob": True,
-        "mask": True,
-        "text": True,
-        "charuco": True,
-    }
-    assert result["charuco_config"]["dictionary"] == "DICT_6X6_250"
-    assert "intrinsics_start" in result["supported_commands"]
-    assert "intrinsics_status" in result["supported_commands"]
-    assert result["blob_diagnostics"]["threshold"] == 200
-    assert result["clock_sync"]["status"] in {"locked", "degraded", "unknown"}
-    assert result["clock_sync"]["role"] in {"master", "slave", "unknown"}
-    assert result["clock_sync"]["timestamping_mode"] in {"software", "hardware", "unknown"}
     assert result["timestamping"]["active_source"] == "capture_dequeue"
-    assert result["timestamping"]["sensor_timestamp_available"] is False
-    assert result["runtime"]["capture_fps"] == 0.0
-    assert result["runtime"]["processing_queue_depth"] == 0
 
 
 def test_control_server_ping_caches_clock_sync_probe(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -211,6 +235,32 @@ def test_mask_start_timeout_resets_state(monkeypatch: pytest.MonkeyPatch) -> Non
         def set_state_label(self, state):
             _ = state
 
+        def debug_preview_active(self) -> bool:
+            return False
+
+        def get_last_detection_stats(self):
+            return {"threshold": 200, "accepted_blob_count": 0, "last_blob_count": 0}
+
+        def get_last_timestamping_status(self):
+            return {"active_source": "capture_dequeue", "sensor_timestamp_available": False}
+
+        def get_runtime_diagnostics(self):
+            return {
+                "capture_fps": 0.0,
+                "processing_fps": 0.0,
+                "preview_fps": 0.0,
+                "processing_queue_depth": 0,
+                "preview_queue_depth": 0,
+                "frames_dropped_processing": 0,
+                "frames_dropped_preview": 0,
+                "capture_to_process_ms_p50": 0.0,
+                "capture_to_process_ms_p90": 0.0,
+                "capture_to_send_ms_p50": 0.0,
+                "capture_to_send_ms_p90": 0.0,
+                "send_fps": 0.0,
+                "stream_active": False,
+            }
+
     monkeypatch.setattr(server, "_ensure_pipeline_started", lambda: _FakePipeline())
     response = server._handle_mask_start("req-1", "pi-cam-01", {"frames": 2, "threshold": 200})
 
@@ -297,6 +347,32 @@ def test_set_preview_updates_ping_and_pipeline(monkeypatch: pytest.MonkeyPatch) 
     class _FakePipeline:
         def set_mjpeg_render_enabled(self, enabled: bool) -> None:
             calls.append(bool(enabled))
+
+        def debug_preview_active(self) -> bool:
+            return False
+
+        def get_last_detection_stats(self):
+            return {"threshold": 200, "accepted_blob_count": 0, "last_blob_count": 0}
+
+        def get_last_timestamping_status(self):
+            return {"active_source": "capture_dequeue", "sensor_timestamp_available": False}
+
+        def get_runtime_diagnostics(self):
+            return {
+                "capture_fps": 0.0,
+                "processing_fps": 0.0,
+                "preview_fps": 0.0,
+                "processing_queue_depth": 0,
+                "preview_queue_depth": 0,
+                "frames_dropped_processing": 0,
+                "frames_dropped_preview": 0,
+                "capture_to_process_ms_p50": 0.0,
+                "capture_to_process_ms_p90": 0.0,
+                "capture_to_send_ms_p50": 0.0,
+                "capture_to_send_ms_p90": 0.0,
+                "send_fps": 0.0,
+                "stream_active": False,
+            }
 
     fake_pipeline = _FakePipeline()
     monkeypatch.setattr(server, "_ensure_pipeline_started", lambda: fake_pipeline)
