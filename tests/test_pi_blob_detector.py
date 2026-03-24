@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import queue
 import sys
 import time
@@ -24,6 +25,21 @@ from src.pi.service.capture_runtime import (  # noqa: E402
     resolve_debug_preview_enabled,
 )
 import src.pi.service.capture_runtime as capture_mod  # noqa: E402
+
+
+def test_pi_intrinsics_loader_registers_module_for_dataclass_annotations() -> None:
+    module_path = ROOT / "src" / "pi" / "service" / "intrinsics_capture.py"
+    spec = importlib.util.spec_from_file_location("pi_intrinsics_capture_test", module_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["pi_intrinsics_capture_test"] = module
+    spec.loader.exec_module(module)
+
+    loaded = module._load_intrinsics_calibrate_module()
+
+    assert loaded.__name__ == "_pi_intrinsics_calibrate"
+    assert "CalibrateConfig" in loaded.__dict__
 
 
 def _expected_centers(cfg: DummyBackendConfig, frame_index: int) -> list[tuple[int, int]]:

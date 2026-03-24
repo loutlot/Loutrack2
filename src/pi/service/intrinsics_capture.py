@@ -9,6 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
+import sys
 
 import numpy as np
 
@@ -34,6 +35,7 @@ def _load_intrinsics_calibrate_module() -> Any:
     if spec is None or spec.loader is None:
         raise RuntimeError(f"failed_to_load_calibrate_module: {script_path}")
     module = importlib.util.module_from_spec(spec)
+    sys.modules["_pi_intrinsics_calibrate"] = module
     spec.loader.exec_module(module)
     return module
 
