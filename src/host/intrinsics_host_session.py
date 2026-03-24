@@ -102,6 +102,7 @@ class IntrinsicsHostSession:
         with self._lock:
             self._phase = "capturing"
             self._stop_event.clear()
+        self._poll_once()
         self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._poll_thread.start()
 
@@ -198,36 +199,49 @@ class IntrinsicsHostSession:
             self._stop_event.wait(self._config.poll_interval_s)
             if self._stop_event.is_set():
                 break
-            try:
-                payload = self._broadcast_fn("intrinsics_get_corners")
-            except Exception:
-                continue
+            self._poll_once()
 
-            frames = payload.get("frames", [])
-            image_size_raw = payload.get("image_size")
-
+    def _poll_once(self) -> None:
+        try:
+            payload = self._broadcast_fn("intrinsics_get_corners")
+        except Exception as exc:
             with self._lock:
-                n_have = len(self._captured_corners)
-                for f in frames[n_have:]:
-                    c = np.array(f["corners"], dtype=np.float32)
-                    i = np.array(f["ids"], dtype=np.int32)
-                    self._captured_corners.append(c)
-                    self._captured_ids.append(i)
-                if self._image_size is None and image_size_raw:
-                    self._image_size = (int(image_size_raw[0]), int(image_size_raw[1]))
-                # Sync Pi-side rejection stats and grid_coverage
-                self._rejected_cooldown = int(
-                    payload.get("frames_rejected_cooldown", self._rejected_cooldown)
-                )
-                self._rejected_spatial = int(
-                    payload.get("frames_rejected_spatial", self._rejected_spatial)
-                )
-                self._rejected_detection = int(
-                    payload.get("frames_rejected_detection", self._rejected_detection)
-                )
-                grid_raw = payload.get("grid_coverage")
-                if grid_raw is not None:
-                    self._grid_coverage = np.array(grid_raw, dtype=int)
+                self._last_error = str(exc)
+            return
+
+        frames = payload.get("frames", [])
+        image_size_raw = payload.get("image_size")
+        last_error_raw = payload.get("last_error")
+        phase_raw = payload.get("phase")
+
+        with self._lock:
+            n_have = len(self._captured_corners)
+            for f in frames[n_have:]:
+                c = np.array(f["corners"], dtype=np.float32)
+                i = np.array(f["ids"], dtype=np.int32)
+                self._captured_corners.append(c)
+                self._captured_ids.append(i)
+            if self._image_size is None and image_size_raw:
+                self._image_size = (int(image_size_raw[0]), int(image_size_raw[1]))
+            if isinstance(phase_raw, str) and phase_raw.strip():
+                self._phase = phase_raw
+            if isinstance(last_error_raw, str):
+                self._last_error = last_error_raw
+            elif last_error_raw is None:
+                self._last_error = None
+            # Sync Pi-side rejection stats and grid_coverage
+            self._rejected_cooldown = int(
+                payload.get("frames_rejected_cooldown", self._rejected_cooldown)
+            )
+            self._rejected_spatial = int(
+                payload.get("frames_rejected_spatial", self._rejected_spatial)
+            )
+            self._rejected_detection = int(
+                payload.get("frames_rejected_detection", self._rejected_detection)
+            )
+            grid_raw = payload.get("grid_coverage")
+            if grid_raw is not None:
+                self._grid_coverage = np.array(grid_raw, dtype=int)
 
     # ------------------------------------------------------------------
     # Internal: calibration runner (background thread)

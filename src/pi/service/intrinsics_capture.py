@@ -136,6 +136,10 @@ class _IntrinsicsCaptureSession:
             if self._phase in {"done", "error"}:
                 self._phase = "idle"
 
+    def report_runtime_error(self, message: str) -> None:
+        with self._lock:
+            self._last_error = str(message)
+
     def get_pending_corners(self) -> dict[str, object]:
         """Return all buffered corner sets and image metadata; does not clear the buffer."""
         with self._lock:

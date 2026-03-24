@@ -1093,7 +1093,8 @@ class LoutrackGuiState:
     def stop_intrinsics_capture(self) -> Dict[str, Any]:
         if self._intrinsics_host_session is not None:
             self._intrinsics_host_session.stop()
-        return {"ok": True}
+            return {"ok": True, "status": self.get_intrinsics_status()}
+        return {"ok": True, "status": self._intrinsics_idle_status(None)}
 
     def clear_intrinsics_frames(self) -> Dict[str, Any]:
         if self._intrinsics_host_session is None:
@@ -1124,6 +1125,27 @@ class LoutrackGuiState:
             status["cameras"] = camera_list
             return status
         status = self._intrinsics_host_session.get_status()
+        camera_id = str(status.get("camera_id", "")).strip()
+        if camera_id:
+            try:
+                remote_status = self._intrinsics_send_command(camera_id, "intrinsics_status")
+            except Exception as exc:
+                status["last_error"] = str(exc)
+            else:
+                for key in (
+                    "phase",
+                    "frames_captured",
+                    "frames_needed",
+                    "frames_target",
+                    "frames_rejected_cooldown",
+                    "frames_rejected_spatial",
+                    "frames_rejected_detection",
+                    "grid_coverage",
+                    "last_error",
+                    "calibration_result",
+                ):
+                    if key in remote_status:
+                        status[key] = remote_status[key]
         status["cameras"] = camera_list
         return status
 

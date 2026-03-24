@@ -8,6 +8,7 @@ from typing import Any, Dict
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+from host.intrinsics_host_session import IntrinsicsHostSession, IntrinsicsHostSessionConfig
 from host.loutrack_gui import HTML_PAGE, PROJECT_ROOT, LoutrackGuiState, _resolve_static_asset
 from host.wand_session import CameraTarget
 
@@ -35,6 +36,7 @@ class _FakeSession:
             CameraTarget(camera_id="pi-cam-02", ip="192.168.1.102"),
         ]
         self.last_broadcast: Dict[str, Any] | None = None
+        self.broadcast_history: list[Dict[str, Any]] = []
         self.supported_commands = [
             "ping",
             "start",
@@ -80,6 +82,7 @@ class _FakeSession:
             "camera_ids": [target.camera_id for target in targets],
             "kwargs": dict(kwargs),
         }
+        self.broadcast_history.append(dict(self.last_broadcast))
         if fn_name == "intrinsics_start":
             self.intrinsics_status = {
                 **self.intrinsics_status,
@@ -176,6 +179,85 @@ class _FakeTrackingRuntime:
             "raw_points": [],
             "timestamp_us": 123,
         }
+
+
+def test_intrinsics_host_session_polls_status_immediately_on_start(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    def _broadcast(fn_name: str, **kwargs: Any) -> Dict[str, Any]:
+        _ = kwargs
+        calls.append(fn_name)
+        if fn_name == "intrinsics_start":
+            return {"phase": "capturing"}
+        if fn_name == "intrinsics_get_corners":
+            return {
+                "frames": [],
+                "count": 0,
+                "image_size": None,
+                "phase": "capturing",
+                "frames_rejected_cooldown": 1,
+                "frames_rejected_spatial": 2,
+                "frames_rejected_detection": 3,
+                "grid_coverage": [[0, 1, 0], [0, 0, 0], [0, 0, 0]],
+                "last_error": None,
+            }
+        if fn_name == "intrinsics_stop":
+            return {"phase": "idle"}
+        raise AssertionError(f"unexpected command: {fn_name}")
+
+    session = IntrinsicsHostSession(
+        IntrinsicsHostSessionConfig(
+            camera_id="pi-cam-01",
+            mjpeg_url="",
+            square_length_mm=30.0,
+            marker_length_mm=22.5,
+            squares_x=6,
+            squares_y=8,
+            min_frames=25,
+            poll_interval_s=10.0,
+            output_dir=tmp_path,
+        ),
+        _broadcast,
+    )
+
+    session.start()
+    status = session.get_status()
+    session.stop()
+
+    assert calls[:2] == ["intrinsics_start", "intrinsics_get_corners"]
+    assert status["phase"] == "capturing"
+    assert status["frames_rejected_cooldown"] == 1
+    assert status["frames_rejected_spatial"] == 2
+    assert status["frames_rejected_detection"] == 3
+
+
+def test_intrinsics_stop_returns_idle_status(tmp_path: Path) -> None:
+    session = _FakeSession()
+    state = LoutrackGuiState(
+        session=session,
+        receiver=_FakeReceiver(),
+        settings_path=tmp_path / "loutrack_gui_settings.json",
+        tracking_runtime=_FakeTrackingRuntime(),
+    )
+    state.apply_settings_draft(
+        {
+            "intrinsics": {
+                "camera_id": "pi-cam-01",
+                "square_length_mm": 60,
+                "marker_length_mm": 45,
+                "squares_x": 6,
+                "squares_y": 8,
+                "min_frames": 25,
+                "cooldown_s": 1.5,
+            }
+        }
+    )
+
+    _ = state.start_intrinsics_capture({})
+    stopped = state.stop_intrinsics_capture()
+
+    assert stopped["ok"] is True
+    assert stopped["status"]["phase"] == "idle"
 
 
 def test_gui_pose_and_floor_capture_paths(tmp_path: Path, monkeypatch) -> None:
@@ -520,9 +602,9 @@ def test_intrinsics_start_sends_start_to_pi_and_creates_session(tmp_path: Path) 
     assert resp["ok"] is True
     assert state._intrinsics_host_session is not None
     assert session.last_broadcast is not None
-    assert session.last_broadcast["fn_name"] == "intrinsics_start"
-    assert session.last_broadcast["camera_ids"] == ["pi-cam-01"]
-    kwargs = session.last_broadcast["kwargs"]
+    start_call = next(item for item in session.broadcast_history if item["fn_name"] == "intrinsics_start")
+    assert start_call["camera_ids"] == ["pi-cam-01"]
+    kwargs = start_call["kwargs"]
     assert kwargs["square_length_mm"] == 60.0
     assert kwargs["marker_length_mm"] == 45.0
     assert kwargs["squares_x"] == 6
@@ -559,7 +641,7 @@ def test_intrinsics_start_allows_empty_mjpeg_url(tmp_path: Path) -> None:
 
     assert resp["ok"] is True
     assert session.last_broadcast is not None
-    assert session.last_broadcast["fn_name"] == "intrinsics_start"
+    assert any(item["fn_name"] == "intrinsics_start" for item in session.broadcast_history)
     state._intrinsics_host_session.stop()
 
 

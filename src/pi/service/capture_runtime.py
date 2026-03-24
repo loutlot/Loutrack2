@@ -1934,6 +1934,10 @@ class _ProcessingWorker:
                     # Invariant: intrinsics detection always consumes the raw frame.
                     intrinsics_session.consume_frame(packet.captured_frame.image)
                 except Exception as exc:  # noqa: BLE001
+                    try:
+                        intrinsics_session.report_runtime_error(f"consume_frame_failed: {exc}")
+                    except Exception:
+                        pass
                     self._log(f"intrinsics frame consume failed: {exc}")
 
             applied_mask = None if state_label == STATE_MASK_INIT else mask
