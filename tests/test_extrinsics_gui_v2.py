@@ -107,9 +107,18 @@ class _FakeSession:
             }
             return {target.camera_id: {"ack": True, "result": dict(self.intrinsics_status)} for target in targets}
         if fn_name == "intrinsics_get_corners":
+            frames = kwargs.get("frames_override", [])
+            start_index = int(kwargs.get("start_index", 0) or 0)
+            max_frames = kwargs.get("max_frames")
+            if isinstance(max_frames, int) and max_frames > 0:
+                frames = frames[start_index:start_index + max_frames]
+            else:
+                frames = frames[start_index:]
             payload = {
-                "frames": [],
-                "count": 0,
+                "frames": frames,
+                "count": int(kwargs.get("count_override", self.intrinsics_status["frames_captured"])),
+                "start_index": start_index,
+                "returned_count": len(frames),
                 "image_size": None,
                 "phase": self.intrinsics_status["phase"],
                 "frames_captured": self.intrinsics_status["frames_captured"],
@@ -258,6 +267,46 @@ def test_intrinsics_stop_returns_idle_status(tmp_path: Path) -> None:
 
     assert stopped["ok"] is True
     assert stopped["status"]["phase"] == "idle"
+
+
+def test_intrinsics_clear_returns_reset_status(tmp_path: Path) -> None:
+    session = _FakeSession()
+    state = LoutrackGuiState(
+        session=session,
+        receiver=_FakeReceiver(),
+        settings_path=tmp_path / "loutrack_gui_settings.json",
+        tracking_runtime=_FakeTrackingRuntime(),
+    )
+    state.apply_settings_draft(
+        {
+            "intrinsics": {
+                "camera_id": "pi-cam-01",
+                "square_length_mm": 60,
+                "marker_length_mm": 45,
+                "squares_x": 6,
+                "squares_y": 8,
+                "min_frames": 25,
+                "cooldown_s": 1.5,
+            }
+        }
+    )
+
+    _ = state.start_intrinsics_capture({})
+    session.intrinsics_status = {
+        **session.intrinsics_status,
+        "frames_captured": 9,
+        "frames_rejected_cooldown": 10,
+        "frames_rejected_spatial": 2,
+        "frames_rejected_detection": 3,
+    }
+
+    cleared = state.clear_intrinsics_frames()
+
+    assert cleared["ok"] is True
+    assert cleared["status"]["frames_captured"] == 0
+    assert cleared["status"]["frames_rejected_cooldown"] == 0
+    assert cleared["status"]["frames_rejected_spatial"] == 0
+    assert cleared["status"]["frames_rejected_detection"] == 0
 
 
 def test_gui_pose_and_floor_capture_paths(tmp_path: Path, monkeypatch) -> None:
@@ -739,6 +788,159 @@ def test_intrinsics_calibrate_triggers_host_session(tmp_path: Path, monkeypatch)
 
     assert resp["ok"] is True
     assert calibrate_called
+
+
+def test_intrinsics_calibration_syncs_remote_frames_before_min_frame_check(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    state = LoutrackGuiState(
+        session=_FakeSession(),
+        receiver=_FakeReceiver(),
+        settings_path=tmp_path / "loutrack_gui_settings.json",
+        tracking_runtime=_FakeTrackingRuntime(),
+    )
+    state.apply_settings_draft(
+        {
+            "intrinsics": {
+                "camera_id": "pi-cam-01",
+                "square_length_mm": 60,
+                "marker_length_mm": 45,
+                "squares_x": 6,
+                "squares_y": 8,
+                "min_frames": 5,
+                "cooldown_s": 1.5,
+            }
+        }
+    )
+    _ = state.start_intrinsics_capture({})
+    host_session = state._intrinsics_host_session
+    assert host_session is not None
+
+    remote_frame = {
+        "corners": [[[10.0, 20.0]], [[30.0, 40.0]], [[50.0, 60.0]], [[70.0, 80.0]], [[90.0, 100.0]], [[110.0, 120.0]]],
+        "ids": [[0], [1], [2], [3], [4], [5]],
+    }
+    original_broadcast = state.session._broadcast
+
+    def _broadcast_with_frame(targets, fn_name, **kwargs):
+        response = original_broadcast(targets, fn_name, **kwargs)
+        if fn_name == "intrinsics_get_corners":
+            return {
+                target.camera_id: {
+                    "ack": True,
+                    "result": {
+                        **response[target.camera_id]["result"],
+                        "frames": [remote_frame, remote_frame, remote_frame, remote_frame, remote_frame][
+                            int(kwargs.get("start_index", 0) or 0):
+                        ][: int(kwargs.get("max_frames", 8) or 8)],
+                        "count": 5,
+                        "returned_count": len(
+                            [remote_frame, remote_frame, remote_frame, remote_frame, remote_frame][
+                                int(kwargs.get("start_index", 0) or 0):
+                            ][: int(kwargs.get("max_frames", 8) or 8)]
+                        ),
+                        "image_size": [1280, 960],
+                        "phase": "capturing",
+                    },
+                }
+                for target in targets
+            }
+        return response
+
+    state.session._broadcast = _broadcast_with_frame  # type: ignore[method-assign]
+
+    called = {"count": 0}
+
+    def _fake_run_calibration(corners, ids, image_size):
+        called["count"] += 1
+        assert len(corners) == 5
+        assert len(ids) == 5
+        assert image_size == (1280, 960)
+
+    monkeypatch.setattr(host_session, "_run_calibration", _fake_run_calibration)
+
+    resp = state.trigger_intrinsics_calibration()
+
+    assert resp["ok"] is True
+    assert called["count"] == 1
+
+
+def test_intrinsics_calibration_after_stop_syncs_remote_frames(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    state = LoutrackGuiState(
+        session=_FakeSession(),
+        receiver=_FakeReceiver(),
+        settings_path=tmp_path / "loutrack_gui_settings.json",
+        tracking_runtime=_FakeTrackingRuntime(),
+    )
+    state.apply_settings_draft(
+        {
+            "intrinsics": {
+                "camera_id": "pi-cam-01",
+                "square_length_mm": 60,
+                "marker_length_mm": 45,
+                "squares_x": 6,
+                "squares_y": 8,
+                "min_frames": 5,
+                "cooldown_s": 1.5,
+            }
+        }
+    )
+    _ = state.start_intrinsics_capture({})
+    _ = state.stop_intrinsics_capture()
+    host_session = state._intrinsics_host_session
+    assert host_session is not None
+
+    remote_frame = {
+        "corners": [[[10.0, 20.0]], [[30.0, 40.0]], [[50.0, 60.0]], [[70.0, 80.0]], [[90.0, 100.0]], [[110.0, 120.0]]],
+        "ids": [[0], [1], [2], [3], [4], [5]],
+    }
+    original_broadcast = state.session._broadcast
+
+    def _broadcast_with_stopped_frames(targets, fn_name, **kwargs):
+        response = original_broadcast(targets, fn_name, **kwargs)
+        if fn_name == "intrinsics_get_corners":
+            return {
+                target.camera_id: {
+                    "ack": True,
+                    "result": {
+                        **response[target.camera_id]["result"],
+                        "frames": [remote_frame, remote_frame, remote_frame, remote_frame, remote_frame][
+                            int(kwargs.get("start_index", 0) or 0):
+                        ][: int(kwargs.get("max_frames", 8) or 8)],
+                        "count": 5,
+                        "returned_count": len(
+                            [remote_frame, remote_frame, remote_frame, remote_frame, remote_frame][
+                                int(kwargs.get("start_index", 0) or 0):
+                            ][: int(kwargs.get("max_frames", 8) or 8)]
+                        ),
+                        "image_size": [1280, 960],
+                        "phase": "idle",
+                    },
+                }
+                for target in targets
+            }
+        return response
+
+    state.session._broadcast = _broadcast_with_stopped_frames  # type: ignore[method-assign]
+
+    called = {"count": 0}
+
+    def _fake_run_calibration(corners, ids, image_size):
+        called["count"] += 1
+        assert len(corners) == 5
+        assert len(ids) == 5
+        assert image_size == (1280, 960)
+
+    monkeypatch.setattr(host_session, "_run_calibration", _fake_run_calibration)
+
+    resp = state.trigger_intrinsics_calibration()
+
+    assert resp["ok"] is True
+    assert called["count"] == 1
 
 
 def test_resolve_static_asset_prefers_repo_root_static(tmp_path: Path, monkeypatch) -> None:

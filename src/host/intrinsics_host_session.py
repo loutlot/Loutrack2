@@ -22,6 +22,7 @@ import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CALIB_SRC_ROOT = Path(__file__).resolve().parents[1]
+REMOTE_INTRINSICS_FETCH_BATCH = 8
 
 
 def _load_calibrate_module() -> Any:
@@ -108,6 +109,7 @@ class IntrinsicsHostSession:
 
     def stop(self) -> None:
         """Send intrinsics_stop to Pi and stop polling; captured frames are preserved."""
+        self._poll_once()
         self._stop_event.set()
         if self._poll_thread is not None:
             self._poll_thread.join(timeout=3.0)
@@ -138,11 +140,15 @@ class IntrinsicsHostSession:
 
     def trigger_calibration(self) -> None:
         """Start background calibration from collected frames."""
+        self.sync_remote_frames()
         with self._lock:
-            if len(self._captured_corners) < self._config.min_frames:
+            local_count = len(self._captured_corners)
+            if local_count < self._config.min_frames:
+                remote_count = self._get_remote_frames_captured()
                 raise ValueError(
                     f"Need at least {self._config.min_frames} frames, "
-                    f"got {len(self._captured_corners)}"
+                    f"got {local_count}"
+                    + (f" (remote reports {remote_count})" if remote_count is not None else "")
                 )
             corners = list(self._captured_corners)
             ids = list(self._captured_ids)
@@ -201,22 +207,57 @@ class IntrinsicsHostSession:
                 break
             self._poll_once()
 
+    def sync_remote_frames(self) -> None:
+        self._poll_once()
+
+    def _get_remote_frames_captured(self) -> int | None:
+        try:
+            payload = self._broadcast_fn("intrinsics_status")
+        except Exception:
+            return None
+        count = payload.get("frames_captured")
+        if isinstance(count, (int, float)):
+            return int(count)
+        return None
+
     def _poll_once(self) -> None:
         try:
-            payload = self._broadcast_fn("intrinsics_get_corners")
+            payload = self._broadcast_fn(
+                "intrinsics_get_corners",
+                start_index=len(self._captured_corners),
+                max_frames=REMOTE_INTRINSICS_FETCH_BATCH,
+            )
         except Exception as exc:
             with self._lock:
                 self._last_error = str(exc)
             return
 
+        self._apply_remote_payload(payload)
+        total_count = int(payload.get("count", len(payload.get("frames", []))))
+        while len(self._captured_corners) < total_count:
+            try:
+                payload = self._broadcast_fn(
+                    "intrinsics_get_corners",
+                    start_index=len(self._captured_corners),
+                    max_frames=REMOTE_INTRINSICS_FETCH_BATCH,
+                )
+            except Exception as exc:
+                with self._lock:
+                    self._last_error = str(exc)
+                return
+            returned_count = int(payload.get("returned_count", len(payload.get("frames", []))))
+            self._apply_remote_payload(payload)
+            if returned_count <= 0:
+                break
+
+    def _apply_remote_payload(self, payload: Dict[str, Any]) -> None:
         frames = payload.get("frames", [])
         image_size_raw = payload.get("image_size")
         last_error_raw = payload.get("last_error")
         phase_raw = payload.get("phase")
 
         with self._lock:
-            n_have = len(self._captured_corners)
-            for f in frames[n_have:]:
+            for f in frames:
                 c = np.array(f["corners"], dtype=np.float32)
                 i = np.array(f["ids"], dtype=np.int32)
                 self._captured_corners.append(c)
@@ -229,7 +270,6 @@ class IntrinsicsHostSession:
                 self._last_error = last_error_raw
             elif last_error_raw is None:
                 self._last_error = None
-            # Sync Pi-side rejection stats and grid_coverage
             self._rejected_cooldown = int(
                 payload.get("frames_rejected_cooldown", self._rejected_cooldown)
             )

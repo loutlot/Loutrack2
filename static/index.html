@@ -906,7 +906,6 @@
                 <button id="intStart" class="btn-teal btn-sm">Start Capture</button>
                 <button id="intStop" class="btn-ghost btn-sm">Stop</button>
                 <button id="intClear" class="btn-ghost btn-sm">Clear Frames</button>
-                <button id="intDiscard" class="btn-ghost btn-sm">Discard Session</button>
               </div>
             </div>
             <div class="panel" style="flex:1">
@@ -1097,7 +1096,6 @@
       intStart: document.getElementById("intStart"),
       intStop: document.getElementById("intStop"),
       intClear: document.getElementById("intClear"),
-      intDiscard: document.getElementById("intDiscard"),
       intCalibrate: document.getElementById("intCalibrate"),
       intPhaseStatus: document.getElementById("intPhaseStatus"),
       intCaptured: document.getElementById("intCaptured"),
@@ -2719,15 +2717,24 @@
       if (intCurrentBlobUrl) { URL.revokeObjectURL(intCurrentBlobUrl); intCurrentBlobUrl = null; }
     });
     elements.intClear?.addEventListener("click", async () => {
-      try { await postJson("/api/intrinsics/clear", {}); } catch (e) { reportUiError("int_clear", e); }
-    });
-    elements.intDiscard?.addEventListener("click", async () => {
       try {
-        await postJson("/api/intrinsics/discard", {});
-        elements.intResult.textContent = "Waiting...";
-        elements.intFrame.style.display = "none";
-        elements.intFrameEmpty.style.display = "";
-      } catch (e) { reportUiError("int_discard", e); }
+        const body = await postJson("/api/intrinsics/clear", {});
+        if (body && body.status) {
+          applyIntrinsicsStatus(body.status);
+        } else {
+          applyIntrinsicsStatus({
+            phase: "idle",
+            frames_captured: 0,
+            frames_needed: 25,
+            frames_rejected_cooldown: 0,
+            frames_rejected_spatial: 0,
+            frames_rejected_detection: 0,
+            grid_coverage: [[0,0,0],[0,0,0],[0,0,0]],
+            last_error: null,
+          });
+        }
+        elements.intResult.textContent = "Frames cleared.";
+      } catch (e) { reportUiError("int_clear", e); }
     });
     elements.intCalibrate?.addEventListener("click", async () => {
       try { await postJson("/api/intrinsics/calibrate", {}); } catch (e) { reportUiError("int_calibrate", e); }

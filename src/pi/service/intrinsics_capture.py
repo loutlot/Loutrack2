@@ -140,23 +140,38 @@ class _IntrinsicsCaptureSession:
         with self._lock:
             self._last_error = str(message)
 
-    def get_pending_corners(self) -> dict[str, object]:
-        """Return all buffered corner sets and image metadata; does not clear the buffer."""
+    def get_pending_corners(
+        self,
+        *,
+        start_index: int = 0,
+        max_frames: int | None = None,
+    ) -> dict[str, object]:
+        """Return buffered corner sets and image metadata; does not clear the buffer."""
         with self._lock:
+            total_frames = len(self._captured_corners)
+            safe_start = max(0, min(int(start_index), total_frames))
+            safe_end = total_frames
+            if max_frames is not None:
+                safe_end = min(total_frames, safe_start + max(0, int(max_frames)))
             frames = [
                 {
                     "corners": c.tolist(),
                     "ids": i.tolist(),
                 }
-                for c, i in zip(self._captured_corners, self._captured_ids)
+                for c, i in zip(
+                    self._captured_corners[safe_start:safe_end],
+                    self._captured_ids[safe_start:safe_end],
+                )
             ]
             image_size = list(self._image_size) if self._image_size else None
             return {
                 "frames": frames,
-                "count": len(frames),
+                "count": total_frames,
+                "start_index": safe_start,
+                "returned_count": len(frames),
                 "image_size": image_size,
                 "phase": self._phase,
-                "frames_captured": len(self._captured_corners),
+                "frames_captured": total_frames,
                 "frames_rejected_cooldown": self._rejected_cooldown,
                 "frames_rejected_spatial": self._rejected_spatial,
                 "frames_rejected_detection": self._rejected_detection,

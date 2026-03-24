@@ -1269,14 +1269,37 @@ class ControlServer:
         request_camera_id: str,
         params: dict[str, object],
     ) -> dict[str, object]:
-        if params:
+        allowed = {"start_index", "max_frames"}
+        unknown = sorted(set(params.keys()) - allowed)
+        if unknown:
             return self._error_response(
                 request_id=request_id,
                 request_camera_id=request_camera_id,
                 error_code=ERROR_INVALID_REQUEST,
-                error_message="invalid_request: intrinsics_get_corners does not accept params",
+                error_message=f"invalid_request: intrinsics_get_corners unknown keys ({','.join(unknown)})",
             )
-        result = self._intrinsics_session.get_pending_corners()
+        start_index_raw = params.get("start_index", 0)
+        max_frames_raw = params.get("max_frames")
+        if not isinstance(start_index_raw, int) or int(start_index_raw) < 0:
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message="invalid_request: intrinsics_get_corners.start_index must be integer >= 0",
+            )
+        if max_frames_raw is not None and (
+            not isinstance(max_frames_raw, int) or int(max_frames_raw) <= 0
+        ):
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message="invalid_request: intrinsics_get_corners.max_frames must be integer > 0",
+            )
+        result = self._intrinsics_session.get_pending_corners(
+            start_index=int(start_index_raw),
+            max_frames=int(max_frames_raw) if max_frames_raw is not None else None,
+        )
         return self._ok_response(
             request_id=request_id,
             request_camera_id=request_camera_id,

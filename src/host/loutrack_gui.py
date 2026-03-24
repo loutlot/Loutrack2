@@ -1100,22 +1100,13 @@ class LoutrackGuiState:
         if self._intrinsics_host_session is None:
             raise ValueError("No intrinsics capture session active")
         self._intrinsics_host_session.clear()
-        return {"ok": True, "status": self._intrinsics_host_session.get_status()}
+        return {"ok": True, "status": self.get_intrinsics_status()}
 
     def trigger_intrinsics_calibration(self) -> Dict[str, Any]:
         if self._intrinsics_host_session is None:
             raise ValueError("No intrinsics capture session active")
         self._intrinsics_host_session.trigger_calibration()
         return {"ok": True, "status": self._intrinsics_host_session.get_status()}
-
-    def discard_intrinsics_capture(self) -> Dict[str, Any]:
-        if self._intrinsics_host_session is not None:
-            try:
-                self._intrinsics_host_session.stop()
-            except Exception:
-                pass
-            self._intrinsics_host_session = None
-        return {"ok": True}
 
     def get_intrinsics_status(self) -> Dict[str, Any]:
         targets = self.session.discover_targets(None)
@@ -1858,9 +1849,6 @@ class LoutrackGuiHandler(BaseHTTPRequestHandler):
                 return
             if self.path == "/api/intrinsics/calibrate":
                 self._send_json(self.state.trigger_intrinsics_calibration())
-                return
-            if self.path == "/api/intrinsics/discard":
-                self._send_json(self.state.discard_intrinsics_capture())
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
         except ValueError as exc:
