@@ -180,6 +180,34 @@ def test_control_server_ping_caches_clock_sync_probe(monkeypatch: pytest.MonkeyP
     assert calls["count"] == 2
 
 
+def test_resolve_pmc_binary_prefers_absolute_sbin_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(capture_mod.os.path, "isabs", lambda path: path.startswith("/"))
+    monkeypatch.setattr(
+        capture_mod.os,
+        "access",
+        lambda path, mode: path == "/usr/sbin/pmc",
+    )
+    monkeypatch.setattr(capture_mod.shutil, "which", lambda binary: None)
+
+    assert capture_mod._resolve_pmc_binary() == "/usr/sbin/pmc"
+
+
+def test_resolve_pmc_binary_falls_back_to_shutil_which(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(capture_mod.os.path, "isabs", lambda path: path.startswith("/"))
+    monkeypatch.setattr(capture_mod.os, "access", lambda path, mode: False)
+    monkeypatch.setattr(
+        capture_mod.shutil,
+        "which",
+        lambda binary: "/custom/bin/pmc" if binary == "pmc" else None,
+    )
+
+    assert capture_mod._resolve_pmc_binary() == "/custom/bin/pmc"
+
+
 def test_parse_pmc_time_status_normalizes_ns_to_us_for_slave() -> None:
     snapshot = capture_mod._parse_pmc_time_status(
         """

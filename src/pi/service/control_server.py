@@ -11,7 +11,6 @@ import json
 import math
 import os
 import re
-import shutil
 import socket
 import subprocess
 import threading
@@ -89,6 +88,7 @@ from capture_runtime import (
     _build_placeholder_jpeg,
     _clock_realtime_us,
     _read_linuxptp_setting,
+    _resolve_pmc_binary,
     _parse_pmc_time_status,
     _pose_capture_quality,
     _latest_queue_put,
@@ -1975,7 +1975,8 @@ class ControlServer:
             Literal["software", "hardware", "unknown"],
             _read_linuxptp_setting(LINUXPTP_TIMESTAMPING_MODE_PATH, {"software", "hardware"}),
         )
-        if shutil.which("pmc") is None:
+        pmc_binary = _resolve_pmc_binary()
+        if pmc_binary is None:
             return ClockSyncSnapshot(
                 status="unknown",
                 offset_us=None,
@@ -1987,7 +1988,7 @@ class ControlServer:
         try:
             completed = subprocess.run(
                 [
-                    "pmc",
+                    pmc_binary,
                     "-u",
                     "-b",
                     "0",

@@ -359,7 +359,7 @@ def test_gui_pose_and_floor_capture_paths(tmp_path: Path, monkeypatch) -> None:
     )
     assert start_metric["duration_s"] == 2.5
     assert scheduled == {
-        "camera_ids": ["pi-cam-01"],
+        "camera_ids": ["pi-cam-01", "pi-cam-02"],
         "duration_s": 2.5,
         "capture_kind": "wand_metric_capture",
     }
@@ -592,6 +592,144 @@ def test_get_state_no_longer_reloads_config_from_settings_file(tmp_path: Path) -
     assert current == baseline
 
 
+def test_get_settings_does_not_rewrite_existing_settings_file(tmp_path: Path) -> None:
+    settings_path = tmp_path / "loutrack_gui_settings.json"
+    payload = {
+        "meta": {"version": 2, "updated_at": 1234567890},
+        "calibration": {
+            "draft": {
+                "exposure_us": 12000,
+                "gain": 8.0,
+                "fps": 56,
+                "focus": 5.215,
+                "threshold": 200,
+                "blob_min_diameter_px": None,
+                "blob_max_diameter_px": None,
+                "circularity_min": 0.0,
+                "mask_threshold": 200,
+                "mask_seconds": 0.5,
+                "wand_metric_seconds": 3.0,
+            },
+            "committed": {
+                "exposure_us": 12000,
+                "gain": 8.0,
+                "fps": 56,
+                "focus": 5.215,
+                "threshold": 200,
+                "blob_min_diameter_px": None,
+                "blob_max_diameter_px": None,
+                "circularity_min": 0.0,
+                "mask_threshold": 200,
+                "mask_seconds": 0.5,
+                "wand_metric_seconds": 3.0,
+            },
+        },
+        "intrinsics": {
+            "draft": {
+                "camera_id": "pi-cam-02",
+                "mjpeg_url": "",
+                "square_length_mm": 30.0,
+                "marker_length_mm": None,
+                "squares_x": 6,
+                "squares_y": 8,
+                "min_frames": 25,
+                "cooldown_s": 1.5,
+            },
+            "committed": {
+                "camera_id": "pi-cam-02",
+                "mjpeg_url": "",
+                "square_length_mm": 30.0,
+                "marker_length_mm": None,
+                "squares_x": 6,
+                "squares_y": 8,
+                "min_frames": 25,
+                "cooldown_s": 1.5,
+            },
+        },
+        "extrinsics": {
+            "draft": {
+                "intrinsics_path": "calibration",
+                "pose_log_path": "logs/extrinsics_pose_capture.jsonl",
+                "wand_metric_log_path": "logs/extrinsics_wand_metric.jsonl",
+                "output_path": "calibration/extrinsics_pose_v2.json",
+                "pair_window_us": 2000,
+                "wand_pair_window_us": 8000,
+                "min_pairs": 8,
+            },
+            "committed": {
+                "intrinsics_path": "calibration",
+                "pose_log_path": "logs/extrinsics_pose_capture.jsonl",
+                "wand_metric_log_path": "logs/extrinsics_wand_metric.jsonl",
+                "output_path": "calibration/extrinsics_pose_v2.json",
+                "pair_window_us": 2000,
+                "wand_pair_window_us": 8000,
+                "min_pairs": 8,
+            },
+            "locks": {
+                "pose_log_path_manual": False,
+                "wand_metric_log_path_manual": False,
+            },
+        },
+        "ui": {
+            "active_page": "calibration",
+            "active_view": "blob",
+            "selected_camera_ids": ["pi-cam-02"],
+        },
+        "runtime_hints": {
+            "pose_log_path": "logs/extrinsics_pose_capture.jsonl",
+            "wand_metric_log_path": "logs/extrinsics_wand_metric.jsonl",
+        },
+    }
+    settings_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    before = settings_path.read_text(encoding="utf-8")
+
+    state = LoutrackGuiState(
+        session=_FakeSession(),
+        receiver=_FakeReceiver(),
+        settings_path=settings_path,
+        tracking_runtime=_FakeTrackingRuntime(),
+    )
+
+    _ = state.get_settings()
+
+    after = settings_path.read_text(encoding="utf-8")
+    assert after == before
+
+
+def test_run_command_does_not_persist_selected_camera_ids_from_payload(tmp_path: Path) -> None:
+    settings_path = tmp_path / "loutrack_gui_settings.json"
+    state = LoutrackGuiState(
+        session=_FakeSession(),
+        receiver=_FakeReceiver(),
+        settings_path=settings_path,
+        tracking_runtime=_FakeTrackingRuntime(),
+    )
+    state.apply_settings_ui({"selected_camera_ids": ["pi-cam-02"]})
+
+    state.run_command({"command": "refresh", "camera_ids": ["pi-cam-01"]})
+
+    payload = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert payload["ui"]["selected_camera_ids"] == ["pi-cam-02"]
+    assert state.selected_camera_ids == ["pi-cam-02"]
+
+
+def test_apply_config_does_not_persist_selected_camera_ids_from_payload(tmp_path: Path) -> None:
+    settings_path = tmp_path / "loutrack_gui_settings.json"
+    state = LoutrackGuiState(
+        session=_FakeSession(),
+        receiver=_FakeReceiver(),
+        settings_path=settings_path,
+        tracking_runtime=_FakeTrackingRuntime(),
+    )
+    state.apply_settings_ui({"selected_camera_ids": ["pi-cam-02"]})
+
+    state.apply_config({"camera_ids": ["pi-cam-01"], "exposure_us": 13000, "gain": 9.0, "fps": 56, "focus": 5.1, "threshold": 205, "circularity_min": 0.0, "blob_min_diameter_px": None, "blob_max_diameter_px": None, "mask_threshold": 200, "mask_seconds": 0.5, "wand_metric_seconds": 3.0})
+
+    payload = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert payload["ui"]["selected_camera_ids"] == ["pi-cam-02"]
+    assert state.selected_camera_ids == ["pi-cam-02"]
+
+
 def test_set_preview_forwards_overlays_and_charuco(tmp_path: Path) -> None:
     session = _FakeSession()
     state = LoutrackGuiState(
@@ -616,11 +754,29 @@ def test_set_preview_forwards_overlays_and_charuco(tmp_path: Path) -> None:
     )
     assert session.last_broadcast is not None
     assert session.last_broadcast["fn_name"] == "set_preview"
-    assert session.last_broadcast["camera_ids"] == ["pi-cam-01"]
+    assert session.last_broadcast["camera_ids"] == ["pi-cam-01", "pi-cam-02"]
     kwargs = session.last_broadcast["kwargs"]
     assert kwargs["render_enabled"] is True
     assert kwargs["overlays"] == {"blob": False, "mask": False, "text": True, "charuco": True}
     assert kwargs["charuco"]["square_length_mm"] == 60.0
+
+
+def test_refresh_targets_lists_all_cameras_even_when_ui_selection_is_subset(tmp_path: Path) -> None:
+    session = _FakeSession()
+    state = LoutrackGuiState(
+        session=session,
+        receiver=_FakeReceiver(),
+        settings_path=tmp_path / "loutrack_gui_settings.json",
+        tracking_runtime=_FakeTrackingRuntime(),
+    )
+    state.apply_settings_ui({"selected_camera_ids": ["pi-cam-01"]})
+
+    _ = state.run_command({"command": "refresh", "camera_ids": ["pi-cam-01"]})
+    cameras = state.get_state()["cameras"]
+
+    assert [camera["camera_id"] for camera in cameras] == ["pi-cam-01", "pi-cam-02"]
+    assert cameras[0]["selected"] is True
+    assert cameras[1]["selected"] is False
 
 
 def test_intrinsics_start_sends_start_to_pi_and_creates_session(tmp_path: Path) -> None:

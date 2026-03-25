@@ -66,4 +66,4 @@ echo "  systemctl status ${PTP4L_UNIT}"
 if systemctl list-unit-files "${PHC2SYS_UNIT}" >/dev/null 2>&1; then
   echo "  systemctl status ${PHC2SYS_UNIT}"
 fi
-echo "  pmc -u -b 0 \"GET TIME_STATUS_NP\""
+echo "  /usr/sbin/pmc -u -b 0 -s /var/run/ptp4lro -i /tmp/pmc.manual_ntp_sync \"GET TIME_STATUS_NP\""

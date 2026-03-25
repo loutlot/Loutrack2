@@ -109,6 +109,7 @@ class LoutrackGuiState:
         self.latest_extrinsics_quality: Dict[str, Any] | None = None
         self._restore_latest_extrinsics(DEFAULT_EXTRINSICS_OUTPUT_PATH)
         self._intrinsics_host_session: IntrinsicsHostSession | None = None
+        self._ensure_settings_file_exists()
         settings_bundle = self._load_settings_bundle()
         ui_payload = settings_bundle.get("ui", {})
         if isinstance(ui_payload, dict):
@@ -245,6 +246,11 @@ class LoutrackGuiState:
             payload["meta"]["updated_at"] = int(time.time())
         self.settings_path.parent.mkdir(parents=True, exist_ok=True)
         self.settings_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _ensure_settings_file_exists(self) -> None:
+        if self.settings_path.exists():
+            return
+        self._write_settings_payload(self._default_settings_payload())
 
     @staticmethod
     def _to_int(value: Any) -> int:
@@ -400,19 +406,6 @@ class LoutrackGuiState:
         bundle = self._normalize_settings_payload(raw_payload)
         validation = self._refresh_committed_from_draft(bundle)
         bundle["validation"] = validation
-        try:
-            self._write_settings_payload(
-                {
-                    "meta": bundle.get("meta", {}),
-                    "calibration": bundle.get("calibration", {}),
-                    "intrinsics": bundle.get("intrinsics", {}),
-                    "extrinsics": bundle.get("extrinsics", {}),
-                    "ui": bundle.get("ui", {}),
-                    "runtime_hints": bundle.get("runtime_hints", {}),
-                }
-            )
-        except Exception:
-            pass
         return bundle
 
     def _save_settings_bundle(self, bundle: Dict[str, Any]) -> None:
@@ -758,11 +751,14 @@ class LoutrackGuiState:
             blob_max_diameter_px=payload.get("blob_max_diameter_px", source.blob_max_diameter_px),
             circularity_min=float(payload.get("circularity_min", source.circularity_min)),
             duration_s=float(payload.get("wand_metric_seconds", source.duration_s)),
-            camera_ids=self.selected_camera_ids or None,
+            camera_ids=None,
             mask_params=mask,
             mask_retry=source.mask_retry,
             output_dir=source.output_dir,
         )
+
+    def _discover_workflow_targets(self) -> List[Any]:
+        return self.session.discover_targets(None)
 
     def _apply_capture_settings(self, targets: List[Any]) -> Dict[str, Dict[str, Dict[str, Any]]]:
         return {
@@ -783,7 +779,7 @@ class LoutrackGuiState:
         }
 
     def refresh_targets(self) -> List[Dict[str, Any]]:
-        discovered = self.session.discover_targets(self.selected_camera_ids or None)
+        discovered = self._discover_workflow_targets()
         status_rows: List[Dict[str, Any]] = []
         ping_results = self.session._broadcast(discovered, "ping") if discovered else {}
         with self.lock:
@@ -807,7 +803,7 @@ class LoutrackGuiState:
 
     def _workflow_summary(self, cameras: List[Dict[str, Any]]) -> Dict[str, Any]:
         selected = [camera for camera in cameras if bool(camera.get("selected"))]
-        active_cameras = selected if selected else cameras
+        active_cameras = cameras
         with self.lock:
             active_capture_kind = self._active_capture_kind
 
@@ -1290,40 +1286,11 @@ class LoutrackGuiState:
             "intrinsics_settings": self._load_intrinsics_settings(),
         }
 
-    def _sync_selected_camera_ids(self, payload: Dict[str, Any]) -> None:
-        if "camera_ids" not in payload:
-            return
-        raw_camera_ids = payload.get("camera_ids")
-        if raw_camera_ids is None:
-            self.selected_camera_ids = []
-            try:
-                bundle = self._load_settings_bundle()
-                bundle["ui"]["selected_camera_ids"] = []
-                self._save_settings_bundle(bundle)
-            except Exception:
-                pass
-            return
-        if not isinstance(raw_camera_ids, list):
-            raise ValueError("camera_ids must be a list")
-        self.selected_camera_ids = [
-            str(camera_id).strip()
-            for camera_id in raw_camera_ids
-            if str(camera_id).strip()
-        ]
-        self.selected_camera_ids = list(dict.fromkeys(self.selected_camera_ids))
-        try:
-            bundle = self._load_settings_bundle()
-            bundle["ui"]["selected_camera_ids"] = list(self.selected_camera_ids)
-            self._save_settings_bundle(bundle)
-        except Exception:
-            pass
-
     def apply_config(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        self._sync_selected_camera_ids(payload)
         self.config = self._build_session_config(payload)
         self._persist_config()
 
-        targets = self.session.discover_targets(self.selected_camera_ids or None)
+        targets = self._discover_workflow_targets()
         result = self._apply_capture_settings(targets)
         self._update_camera_status(result)
         self.last_result = result
@@ -1331,14 +1298,13 @@ class LoutrackGuiState:
 
     def run_command(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         command = str(payload.get("command", "")).strip()
-        self._sync_selected_camera_ids(payload)
 
         if command == "refresh":
             result = {"cameras": self.refresh_targets()}
             self.last_result = result
             return result
 
-        targets = self.session.discover_targets(self.selected_camera_ids or None)
+        targets = self._discover_workflow_targets()
         command_handlers = {
             "ping": lambda: self.session._broadcast(targets, "ping"),
             "mask_start": lambda: self.session._broadcast(targets, "mask_start", **self._mask_params()),

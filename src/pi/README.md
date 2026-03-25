@@ -75,7 +75,7 @@ PYTHONPATH=src .venv/bin/python -m host.control \
 
 ## 1 コマンドでできる PTP 設定
 
-Loutrack の固定トポロジー向けに、`src/pi/setup_ptp.sh` は `linuxptp` をインストールし、`systemd-timesyncd` を無効化し、ロール別の systemd ユニットを作成して即座に起動します。supported path は `software` timestamping です。
+Loutrack の固定トポロジー向けに、`src/pi/setup_ptp.sh` は `linuxptp` をインストールし、`systemd-timesyncd` を無効化し、ロール別の systemd ユニットを作成して即座に起動します。master では boot 時に一度だけ NTP で wall clock を寄せてから PTP を開始する bootstrap service も入ります。supported path は `software` timestamping です。
 
 ### Master (pi-cam-01) 設定
 
@@ -109,7 +109,7 @@ sudo ./src/pi/setup_ptp.sh slave eth0 hardware
 
 ```bash
 systemctl status loutrack-ptp4l.service
-pmc -u -b 0 "GET TIME_STATUS_NP"
+/usr/sbin/pmc -u -b 0 -s /var/run/ptp4lro -i /tmp/pmc.readme "GET TIME_STATUS_NP"
 ```
 
 ## PTP 設定の巻き戻し
@@ -132,7 +132,7 @@ sudo ./src/pi/revert_ptp.sh
 
 ## Master 用の手動 NTP 復旧
 
-`pi-cam-01` の絶対時刻が怪しい場合は、capture 前に `src/pi/manual_ntp_sync.sh` を手動で実行します。
+`setup_ptp.sh master` は boot 時に一度だけ NTP bootstrap を挟むため、通常の起動では手動介入なしで `pi-cam-01` の wall clock を寄せてから PTP が始まります。それでも絶対時刻が怪しい場合は、capture 前に `src/pi/manual_ntp_sync.sh` を手動で実行します。
 
 ```bash
 sudo ./src/pi/manual_ntp_sync.sh

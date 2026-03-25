@@ -78,6 +78,7 @@ PREVIEW_MAX_DIMENSION = 1280
 PTP_SANITY_CACHE_US = 60_000_000
 PTP_LOCK_OFFSET_THRESHOLD_US = 500.0
 PTP_RO_SOCKET_PATH = "/var/run/ptp4lro"
+PMC_BINARY_CANDIDATES = ("/usr/sbin/pmc", "/usr/bin/pmc", "pmc")
 LINUXPTP_ROLE_PATH = "/etc/linuxptp/loutrack-role"
 LINUXPTP_TIMESTAMPING_MODE_PATH = "/etc/linuxptp/loutrack-timestamping-mode"
 
@@ -1494,6 +1495,18 @@ def _read_linuxptp_setting(
     except OSError:
         return "unknown"
     return value if value in allowed else "unknown"
+
+
+def _resolve_pmc_binary() -> str | None:
+    for candidate in PMC_BINARY_CANDIDATES:
+        if os.path.isabs(candidate):
+            if os.access(candidate, os.X_OK):
+                return candidate
+            continue
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+    return None
 
 
 def _parse_pmc_time_status(
