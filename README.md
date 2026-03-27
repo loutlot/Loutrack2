@@ -108,6 +108,28 @@ Loutrack2 also includes a hardware direction centered around DIY tracking camera
 
 ![Tracked HMD prototype](readme_imgs/HMD_tracker.png)
 
+Current hardware direction:
+
+- Raspberry Pi-based camera nodes built from commonly available parts
+- Raspberry Pi Camera Module 3 Wide NoIR as the current camera configuration
+- a PoE HAT so the node can be powered and networked over a single LAN cable
+- a custom board mounted above the Pi that combines camera holding and IR LED illumination
+- open hardware files in the repository, including PCB design data and 3D-printable parts
+- reflective tracked markers built from 3D-printed spheres and retroreflective tape
+
+What this enables:
+
+- active IR illumination from the device side
+- camera capture through an IR-pass configuration for higher-SNR reflective blob detection
+- ceiling or room installation with simplified wiring through PoE
+- a hardware stack that can be reproduced with DIY fabrication and off-the-shelf components
+
+Relevant repository areas:
+
+- [`hardware`](hardware) for printable parts and board-related assets
+- [`hardware/LED board`](hardware/LED%20board) for the custom LED board design files
+- [`hardware/pi mount`](hardware/pi%20mount) for Pi mount printable parts
+
 The longer-term goal is a tracking platform that can be assembled, modified, and extended by the community.
 
 ## Open Source
