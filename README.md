@@ -2,7 +2,7 @@
 
 Loutrack2 is an open-source optical motion tracking project built around Raspberry Pi camera nodes, host-side calibration tools, and a GUI-based workflow.
 
-Japanese README: [readmeja.md](readmeja.md)
+日本語はこっち→: [README_ja.md](README_ja.md)
 
 ![Loutrack Pi device](readme_imgs/pi_device.png)
 
