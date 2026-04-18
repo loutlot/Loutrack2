@@ -23,7 +23,7 @@ for path in (SRC_ROOT, MODULE_ROOT):
 
 from host.geo import CalibrationLoader, CameraParams
 from extrinsics_capture import load_wand_metric_observations
-from extrinsics_scale import apply_wand_metric_alignment
+from extrinsics_scale import VALID_WAND_FACE_CONSTRAINTS, WAND_FACE_FRONT_UP, apply_wand_metric_alignment
 from extrinsics_validate import validate_wand_metric_extrinsics
 from calibration.targets.wand import WAND_POINTS_MM
 
@@ -730,6 +730,7 @@ def _resolved_metric_payload(
             if isinstance(validation, dict) and key in validation
         },
         "shape_rms_error_mm": scale_meta.get("shape_rms_error_mm"),
+        "wand_face": scale_meta.get("wand_face"),
     }
 
 
@@ -754,6 +755,9 @@ def _resolved_world_payload(
         "origin_world": scale_meta.get("origin_world"),
         "origin_marker": scale_meta.get("origin_marker"),
         "aligned_axis_world": scale_meta.get("aligned_axis_world"),
+        "wand_face": scale_meta.get("wand_face"),
+        "floor_normal_sign_source": scale_meta.get("floor_normal_sign_source"),
+        "wand_face_alignment": scale_meta.get("wand_face_alignment"),
         "validation": {
             key: validation.get(key)
             for key in ("floor_residual_mm", "world_up_consistency")
@@ -771,6 +775,7 @@ def solve_extrinsics(
     min_pairs: int = DEFAULT_MIN_PAIRS,
     wand_metric_log_path: str | Path | None = None,
     wand_pair_window_us: int = DEFAULT_WAND_PAIR_WINDOW_US,
+    wand_face: str = WAND_FACE_FRONT_UP,
 ) -> Dict[str, Any]:
     calibrations = CalibrationLoader.load_intrinsics(str(intrinsics_path))
     camera_params = {
@@ -823,6 +828,7 @@ def solve_extrinsics(
             wand_observations_by_camera=wand_observations,
             wand_points_mm=WAND_POINTS_MM,
             pair_window_us=wand_pair_window_us,
+            wand_face=wand_face,
             focal_scales=focal_scales,
         )
         if scale_meta.get("scale_source") != "none":
@@ -872,6 +878,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--pair-window-us", type=int, default=DEFAULT_PAIR_WINDOW_US, help="Timestamp pairing window")
     parser.add_argument("--min-pairs", type=int, default=DEFAULT_MIN_PAIRS, help="Minimum adjacent pair rows")
     parser.add_argument("--wand-pair-window-us", type=int, default=DEFAULT_WAND_PAIR_WINDOW_US, help="Timestamp pairing window for wand metric rows")
+    parser.add_argument(
+        "--wand-face",
+        choices=VALID_WAND_FACE_CONSTRAINTS,
+        default=WAND_FACE_FRONT_UP,
+        help="Which physical wand side is facing upward during floor / metric capture",
+    )
     args = parser.parse_args(argv)
 
     result = solve_extrinsics(
@@ -882,6 +894,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         min_pairs=args.min_pairs,
         wand_metric_log_path=args.wand_metric_log,
         wand_pair_window_us=args.wand_pair_window_us,
+        wand_face=args.wand_face,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0

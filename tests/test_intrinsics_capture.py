@@ -39,7 +39,7 @@ def _make_config(**kwargs: Any) -> IntrinsicsConfig:
     defaults = {
         "camera_id": "pi-cam-01",
         "mjpeg_url": "http://localhost:9999/mjpeg",  # not used in unit tests
-        "square_length_mm": 30.0,
+        "square_length_mm": 60.0,
         "min_frames": 3,
         "target_frames": 10,
         "cooldown_s": 0.2,

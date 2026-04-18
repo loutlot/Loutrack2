@@ -142,12 +142,7 @@ class CalibrationLoader:
         with open(extrinsics_path, "r", encoding="utf-8") as handle:
             data = json.load(handle)
 
-        pose_section = data.get("pose", {})
-        cameras = (
-            pose_section.get("camera_poses", [])
-            if isinstance(pose_section, dict)
-            else []
-        )
+        cameras = CalibrationLoader._select_v2_camera_pose_rows(data)
         result: Dict[str, Dict[str, Any]] = {}
         for camera in cameras:
             camera_id = camera.get("camera_id")
@@ -156,6 +151,74 @@ class CalibrationLoader:
         if include_meta:
             result["__meta__"] = data if isinstance(data, dict) else {}
         return result
+
+    @staticmethod
+    def _select_v2_camera_pose_rows(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        metric_section = data.get("metric", {})
+        world_section = data.get("world", {})
+        if (
+            isinstance(metric_section, dict)
+            and metric_section.get("status") == "resolved"
+            and isinstance(metric_section.get("camera_poses"), list)
+        ):
+            metric_rows = [
+                dict(row)
+                for row in metric_section.get("camera_poses", [])
+                if isinstance(row, dict)
+            ]
+            world_matrix = CalibrationLoader._v2_world_transform(world_section)
+            if world_matrix is not None:
+                return [
+                    CalibrationLoader._transform_metric_pose_to_world(row, world_matrix)
+                    for row in metric_rows
+                ]
+            return metric_rows
+
+        pose_section = data.get("pose", {})
+        if not isinstance(pose_section, dict):
+            return []
+        return [
+            dict(row)
+            for row in pose_section.get("camera_poses", [])
+            if isinstance(row, dict)
+        ]
+
+    @staticmethod
+    def _v2_world_transform(world_section: Any) -> np.ndarray | None:
+        if not isinstance(world_section, dict) or world_section.get("status") != "resolved":
+            return None
+        raw_matrix = world_section.get("to_world_matrix")
+        if raw_matrix is None:
+            return None
+        try:
+            matrix = np.asarray(raw_matrix, dtype=np.float64).reshape(4, 4)
+        except Exception:
+            return None
+        if not np.all(np.isfinite(matrix)):
+            return None
+        return matrix
+
+    @staticmethod
+    def _transform_metric_pose_to_world(
+        row: Dict[str, Any],
+        to_world_matrix: np.ndarray,
+    ) -> Dict[str, Any]:
+        rotation = np.asarray(row.get("R", np.eye(3)), dtype=np.float64).reshape(3, 3)
+        translation = np.asarray(row.get("t", [0.0, 0.0, 0.0]), dtype=np.float64).reshape(3)
+        metric_to_world_r = to_world_matrix[:3, :3]
+        metric_to_world_t = to_world_matrix[:3, 3]
+
+        world_to_metric_r = metric_to_world_r.T
+        rotation_world = rotation @ world_to_metric_r
+        translation_world = translation - rotation_world @ metric_to_world_t
+
+        out = dict(row)
+        out["R"] = rotation_world.tolist()
+        out["t"] = translation_world.tolist()
+        out["frame"] = "world"
+        out["source_frame"] = "metric_camera"
+        out["coordinate_origin"] = "wand"
+        return out
 
     @staticmethod
     def apply_extrinsics(
@@ -570,6 +633,9 @@ class GeometryPipeline:
     def __init__(self) -> None:
         self.camera_params: Dict[str, CameraParams] = {}
         self.triangulator: Optional[Triangulator] = None
+        self.coordinate_frame = "camera_similarity"
+        self.coordinate_origin = "reference_camera"
+        self.coordinate_origin_source = "extrinsics_pose_reference"
 
     def load_calibration(self, filepath: str) -> int:
         """Load camera calibration data. Returns number of cameras loaded."""
@@ -579,6 +645,9 @@ class GeometryPipeline:
             calibrations = CalibrationLoader.load_from_reference_format(filepath)
 
         self.camera_params = {}
+        self.coordinate_frame = "camera_similarity"
+        self.coordinate_origin = "reference_camera"
+        self.coordinate_origin_source = "extrinsics_pose_reference"
         for cam_id, calib in calibrations.items():
             if isinstance(calib, CameraParams):
                 self.camera_params[cam_id] = calib
@@ -590,6 +659,19 @@ class GeometryPipeline:
         extrinsics = CalibrationLoader.load_extrinsics(filepath, include_meta=True)
         if extrinsics:
             CalibrationLoader.apply_extrinsics(self.camera_params, extrinsics)
+            camera_rows = [
+                row
+                for camera_id, row in extrinsics.items()
+                if not str(camera_id).startswith("__") and isinstance(row, dict)
+            ]
+            if any(row.get("coordinate_origin") == "wand" for row in camera_rows):
+                self.coordinate_frame = "world"
+                self.coordinate_origin = "wand"
+                self.coordinate_origin_source = "floor_metric_capture"
+            elif camera_rows:
+                self.coordinate_frame = str(camera_rows[0].get("frame", "camera_similarity"))
+                self.coordinate_origin = "reference_camera"
+                self.coordinate_origin_source = "extrinsics_pose_reference"
 
         if self.camera_params:
             self.triangulator = Triangulator(self.camera_params)

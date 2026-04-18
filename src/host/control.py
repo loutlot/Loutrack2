@@ -211,6 +211,30 @@ def intrinsics_clear(
     return _send(ip, port, camera_id, "intrinsics_clear", request_id=request_id, timeout=timeout)
 
 
+def intrinsics_get_corners(
+    ip: str,
+    port: int,
+    camera_id: str,
+    *,
+    start_index: int = 0,
+    max_frames: Optional[int] = None,
+    request_id: Optional[str] = None,
+    timeout: float = 10.0,
+) -> Dict[str, Any]:
+    params: Dict[str, Any] = {"start_index": int(start_index)}
+    if max_frames is not None:
+        params["max_frames"] = int(max_frames)
+    return _send(
+        ip,
+        port,
+        camera_id,
+        "intrinsics_get_corners",
+        params,
+        request_id=request_id,
+        timeout=timeout,
+    )
+
+
 def intrinsics_calibrate(
     ip: str,
     port: int,

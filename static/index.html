@@ -197,6 +197,18 @@
     button.btn-danger { background: var(--danger); color: #fff; }
     button.btn-sm { padding: 5px 10px; font-size: 11px; }
     .btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    .status-banner {
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 11px;
+      font-weight: 700;
+      margin-bottom: 10px;
+      background: rgba(148,163,184,0.12);
+      color: var(--ink-muted);
+    }
+    .status-banner.success { background: rgba(34,197,94,0.15); color: var(--accent); }
+    .status-banner.error { background: rgba(239,68,68,0.15); color: #fca5a5; }
+    .status-banner.info { background: rgba(14,165,233,0.16); color: #7dd3fc; }
 
     /* ── Tables ───────────────────────────────────────── */
     .tbl-wrap { overflow: auto; flex: 1; }
@@ -261,7 +273,7 @@
     }
     .slider-value { color: var(--ink); font-weight: 700; }
     input[type="range"] { width: 100%; accent-color: var(--accent); }
-    input[type="text"], input[type="number"] {
+    input[type="text"], input[type="number"], select {
       width: 100%;
       background: rgba(15,23,42,0.6);
       border: 1px solid var(--border);
@@ -270,6 +282,10 @@
       color: var(--ink);
       font: inherit;
       font-size: 12px;
+    }
+    .input-invalid {
+      border-color: rgba(239,68,68,0.8) !important;
+      box-shadow: 0 0 0 1px rgba(239,68,68,0.35);
     }
     label {
       display: flex;
@@ -280,6 +296,26 @@
       color: var(--ink-muted);
       text-transform: uppercase;
       letter-spacing: 0.05em;
+    }
+    .validation-summary {
+      margin-top: 10px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: rgba(239,68,68,0.12);
+      color: #fecaca;
+      font-size: 11px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+    .validation-summary:empty { display: none; }
+    .runtime-hint {
+      margin-top: 6px;
+      font-size: 11px;
+      color: var(--ink-muted);
+      text-transform: none;
+      letter-spacing: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
     }
 
     /* ── Stat cards ───────────────────────────────────── */
@@ -337,10 +373,13 @@
     .tracking-viewer-inner {
       position: relative;
       border-radius: 10px;
-      border: 1px solid var(--border);
+      border: 1px solid rgba(34,197,94,0.24);
       overflow: hidden;
-      background: #060d19;
+      background:
+        radial-gradient(circle at 50% 40%, rgba(34,197,94,0.08), transparent 36%),
+        #020617;
       flex: 1;
+      box-shadow: inset 0 0 38px rgba(0,0,0,0.55);
     }
     .tracking-viewer-inner canvas { width: 100%; height: 100%; display: block; }
     .tracking-viewer-empty {
@@ -352,8 +391,8 @@
       text-align: center;
       padding: 16px;
       font-weight: 700;
-      color: var(--warm);
-      background: rgba(6,13,25,0.85);
+      color: #86efac;
+      background: rgba(2,6,23,0.88);
       pointer-events: none;
       font-size: 14px;
     }
@@ -625,6 +664,7 @@
           <div class="split-right" style="width:300px;min-width:200px;display:flex;flex-direction:column;min-height:0">
             <div class="panel" style="flex:1;display:flex;flex-direction:column;min-height:0">
               <div class="panel-title">Console</div>
+              <div id="statusBanner" class="status-banner info">Ready.</div>
               <pre class="console" id="status"></pre>
             </div>
           </div>
@@ -689,6 +729,7 @@
               <div class="btn-row">
                 <button id="applyConfig">Apply Blob Settings</button>
               </div>
+              <div id="calibrationValidation" class="validation-summary"></div>
             </div>
           </div>
         </div>
@@ -791,8 +832,9 @@
             <label>Wand Metric Log Path
               <input id="wandMetricLogPath" type="text" value="logs/extrinsics_wand_metric.jsonl">
             </label>
+            <div id="latestWandLogHint" class="runtime-hint">Latest metric capture: none yet</div>
             <div style="margin-top:6px">
-              <button id="resetWandLogPath" class="btn-ghost btn-sm" type="button">Reset to latest</button>
+              <button id="resetWandLogPath" class="btn-ghost btn-sm" type="button">Use Latest Metric Capture</button>
             </div>
           </div>
           <div class="btn-row" style="justify-content:center">
@@ -814,19 +856,28 @@
                 <label>Intrinsics Dir<input id="intrinsicsPath" type="text" value="calibration"></label>
                 <label>Pose Log Path
                   <input id="logPath" type="text" value="logs/extrinsics_pose_capture.jsonl">
-                  <button id="resetPoseLogPath" class="btn-ghost btn-sm" type="button" style="margin-top:6px">Reset to latest</button>
+                  <div id="latestPoseLogHint" class="runtime-hint">Latest pose capture: none yet</div>
+                  <button id="resetPoseLogPath" class="btn-ghost btn-sm" type="button" style="margin-top:6px">Use Latest Pose Capture</button>
                 </label>
                 <label>Wand Metric Log
                   <input id="generateWandMetricLogPath" type="text" value="logs/extrinsics_wand_metric.jsonl">
+                  <div id="latestGenerateWandLogHint" class="runtime-hint">Latest metric capture: none yet</div>
                 </label>
                 <label>Output Path<input id="outputPath" type="text" value="calibration/extrinsics_pose_v2.json"></label>
                 <label>Pair Window (us)<input id="pairWindowUs" type="number" min="1" step="100" value="2000"></label>
                 <label>Min Pairs<input id="minPairs" type="number" min="1" step="1" value="8"></label>
                 <label>Wand Pair Window (us)<input id="wandPairWindowUs" type="number" min="1" step="100" value="8000"></label>
+                <label>Wand Face Up
+                  <select id="wandFace">
+                    <option value="front_up">Front side up (+X x +Y)</option>
+                    <option value="back_up">Back side up (-(+X x +Y))</option>
+                  </select>
+                </label>
               </div>
               <div class="btn-row">
                 <button id="generateExtrinsics">Generate Extrinsics</button>
               </div>
+              <div id="extrinsicsValidation" class="validation-summary"></div>
             </div>
           </div>
           <div class="split-right" style="flex:1;display:flex;flex-direction:column;min-height:0">
@@ -907,6 +958,7 @@
                 <button id="intStop" class="btn-ghost btn-sm">Stop</button>
                 <button id="intClear" class="btn-ghost btn-sm">Clear Frames</button>
               </div>
+              <div id="intrinsicsValidation" class="validation-summary"></div>
             </div>
             <div class="panel" style="flex:1">
               <div class="panel-title">Live Feed</div>
@@ -1027,6 +1079,7 @@
       intFps: document.getElementById("intFpsValue"),
     };
     const elements = {
+      statusBanner: document.getElementById("statusBanner"),
       exposure: document.getElementById("exposure"),
       gain: document.getElementById("gain"),
       fps: document.getElementById("fps"),
@@ -1044,12 +1097,16 @@
       intrinsicsPath: document.getElementById("intrinsicsPath"),
       logPath: document.getElementById("logPath"),
       resetPoseLogPath: document.getElementById("resetPoseLogPath"),
+      latestPoseLogHint: document.getElementById("latestPoseLogHint"),
       wandMetricLogPath: document.getElementById("wandMetricLogPath"),
       resetWandLogPath: document.getElementById("resetWandLogPath"),
+      latestWandLogHint: document.getElementById("latestWandLogHint"),
       generateWandMetricLogPath: document.getElementById("generateWandMetricLogPath"),
+      latestGenerateWandLogHint: document.getElementById("latestGenerateWandLogHint"),
       outputPath: document.getElementById("outputPath"),
       pairWindowUs: document.getElementById("pairWindowUs"),
       wandPairWindowUs: document.getElementById("wandPairWindowUs"),
+      wandFace: document.getElementById("wandFace"),
       minPairs: document.getElementById("minPairs"),
       wandMetricSeconds: document.getElementById("wandMetricSeconds"),
       selectionMetric: document.getElementById("selectionMetric"),
@@ -1060,6 +1117,9 @@
       maskMetricSummary: document.getElementById("maskMetricSummary"),
       previewMetric: document.getElementById("previewMetric"),
       previewMetricSummary: document.getElementById("previewMetricSummary"),
+      applyConfig: document.getElementById("applyConfig"),
+      captureWandMetric: document.getElementById("captureWandMetric"),
+      generateExtrinsics: document.getElementById("generateExtrinsics"),
       blobSummary: document.getElementById("blobSummary"),
       maskSummary: document.getElementById("maskSummary"),
       wandSummary: document.getElementById("wandSummary"),
@@ -1097,6 +1157,9 @@
       intStop: document.getElementById("intStop"),
       intClear: document.getElementById("intClear"),
       intCalibrate: document.getElementById("intCalibrate"),
+      calibrationValidation: document.getElementById("calibrationValidation"),
+      intrinsicsValidation: document.getElementById("intrinsicsValidation"),
+      extrinsicsValidation: document.getElementById("extrinsicsValidation"),
       intPhaseStatus: document.getElementById("intPhaseStatus"),
       intCaptured: document.getElementById("intCaptured"),
       intNeeded: document.getElementById("intNeeded"),
@@ -1125,6 +1188,23 @@
       trackingExtrinsicsPath: document.getElementById("trackingExtrinsicsPath"),
     };
     let trackingViewer = createTrackingViewer();
+    function createTrackingPlaceholderViewer(message = "3D viewer loading...") {
+      const overlay = elements.trackingViewerEmpty;
+      if (!overlay) {
+        return { update: () => {}, setEmpty: () => {}, resize: () => {} };
+      }
+      overlay.textContent = message;
+      overlay.style.display = "flex";
+      return {
+        update: () => {},
+        setEmpty(nextMessage) {
+          overlay.textContent = nextMessage || message;
+          overlay.style.display = "flex";
+        },
+        resize: () => {},
+      };
+    }
+
     function createTrackingViewer() {
       const canvas = elements.trackingViewerCanvas;
       const overlay = elements.trackingViewerEmpty;
@@ -1132,39 +1212,21 @@
         return { update: () => {}, setEmpty: () => {}, resize: () => {} };
       }
       if (!THREE) {
-        const fallbackMessage = "3D viewer loading...";
-        overlay.textContent = fallbackMessage;
-        overlay.style.display = "flex";
-        return {
-          update: () => {},
-          setEmpty(message) {
-            overlay.textContent = message || fallbackMessage;
-            overlay.style.display = "flex";
-          },
-          resize: () => {},
-        };
+        return createTrackingPlaceholderViewer();
       }
       let renderer;
       try {
         renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
       } catch (error) {
-        const fallbackMessage = "3D viewer unavailable (WebGL unsupported). Calibration controls still work.";
-        overlay.textContent = fallbackMessage;
-        overlay.style.display = "flex";
-        return {
-          update: () => {},
-          setEmpty(message) {
-            overlay.textContent = message || fallbackMessage;
-            overlay.style.display = "flex";
-          },
-          resize: () => {},
-        };
+        console.error("WebGL tracking viewer unavailable:", error);
+        return createTrackingPlaceholderViewer("3D viewer unavailable: WebGL renderer could not start.");
       }
       renderer.setPixelRatio(window.devicePixelRatio || 1);
       const scene = new THREE.Scene();
-      scene.background = new THREE.Color(0xf7f3ee);
+      scene.background = new THREE.Color(0x020617);
       const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 25);
-      camera.position.set(0, 1.2, 2.4);
+      camera.up.set(0, 0, 1);
+      camera.position.set(0, 1.4, 3.4);
 
       function resizeViewer() {
         const width = canvas.clientWidth;
@@ -1177,19 +1239,20 @@
         camera.updateProjectionMatrix();
       }
 
-      const target = new THREE.Vector3(0, 1, 0);
-      let azimuth = 0;
-      let polar = Math.PI / 3;
-      let distance = 2.4;
+      const target = new THREE.Vector3(0, 0, 0);
+      let azimuth = -0.65;
+      let elevation = 0.45;
+      let distance = 3.4;
       let dragging = false;
       const cursor = { x: 0, y: 0 };
 
       function updateCameraPosition() {
-        const spherical = new THREE.Spherical(distance, polar, azimuth);
-        const offset = new THREE.Vector3();
-        offset.setFromSpherical(spherical);
-        offset.add(target);
-        camera.position.copy(offset);
+        const horizontalDistance = distance * Math.cos(elevation);
+        camera.position.set(
+          target.x + horizontalDistance * Math.cos(azimuth),
+          target.y + horizontalDistance * Math.sin(azimuth),
+          target.z + distance * Math.sin(elevation)
+        );
         camera.lookAt(target);
       }
 
@@ -1209,7 +1272,7 @@
         cursor.x = event.clientX;
         cursor.y = event.clientY;
         azimuth -= deltaX * 0.005;
-        polar = Math.min(Math.PI - 0.1, Math.max(0.1, polar - deltaY * 0.005));
+        elevation = Math.min(1.35, Math.max(-0.25, elevation - deltaY * 0.005));
       }
 
       function handlePointerUp(event) {
@@ -1235,15 +1298,65 @@
       resizeViewer();
       window.addEventListener("resize", resizeViewer);
 
-      const grid = new THREE.GridHelper(6, 24, 0xd6d0c6, 0xf4efe6);
+      const grid = new THREE.GridHelper(6, 24, 0x1e293b, 0x0f172a);
       grid.rotation.x = Math.PI / 2;
       scene.add(grid);
       const axisHelper = new THREE.AxesHelper(0.45);
       scene.add(axisHelper);
+      const originSphere = new THREE.Mesh(
+        new THREE.SphereGeometry(0.035, 14, 14),
+        new THREE.MeshBasicMaterial({ color: 0x22c55e })
+      );
+      scene.add(originSphere);
+
+      function makeTextTexture(text, color = "#e2e8f0", background = "rgba(2,6,23,0.78)") {
+        const labelCanvas = document.createElement("canvas");
+        const labelCtx = labelCanvas.getContext("2d");
+        if (!labelCtx) {
+          return { texture: new THREE.CanvasTexture(labelCanvas), width: 1, height: 1 };
+        }
+        const font = "600 28px Fira Code, monospace";
+        labelCtx.font = font;
+        const metrics = labelCtx.measureText(text);
+        const paddingX = 16;
+        const paddingY = 9;
+        labelCanvas.width = Math.ceil(metrics.width + paddingX * 2);
+        labelCanvas.height = 48;
+        labelCtx.font = font;
+        labelCtx.textBaseline = "middle";
+        labelCtx.fillStyle = background;
+        labelCtx.strokeStyle = "rgba(148,163,184,0.32)";
+        labelCtx.lineWidth = 2;
+        if (typeof labelCtx.roundRect === "function") {
+          labelCtx.roundRect(1, 1, labelCanvas.width - 2, labelCanvas.height - 2, 12);
+        } else {
+          labelCtx.rect(1, 1, labelCanvas.width - 2, labelCanvas.height - 2);
+        }
+        labelCtx.fill();
+        labelCtx.stroke();
+        labelCtx.fillStyle = color;
+        labelCtx.fillText(text, paddingX, labelCanvas.height / 2 + paddingY * 0.12);
+        const texture = new THREE.CanvasTexture(labelCanvas);
+        texture.needsUpdate = true;
+        return { texture, width: labelCanvas.width, height: labelCanvas.height };
+      }
+
+      function createTextSprite(text, color = "#e2e8f0") {
+        const { texture, width, height } = makeTextTexture(text, color);
+        const material = new THREE.SpriteMaterial({
+          map: texture,
+          transparent: true,
+          depthTest: false,
+          depthWrite: false,
+        });
+        const sprite = new THREE.Sprite(material);
+        sprite.scale.set(width / 520, height / 520, 1);
+        return sprite;
+      }
 
       const rawPoints = new THREE.Points(
         new THREE.BufferGeometry(),
-        new THREE.PointsMaterial({ color: 0xff6b35, size: 0.04, transparent: true, opacity: 0.75 })
+        new THREE.PointsMaterial({ color: 0xfb923c, size: 0.065, transparent: true, opacity: 0.95 })
       );
       scene.add(rawPoints);
 
@@ -1288,17 +1401,19 @@
             const frustumGeo = new THREE.BufferGeometry();
             const frustum = new THREE.LineSegments(
               frustumGeo,
-              new THREE.LineBasicMaterial({ color: 0x1f6b70 })
+              new THREE.LineBasicMaterial({ color: 0x38bdf8 })
             );
-            const originSphere = new THREE.Mesh(
+            const cameraSphere = new THREE.Mesh(
               new THREE.SphereGeometry(0.03, 10, 10),
-              new THREE.MeshBasicMaterial({ color: 0x1f6b70 })
+              new THREE.MeshBasicMaterial({ color: 0x38bdf8 })
             );
+            const label = createTextSprite(cameraId, "#bae6fd");
             const group = new THREE.Group();
             group.add(frustum);
-            group.add(originSphere);
+            group.add(cameraSphere);
+            group.add(label);
             scene.add(group);
-            entry = { group, frustum, originSphere };
+            entry = { group, frustum, originSphere: cameraSphere, label };
             cameraHelpers.set(cameraId, entry);
           }
           const positions = buildFrustumSegments(cameraData);
@@ -1306,6 +1421,7 @@
           entry.frustum.geometry.attributes.position.needsUpdate = true;
           const pos = cameraData.position || [0, 0, 0];
           entry.originSphere.position.set(pos[0], pos[1], pos[2]);
+          entry.label.position.set(pos[0] + 0.06, pos[1] + 0.06, pos[2] + 0.14);
         });
         cameraHelpers.forEach((entry, id) => {
           if (!seen.has(id)) {
@@ -1417,6 +1533,7 @@
           updateRawPoints(sceneSnapshot.raw_points || []);
           const hasGeometry =
             (Array.isArray(sceneSnapshot.cameras) && sceneSnapshot.cameras.length > 0) ||
+            (Array.isArray(sceneSnapshot.raw_points) && sceneSnapshot.raw_points.length > 0) ||
             (Array.isArray(sceneSnapshot.rigid_bodies) && sceneSnapshot.rigid_bodies.length > 0);
           if (!hasGeometry) {
             showOverlay(emptyMessage || "Waiting for scene data");
@@ -1433,6 +1550,7 @@
     const SLIDER_DEBOUNCE_MS = 200;
     let activePage = "calibration";
     let loadStateInFlight = false;
+    let trackingSceneIntervalId = null;
     let settingsSnapshot = null;
     let persistedSelectedCameraIds = [];
     let initialUiState = { active_page: "calibration", active_view: "cameras" };
@@ -1441,10 +1559,45 @@
     let controlsUpdateContext = "controls";
     let controlsUpdateTargetMode = "selected";
     const controlState = { ...CONTROL_DEFAULTS };
+    const FIELD_INPUT_IDS = {
+      calibration: {
+        exposure_us: ["exposure", "intExposure"],
+        gain: ["gain", "intGain"],
+        fps: ["fps", "intFps"],
+        focus: ["focus", "intFocus"],
+        threshold: ["threshold"],
+        circularity_min: ["circularity"],
+        blob_min_diameter_px: ["blobMin"],
+        blob_max_diameter_px: ["blobMax"],
+        mask_threshold: ["maskThreshold"],
+        mask_seconds: ["maskSeconds"],
+        wand_metric_seconds: ["wandMetricSeconds"],
+      },
+      intrinsics: {
+        camera_id: ["intCameraId"],
+        mjpeg_url: ["intMjpegUrl"],
+        square_length_mm: ["intSquareMm"],
+        marker_length_mm: ["intMarkerMm"],
+        squares_x: ["intSquaresX"],
+        squares_y: ["intSquaresY"],
+        min_frames: ["intMinFrames"],
+        cooldown_s: ["intCooldown"],
+      },
+      extrinsics: {
+        intrinsics_path: ["intrinsicsPath"],
+        pose_log_path: ["logPath"],
+        wand_metric_log_path: ["wandMetricLogPath", "generateWandMetricLogPath"],
+        output_path: ["outputPath"],
+        pair_window_us: ["pairWindowUs"],
+        wand_pair_window_us: ["wandPairWindowUs"],
+        min_pairs: ["minPairs"],
+        wand_face: ["wandFace"],
+      },
+    };
 
     function reportUiError(context, error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (elements.status) elements.status.textContent = `Error\n${context}: ${message}`;
+      showStatus(`Failed: ${context}: ${message}`, "error");
     }
 
     async function initTrackingViewer() {
@@ -1452,8 +1605,8 @@
         await ensureThreeLoaded();
         trackingViewer = createTrackingViewer();
       } catch (error) {
-        reportUiError("three_import", error);
-        trackingViewer.setEmpty("3D viewer unavailable (three.js import failed). Calibration controls still work.");
+        console.error("WebGL tracking viewer unavailable because three.js failed to load:", error);
+        trackingViewer = createTrackingPlaceholderViewer("3D viewer unavailable: three.js asset failed to load.");
       }
     }
 
@@ -1604,6 +1757,7 @@
         pair_window_us: elements.pairWindowUs?.value ?? "",
         wand_pair_window_us: elements.wandPairWindowUs?.value ?? "",
         min_pairs: elements.minPairs?.value ?? "",
+        wand_face: elements.wandFace?.value ?? "front_up",
       };
     }
 
@@ -1832,7 +1986,8 @@
       elements.trackingLastUpdate.textContent = formatTrackingAge(timestampUs);
       const cameraCount = (scene.cameras || []).length;
       const rigidCount = (scene.rigid_bodies || []).length;
-      elements.trackingSceneHint.textContent = `${cameraCount} cameras · ${rigidCount} bodies`;
+      const rawPointCount = (scene.raw_points || []).length;
+      elements.trackingSceneHint.textContent = `${cameraCount} cameras · ${rawPointCount} triangulated blobs · ${rigidCount} bodies`;
       elements.trackingRigidCount.textContent = `${rigidCount} tracked`;
       const coverage = status.sync?.coverage_5000us ?? status.sync?.coverage_target ?? null;
       elements.trackingSyncCoverage.textContent = coverage != null
@@ -1907,9 +2062,83 @@
     // Views that explicitly turn Pi preview OFF
     const PREVIEW_OFF_VIEWS = new Set(["pose", "tracking"]);
 
-    function showStatus(msg, variant) {
-      if (!elements.status) return;
-      elements.status.textContent = msg;
+    function showStatus(msg, variant = "info") {
+      if (elements.statusBanner) {
+        elements.statusBanner.textContent = msg;
+        elements.statusBanner.className = `status-banner ${variant}`;
+      }
+      if (activePage === "tracking" && elements.trackingLastUpdate) {
+        elements.trackingLastUpdate.textContent = msg;
+      }
+    }
+
+    function formatValidationErrors(errors = {}) {
+      return Object.entries(errors).map(([field, message]) => `${field}: ${message}`).join("\n");
+    }
+
+    function setInputInvalid(id, invalid, message = "") {
+      const element = elements[id];
+      if (!element) return;
+      element.classList.toggle("input-invalid", Boolean(invalid));
+      if (message) {
+        element.title = message;
+      } else {
+        element.removeAttribute("title");
+      }
+    }
+
+    function renderSectionValidation(sectionName, summaryElement, errors = {}) {
+      const fieldMap = FIELD_INPUT_IDS[sectionName] || {};
+      Object.values(fieldMap).flat().forEach((id) => setInputInvalid(id, false, ""));
+      Object.entries(errors).forEach(([field, message]) => {
+        const ids = fieldMap[field] || [];
+        ids.forEach((id) => setInputInvalid(id, true, String(message)));
+      });
+      if (summaryElement) {
+        summaryElement.textContent = formatValidationErrors(errors);
+      }
+    }
+
+    function renderRuntimeHints(settings) {
+      const hints = settings?.runtime_hints || {};
+      const poseHint = hints.pose_log_path ? `Latest pose capture: ${hints.pose_log_path}` : "Latest pose capture: none yet";
+      const wandHint = hints.wand_metric_log_path ? `Latest metric capture: ${hints.wand_metric_log_path}` : "Latest metric capture: none yet";
+      if (elements.latestPoseLogHint) elements.latestPoseLogHint.textContent = poseHint;
+      if (elements.latestWandLogHint) elements.latestWandLogHint.textContent = wandHint;
+      if (elements.latestGenerateWandLogHint) elements.latestGenerateWandLogHint.textContent = wandHint;
+    }
+
+    function renderSettingsMeta(settings) {
+      const validation = settings?.validation || {};
+      renderSectionValidation("calibration", elements.calibrationValidation, validation.calibration || {});
+      renderSectionValidation("intrinsics", elements.intrinsicsValidation, validation.intrinsics || {});
+      renderSectionValidation("extrinsics", elements.extrinsicsValidation, validation.extrinsics || {});
+      renderRuntimeHints(settings);
+      const calibrationValid = Object.keys(validation.calibration || {}).length === 0;
+      const intrinsicsValid = Object.keys(validation.intrinsics || {}).length === 0;
+      const extrinsicsValid = Object.keys(validation.extrinsics || {}).length === 0;
+      if (elements.applyConfig) {
+        elements.applyConfig.disabled = !calibrationValid;
+      }
+      if (elements.intStart) {
+        elements.intStart.disabled = !intrinsicsValid;
+      }
+      if (elements.intCalibrate) {
+        elements.intCalibrate.disabled = !intrinsicsValid;
+      }
+      if (elements.generateExtrinsics) {
+        elements.generateExtrinsics.disabled = !extrinsicsValid;
+      }
+    }
+
+    function mergeSettingsMetaFromState(meta) {
+      if (!meta || typeof meta !== "object") return;
+      if (!settingsSnapshot || typeof settingsSnapshot !== "object") {
+        settingsSnapshot = { validation: {}, runtime_hints: {} };
+      }
+      settingsSnapshot.validation = meta.validation || settingsSnapshot.validation || {};
+      settingsSnapshot.runtime_hints = meta.runtime_hints || settingsSnapshot.runtime_hints || {};
+      renderSettingsMeta(settingsSnapshot);
     }
 
     function buildIntrinsicsCharucoPayload() {
@@ -1922,7 +2151,7 @@
         dictionary: "DICT_6X6_250",
         squares_x: Number.isFinite(squaresX) && squaresX >= 2 ? squaresX : 6,
         squares_y: Number.isFinite(squaresY) && squaresY >= 2 ? squaresY : 8,
-        square_length_mm: Number.isFinite(squareLength) && squareLength > 0 ? squareLength : 30,
+        square_length_mm: Number.isFinite(squareLength) && squareLength > 0 ? squareLength : 60,
       };
       if (markerLengthRaw !== "") {
         const markerLength = Number(markerLengthRaw);
@@ -1962,11 +2191,15 @@
       if (viewName === "intrinsics") {
         intStartFramePoller();
         intStartStatusPoller();
+        intRefreshStatusOnce().catch(() => {});
       } else {
         intStopPollers();
       }
       if (viewName === "tracking") {
         trackingViewer.resize();
+        startTrackingScenePoller();
+      } else {
+        stopTrackingScenePoller();
       }
       // Toggle Pi MJPEG preview based on page
       if (PREVIEW_ON_VIEWS.has(viewName) || PREVIEW_OFF_VIEWS.has(viewName)) {
@@ -2105,6 +2338,27 @@
       ].join("");
     }
 
+    async function loadTrackingSceneFast() {
+      try {
+        const resp = await fetch("/api/tracking/scene");
+        if (!resp.ok) return;
+        const scene = await resp.json();
+        trackingViewer.update(scene, scene.empty_state || "");
+      } catch (_) {}
+    }
+
+    function startTrackingScenePoller() {
+      if (trackingSceneIntervalId) return;
+      trackingSceneIntervalId = setInterval(loadTrackingSceneFast, 100);
+    }
+
+    function stopTrackingScenePoller() {
+      if (trackingSceneIntervalId) {
+        clearInterval(trackingSceneIntervalId);
+        trackingSceneIntervalId = null;
+      }
+    }
+
     async function loadTracking() {
       const [statusResponse, sceneResponse] = await Promise.all([
         fetch("/api/tracking/status"),
@@ -2133,6 +2387,7 @@
         throw new Error(`state_fetch_failed status=${response.status}`);
       }
       const state = await response.json();
+      mergeSettingsMetaFromState(state.settings_meta);
       renderCameraRows(state.cameras || []);
       if (persistedSelectedCameraIds.length > 0) {
         document.querySelectorAll("input[data-camera]").forEach((checkbox) => {
@@ -2202,8 +2457,11 @@
       try {
         const nextSettings = await postJson("/api/settings/draft", patch);
         settingsSnapshot = nextSettings;
+        renderSettingsMeta(nextSettings);
+        return nextSettings;
       } catch (error) {
         reportUiError(context || "settings_draft", error);
+        throw error;
       }
     }
 
@@ -2213,7 +2471,9 @@
       }
       draftPatchTimers[key] = setTimeout(async () => {
         draftPatchTimers[key] = null;
-        await saveDraftPatch(patchFactory(), context);
+        try {
+          await saveDraftPatch(patchFactory(), context);
+        } catch (_) {}
       }, delayMs);
     }
 
@@ -2268,6 +2528,9 @@
       if (elements.minPairs && extrinsicsDraft.min_pairs != null) {
         elements.minPairs.value = String(extrinsicsDraft.min_pairs);
       }
+      if (elements.wandFace && extrinsicsDraft.wand_face != null) {
+        elements.wandFace.value = String(extrinsicsDraft.wand_face);
+      }
 
       if (Array.isArray(ui.selected_camera_ids)) {
         persistedSelectedCameraIds = [...new Set(ui.selected_camera_ids.map((value) => String(value)))];
@@ -2276,6 +2539,7 @@
         active_page: String(ui.active_page || "calibration"),
         active_view: String(ui.active_view || "cameras"),
       };
+      renderSettingsMeta(settings);
     }
 
     async function loadSettings() {
@@ -2316,9 +2580,9 @@
     async function flushControlUpdates(context, targetMode) {
       try {
         await postJson("/api/config", configPayload(cameraIdsForTargetMode(targetMode)));
-        await saveDraftPatch({ calibration: calibrationDraftPayload() }, context);
       } catch (error) {
         reportUiError(context, error);
+        throw error;
       }
     }
 
@@ -2346,7 +2610,7 @@
     }
 
     document.getElementById("applyConfig").addEventListener("click", async () => {
-      showStatus("Waiting...");
+      showStatus("Applying calibration settings...", "info");
       try {
         if (controlsUpdateTimer) {
           clearTimeout(controlsUpdateTimer);
@@ -2354,7 +2618,7 @@
         }
         await flushControlUpdates("apply_config", "selected");
         await safeLoadState();
-        showStatus("Done!");
+        showStatus("Calibration settings applied.", "success");
       } catch (error) {
         reportUiError("apply_config", error);
       }
@@ -2362,16 +2626,23 @@
 
     document.querySelectorAll("button[data-command]").forEach((button) => {
       button.addEventListener("click", async () => {
-        showStatus("Waiting...");
+        const command = button.dataset.command || "unknown";
         try {
+          if (command === "refresh") {
+            showStatus("Refreshing camera state...", "info");
+            await safeLoadState();
+            showStatus("Camera state refreshed.", "success");
+            return;
+          }
+          showStatus(`Running ${command}...`, "info");
           await postJson("/api/command", {
-            command: button.dataset.command,
+            command,
             camera_ids: selectedCameraIds(),
           });
           await safeLoadState();
-          showStatus("Done!");
+          showStatus(`${command} completed.`, "success");
         } catch (error) {
-          reportUiError(`command_${button.dataset.command || "unknown"}`, error);
+          reportUiError(`command_${command}`, error);
         }
       });
     });
@@ -2388,7 +2659,7 @@
     });
 
     document.getElementById("captureWandMetric").addEventListener("click", async () => {
-      showStatus("Waiting...");
+      showStatus("Starting floor / metric capture...", "info");
       try {
         await saveDraftPatch(
           {
@@ -2402,19 +2673,19 @@
           camera_ids: selectedCameraIds(),
         });
         await safeLoadState();
-        showStatus("Done!");
+        showStatus("Floor / metric capture started.", "success");
       } catch (error) {
         reportUiError("start_wand_metric_capture", error);
       }
     });
 
     document.getElementById("generateExtrinsics").addEventListener("click", async () => {
-      showStatus("Waiting...");
+      showStatus("Generating extrinsics...", "info");
       try {
         await saveDraftPatch({ extrinsics: extrinsicsDraftPayload() }, "generate_extrinsics_draft");
         await postJson("/api/generate_extrinsics", {});
         await safeLoadState();
-        showStatus("Done!");
+        showStatus("Extrinsics generation finished.", "success");
       } catch (error) {
         reportUiError("generate_extrinsics", error);
       }
@@ -2489,42 +2760,53 @@
     });
 
     elements.resetPoseLogPath?.addEventListener("click", async () => {
-      await saveDraftPatch({ reset_runtime: ["pose_log_path"] }, "reset_pose_log_path");
-      if (settingsSnapshot?.extrinsics?.draft?.pose_log_path != null) {
-        elements.logPath.value = String(settingsSnapshot.extrinsics.draft.pose_log_path);
+      try {
+        await saveDraftPatch({ reset_runtime: ["pose_log_path"] }, "reset_pose_log_path");
+        if (settingsSnapshot?.extrinsics?.draft?.pose_log_path != null) {
+          elements.logPath.value = String(settingsSnapshot.extrinsics.draft.pose_log_path);
+        }
+        showStatus("Latest pose capture path adopted.", "success");
+      } catch (_) {
+        // saveDraftPatch already reports the error
       }
     });
 
     elements.resetWandLogPath?.addEventListener("click", async () => {
-      await saveDraftPatch({ reset_runtime: ["wand_metric_log_path"] }, "reset_wand_log_path");
-      const draftWandLog = settingsSnapshot?.extrinsics?.draft?.wand_metric_log_path;
-      if (draftWandLog != null) {
-        elements.wandMetricLogPath.value = String(draftWandLog);
-        elements.generateWandMetricLogPath.value = String(draftWandLog);
+      try {
+        await saveDraftPatch({ reset_runtime: ["wand_metric_log_path"] }, "reset_wand_log_path");
+        const draftWandLog = settingsSnapshot?.extrinsics?.draft?.wand_metric_log_path;
+        if (draftWandLog != null) {
+          elements.wandMetricLogPath.value = String(draftWandLog);
+          elements.generateWandMetricLogPath.value = String(draftWandLog);
+        }
+        showStatus("Latest metric capture path adopted.", "success");
+      } catch (_) {
+        // saveDraftPatch already reports the error
       }
     });
 
     elements.trackingStart.addEventListener("click", async () => {
-      showStatus("Waiting...");
+      showStatus("Starting tracking...", "info");
       try {
         await postJson("/api/tracking/start", {
           patterns: ["waist"],
+          camera_ids: selectedCameraIds(),
         });
         setActivePage("tracking");
         await safeLoadState();
-        showStatus("Done!");
+        showStatus("Tracking started.", "success");
       } catch (error) {
         reportUiError("tracking_start", error);
       }
     });
 
     elements.trackingStop.addEventListener("click", async () => {
-      showStatus("Waiting...");
+      showStatus("Stopping tracking...", "info");
       try {
         await postJson("/api/tracking/stop", {});
         setActivePage("tracking");
         await safeLoadState();
-        showStatus("Done!");
+        showStatus("Tracking stopped.", "success");
       } catch (error) {
         reportUiError("tracking_stop", error);
       }
@@ -2534,10 +2816,47 @@
     let intFrameIntervalId = null;
     let intStatusIntervalId = null;
     let intCurrentBlobUrl = null;
+    let intPendingStop = false;
+
+    function intrinsicsTargetCameraIds() {
+      return cameraIdsForTargetMode("intrinsics");
+    }
 
     function intStopPollers() {
       if (intFrameIntervalId) { clearInterval(intFrameIntervalId); intFrameIntervalId = null; }
       if (intStatusIntervalId) { clearInterval(intStatusIntervalId); intStatusIntervalId = null; }
+    }
+
+    function intFinalizeStopUi() {
+      intPendingStop = false;
+      intStopPollers();
+      if (elements.intFrame) {
+        elements.intFrame.src = "";
+        elements.intFrame.style.display = "none";
+      }
+      if (elements.intFrameEmpty) elements.intFrameEmpty.style.display = "";
+      if (intCurrentBlobUrl) { URL.revokeObjectURL(intCurrentBlobUrl); intCurrentBlobUrl = null; }
+    }
+
+    function renderIntrinsicsResult(status) {
+      const phase = String(status?.phase ?? "idle").toLowerCase();
+      if (phase === "done" && status?.calibration_result) {
+        elements.intResult.textContent = JSON.stringify(status.calibration_result, null, 2);
+        return;
+      }
+      if (phase === "error" || status?.last_error) {
+        elements.intResult.textContent = JSON.stringify({ error: status?.last_error || "intrinsics_error" }, null, 2);
+        return;
+      }
+      if (phase === "calibrating") {
+        elements.intResult.textContent = "Calibrating on host...";
+        return;
+      }
+      if (phase === "capturing") {
+        elements.intResult.textContent = "Capture running. Move the board across center, edges, and corners for diverse coverage.";
+        return;
+      }
+      elements.intResult.textContent = "Ready to capture.";
     }
 
     function intStartFramePoller() {
@@ -2631,10 +2950,9 @@
           `<div class="int-cell${v > 0 ? ' covered' : ''}">${v}</div>`
         ).join("");
       }
-      if (s.phase === "done" && s.calibration_result) {
-        elements.intResult.textContent = JSON.stringify(s.calibration_result, null, 2);
-      } else if (s.last_error) {
-        elements.intResult.textContent = JSON.stringify({ error: s.last_error }, null, 2);
+      renderIntrinsicsResult(s);
+      if (intPendingStop && (phase === "idle" || phase === "error")) {
+        intFinalizeStopUi();
       }
     }
 
@@ -2661,7 +2979,7 @@
             render_enabled: true,
             overlays: { blob: false, mask: false, text: true, charuco: true },
             charuco: buildIntrinsicsCharucoPayload(),
-            camera_ids: selectedCameraIds(),
+            camera_ids: intrinsicsTargetCameraIds(),
           }).catch(() => {});
         }
       });
@@ -2678,43 +2996,32 @@
     elements.intStart?.addEventListener("click", async () => {
       try {
         await saveDraftPatch({ intrinsics: intrinsicsDraftPayload() }, "int_start_draft");
-        elements.intResult.textContent = "Starting capture...";
+        await postJson("/api/intrinsics/start", {});
+        intPendingStop = false;
         intStartFramePoller();
         intStartStatusPoller();
-        await postJson("/api/intrinsics/start", {});
         await intRefreshStatusOnce();
+        showStatus("Intrinsics capture started.", "success");
       } catch (e) {
+        applyIntrinsicsStatus({ phase: "error", last_error: e instanceof Error ? e.message : String(e) });
         reportUiError("int_start", e);
       }
     });
     elements.intStop?.addEventListener("click", async () => {
-      // Stop server-side capture
       try {
+        intPendingStop = true;
         const body = await postJson("/api/intrinsics/stop", {});
         if (body && body.status) {
           applyIntrinsicsStatus(body.status);
         } else {
-          applyIntrinsicsStatus({
-            phase: "idle",
-            frames_captured: 0,
-            frames_needed: 25,
-            frames_rejected_cooldown: 0,
-            frames_rejected_spatial: 0,
-            frames_rejected_detection: 0,
-            grid_coverage: [[0,0,0],[0,0,0],[0,0,0]],
-            last_error: null,
-          });
+          await intRefreshStatusOnce();
         }
-      } catch (e) { reportUiError("int_stop", e); }
-      // Stop all pollers
-      intStopPollers();
-      // Stop MJPEG feed and hide frame
-      if (elements.intFrame) {
-        elements.intFrame.src = "";
-        elements.intFrame.style.display = "none";
+        showStatus("Stopping intrinsics capture...", "info");
+      } catch (e) {
+        intPendingStop = false;
+        applyIntrinsicsStatus({ phase: "error", last_error: e instanceof Error ? e.message : String(e) });
+        reportUiError("int_stop", e);
       }
-      if (elements.intFrameEmpty) elements.intFrameEmpty.style.display = "";
-      if (intCurrentBlobUrl) { URL.revokeObjectURL(intCurrentBlobUrl); intCurrentBlobUrl = null; }
     });
     elements.intClear?.addEventListener("click", async () => {
       try {
@@ -2722,22 +3029,24 @@
         if (body && body.status) {
           applyIntrinsicsStatus(body.status);
         } else {
-          applyIntrinsicsStatus({
-            phase: "idle",
-            frames_captured: 0,
-            frames_needed: 25,
-            frames_rejected_cooldown: 0,
-            frames_rejected_spatial: 0,
-            frames_rejected_detection: 0,
-            grid_coverage: [[0,0,0],[0,0,0],[0,0,0]],
-            last_error: null,
-          });
+          await intRefreshStatusOnce();
         }
-        elements.intResult.textContent = "Frames cleared.";
+        showStatus("Intrinsics frames cleared.", "success");
       } catch (e) { reportUiError("int_clear", e); }
     });
     elements.intCalibrate?.addEventListener("click", async () => {
-      try { await postJson("/api/intrinsics/calibrate", {}); } catch (e) { reportUiError("int_calibrate", e); }
+      try {
+        showStatus("Starting host-side intrinsics calibration...", "info");
+        const body = await postJson("/api/intrinsics/calibrate", {});
+        intStartStatusPoller();
+        if (body && body.status) {
+          applyIntrinsicsStatus(body.status);
+        }
+        intRefreshStatusOnce().catch(() => {});
+      } catch (e) {
+        applyIntrinsicsStatus({ phase: "error", last_error: e instanceof Error ? e.message : String(e) });
+        reportUiError("int_calibrate", e);
+      }
     });
 
     // ── end Intrinsics tab ────────────────────────────────────────────

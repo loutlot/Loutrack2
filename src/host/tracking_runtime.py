@@ -99,7 +99,16 @@ class TrackingRuntime:
             self._patterns_by_name = {pattern.name: pattern for pattern in selected_patterns}
             self._trail_by_name = defaultdict(lambda: deque(maxlen=self.trail_length))
             self._last_stop_summary = {}
-            self._latest_scene = self._empty_scene(cameras=self._build_camera_scene(pipeline))
+            self._latest_scene = self._empty_scene(
+                cameras=self._build_camera_scene(pipeline),
+                coordinate_frame=getattr(pipeline.geometry, "coordinate_frame", "camera_similarity"),
+                coordinate_origin=getattr(pipeline.geometry, "coordinate_origin", "reference_camera"),
+                coordinate_origin_source=getattr(
+                    pipeline.geometry,
+                    "coordinate_origin_source",
+                    "extrinsics_pose_reference",
+                ),
+            )
 
         return self.status()
 
@@ -118,7 +127,16 @@ class TrackingRuntime:
             self._patterns_by_name = {}
             self._trail_by_name = defaultdict(lambda: deque(maxlen=self.trail_length))
             self._last_stop_summary = dict(summary)
-            self._latest_scene = self._empty_scene(cameras=cameras)
+            self._latest_scene = self._empty_scene(
+                cameras=cameras,
+                coordinate_frame=getattr(pipeline.geometry, "coordinate_frame", "camera_similarity"),
+                coordinate_origin=getattr(pipeline.geometry, "coordinate_origin", "reference_camera"),
+                coordinate_origin_source=getattr(
+                    pipeline.geometry,
+                    "coordinate_origin_source",
+                    "extrinsics_pose_reference",
+                ),
+            )
         return summary
 
     def status(self) -> Dict[str, Any]:
@@ -161,6 +179,9 @@ class TrackingRuntime:
                 "cameras": [dict(camera) for camera in self._latest_scene["cameras"]],
                 "rigid_bodies": [dict(body) for body in self._latest_scene["rigid_bodies"]],
                 "raw_points": [list(point) for point in self._latest_scene["raw_points"]],
+                "coordinate_frame": self._latest_scene.get("coordinate_frame", "camera_similarity"),
+                "coordinate_origin": self._latest_scene.get("coordinate_origin", "reference_camera"),
+                "coordinate_origin_source": self._latest_scene.get("coordinate_origin_source", "extrinsics_pose_reference"),
                 "timestamp_us": self._latest_scene["timestamp_us"],
             }
 
@@ -212,6 +233,13 @@ class TrackingRuntime:
                 "cameras": self._build_camera_scene(pipeline),
                 "rigid_bodies": rigid_bodies,
                 "raw_points": list(triangulation.get("points_3d", [])),
+                "coordinate_frame": getattr(pipeline.geometry, "coordinate_frame", "camera_similarity"),
+                "coordinate_origin": getattr(pipeline.geometry, "coordinate_origin", "reference_camera"),
+                "coordinate_origin_source": getattr(
+                    pipeline.geometry,
+                    "coordinate_origin_source",
+                    "extrinsics_pose_reference",
+                ),
                 "timestamp_us": int(triangulation.get("timestamp", 0)),
             }
 
@@ -232,11 +260,20 @@ class TrackingRuntime:
             )
         return cameras
 
-    def _empty_scene(self, cameras: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    def _empty_scene(
+        self,
+        cameras: Optional[List[Dict[str, Any]]] = None,
+        coordinate_frame: str = "camera_similarity",
+        coordinate_origin: str = "reference_camera",
+        coordinate_origin_source: str = "extrinsics_pose_reference",
+    ) -> Dict[str, Any]:
         return {
             "tracking": {"running": False, "frames_processed": 0, "poses_estimated": 0},
             "cameras": cameras or [],
             "rigid_bodies": [],
             "raw_points": [],
+            "coordinate_frame": coordinate_frame,
+            "coordinate_origin": coordinate_origin,
+            "coordinate_origin_source": coordinate_origin_source,
             "timestamp_us": 0,
         }

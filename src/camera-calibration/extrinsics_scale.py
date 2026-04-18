@@ -9,6 +9,9 @@ from extrinsics_capture import WandMetricObservation
 
 
 WAND_EDGE_PAIRS = ((0, 1), (0, 2), (0, 3), (2, 3))
+WAND_FACE_FRONT_UP = "front_up"
+WAND_FACE_BACK_UP = "back_up"
+VALID_WAND_FACE_CONSTRAINTS = (WAND_FACE_FRONT_UP, WAND_FACE_BACK_UP)
 
 
 def _camera_center(rotation: np.ndarray, translation: np.ndarray) -> np.ndarray:
@@ -40,6 +43,44 @@ def _rotation_from_normal_to_up(normal: np.ndarray, up_axis: str) -> np.ndarray:
     if s < 1e-12:
         return np.eye(3, dtype=np.float64) if c > 0.0 else _rotation_from_axis_angle(np.array([1.0, 0.0, 0.0]), np.pi)
     return _rotation_from_axis_angle(axis, np.arctan2(s, c))
+
+
+def _normalized_or_none(vector: np.ndarray) -> np.ndarray | None:
+    norm = float(np.linalg.norm(vector))
+    if norm <= 1e-12:
+        return None
+    return (vector / norm).astype(np.float64)
+
+
+def _normalize_wand_face_constraint(value: str) -> str:
+    normalized = str(value).strip().lower()
+    if normalized not in VALID_WAND_FACE_CONSTRAINTS:
+        known = ", ".join(VALID_WAND_FACE_CONSTRAINTS)
+        raise ValueError(f"wand_face must be one of: {known}")
+    return normalized
+
+
+def _aggregate_oriented_normals(normals: Sequence[np.ndarray]) -> np.ndarray | None:
+    accumulator = np.zeros(3, dtype=np.float64)
+    reference: np.ndarray | None = None
+    for normal in normals:
+        n = _normalized_or_none(np.asarray(normal, dtype=np.float64))
+        if n is None:
+            continue
+        if reference is None:
+            reference = n
+        elif float(np.dot(reference, n)) < 0.0:
+            n = -n
+        accumulator += n
+    return _normalized_or_none(accumulator)
+
+
+def _wand_face_normal(tri_metric: np.ndarray) -> np.ndarray | None:
+    if tri_metric.shape[0] < 4:
+        return None
+    x_axis = tri_metric[3] - tri_metric[0]
+    y_axis = tri_metric[1] - tri_metric[0]
+    return _normalized_or_none(np.cross(x_axis, y_axis))
 
 
 def _build_wand_metric_multiview(
@@ -146,9 +187,11 @@ def apply_wand_metric_alignment(
     wand_points_mm: Sequence[Sequence[float]],
     up_axis: str = "Z",
     pair_window_us: int = 8000,
+    wand_face: str = WAND_FACE_FRONT_UP,
     assume_metric_scale: bool = False,
     focal_scales: Dict[str, float] | None = None,
 ) -> Tuple[Dict[str, Tuple[np.ndarray, np.ndarray]], np.ndarray, Dict[str, Any]]:
+    wand_face_constraint = _normalize_wand_face_constraint(wand_face)
     wand_points_m = np.asarray(wand_points_mm, dtype=np.float64) / 1000.0
     known_edges = np.array(
         [np.linalg.norm(wand_points_m[a] - wand_points_m[b]) for a, b in WAND_EDGE_PAIRS],
@@ -172,6 +215,7 @@ def apply_wand_metric_alignment(
     floor_points: List[np.ndarray] = []
     elbow_points: List[np.ndarray] = []
     axis_vectors: List[np.ndarray] = []
+    wand_face_normals: List[np.ndarray] = []
     shape_errors_mm: List[float] = []
     up = np.array([0.0, 0.0, 1.0], dtype=np.float64) if up_axis.upper() == "Z" else np.array([0.0, 1.0, 0.0], dtype=np.float64)
     target_axis = np.array([0.0, 1.0, 0.0], dtype=np.float64) if up_axis.upper() == "Z" else np.array([1.0, 0.0, 0.0], dtype=np.float64)
@@ -231,6 +275,9 @@ def apply_wand_metric_alignment(
         floor_points.append(tri_metric)
         elbow_points.append(tri_metric[0])
         axis_vectors.append(tri_metric[3] - tri_metric[0])
+        face_normal = _wand_face_normal(tri_metric)
+        if face_normal is not None:
+            wand_face_normals.append(face_normal)
 
     if (not assume_metric_scale and not scale_candidates) or not floor_points:
         return camera_poses_similarity, np.eye(4, dtype=np.float64), {
@@ -256,8 +303,32 @@ def apply_wand_metric_alignment(
     centered = all_floor - centroid
     _, _, vt = np.linalg.svd(centered, full_matrices=False)
     floor_normal = vt[-1]
-    if float(np.dot(floor_normal, up)) < 0.0:
-        floor_normal = -floor_normal
+    camera_centers_metric = np.asarray(
+        [
+            _camera_center(rotation, translation) * scale
+            for rotation, translation in camera_poses_similarity.values()
+        ],
+        dtype=np.float64,
+    )
+    mean_camera_center = np.mean(camera_centers_metric, axis=0)
+    floor_normal_sign_source = "camera_side"
+    wand_face_normal = _aggregate_oriented_normals(wand_face_normals)
+    wand_face_alignment: float | None = None
+    if wand_face_normal is not None:
+        if wand_face_constraint == WAND_FACE_BACK_UP:
+            wand_face_normal = -wand_face_normal
+        signed_alignment = float(np.dot(floor_normal, wand_face_normal))
+        if abs(signed_alignment) > 1e-6:
+            if signed_alignment < 0.0:
+                floor_normal = -floor_normal
+                signed_alignment = -signed_alignment
+            floor_normal_sign_source = "wand_face"
+            wand_face_alignment = signed_alignment
+    if floor_normal_sign_source != "wand_face":
+        # Fallback for degenerate/ambiguous wand normals: choose the floor-normal
+        # sign so the camera rig lands on the +up side of the floor plane.
+        if float(np.dot(mean_camera_center - centroid, floor_normal)) < 0.0:
+            floor_normal = -floor_normal
     rotation_floor = _rotation_from_normal_to_up(floor_normal, up_axis)
 
     axis_acc = np.zeros(3, dtype=np.float64)
@@ -305,6 +376,10 @@ def apply_wand_metric_alignment(
         "wand_metric_frames": len(floor_points),
         "shape_rms_error_mm": float(np.median(np.asarray(shape_errors_mm, dtype=np.float64))) if shape_errors_mm else 0.0,
         "floor_normal_similarity": floor_normal.tolist(),
+        "floor_normal_sign_source": floor_normal_sign_source,
+        "wand_face": wand_face_constraint,
+        "wand_face_normal_similarity": None if wand_face_normal is None else wand_face_normal.tolist(),
+        "wand_face_alignment": wand_face_alignment,
         "origin_world": origin.tolist(),
         "origin_marker": "elbow",
         "aligned_axis_world": target_axis.tolist(),

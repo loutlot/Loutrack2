@@ -216,7 +216,8 @@ class TrackingPipeline:
                     camera_id=cam_id,
                     timestamp=frame.timestamp,
                     blob_count=len(frame.blobs),
-                    frame_index=frame.frame_index
+                    frame_index=frame.frame_index,
+                    received_at=frame.received_at,
                 )
             
             if point_count > 0:

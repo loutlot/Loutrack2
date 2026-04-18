@@ -90,6 +90,19 @@ class ControlModule(Protocol):
     ) -> dict[str, object]:
         ...
 
+    def intrinsics_get_corners(
+        self,
+        ip: str,
+        port: int,
+        camera_id: str,
+        *,
+        start_index: int = 0,
+        max_frames: int | None = None,
+        request_id: str | None = None,
+        timeout: float = 10.0,
+    ) -> dict[str, object]:
+        ...
+
 
 class UDPReceiverClass(Protocol):
     def __init__(self, host: str = "0.0.0.0", port: int = 5000, buffer_size: int = 65536) -> None:
@@ -469,3 +482,44 @@ def test_pi_mjpeg_preview_render_toggle(pi_capture_server: PiCaptureServerInfo) 
             break
         time.sleep(0.05)
     assert restored
+
+
+def test_intrinsics_get_corners_transport_builds_expected_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_send_request(
+        ip: str,
+        port: int,
+        request_dict: dict[str, object],
+        timeout: float = 5.0,
+    ) -> dict[str, object]:
+        captured["ip"] = ip
+        captured["port"] = port
+        captured["request"] = request_dict
+        captured["timeout"] = timeout
+        return {"ack": True, "result": {"count": 3, "frames": []}}
+
+    monkeypatch.setattr(control, "send_request", _fake_send_request)
+
+    response = control.intrinsics_get_corners(
+        "127.0.0.1",
+        8554,
+        "pi-cam-01",
+        start_index=4,
+        max_frames=8,
+        timeout=9.5,
+    )
+
+    assert response == {"ack": True, "result": {"count": 3, "frames": []}}
+    assert captured["ip"] == "127.0.0.1"
+    assert captured["port"] == 8554
+    assert captured["timeout"] == 9.5
+    assert captured["request"] == {
+        "request_id": captured["request"]["request_id"],
+        "camera_id": "pi-cam-01",
+        "cmd": "intrinsics_get_corners",
+        "params": {
+            "start_index": 4,
+            "max_frames": 8,
+        },
+    }

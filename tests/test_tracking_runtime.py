@@ -239,3 +239,54 @@ def test_tracking_runtime_updates_scene_even_without_valid_rigid_body(monkeypatc
     assert scene["tracking"]["running"] is True
     assert scene["rigid_bodies"] == []
     assert scene["raw_points"] == [[4.0, 5.0, 6.0]]
+    assert scene["coordinate_origin"] == "reference_camera"
+    assert scene["coordinate_origin_source"] == "extrinsics_pose_reference"
+
+
+def test_tracking_runtime_scene_reports_wand_origin_from_geometry(monkeypatch) -> None:
+    class _FakePipeline:
+        def __init__(self, udp_port=5000, calibration_path=None, patterns=None, **kwargs):
+            self._running = False
+            self.geometry = type(
+                "_Geometry",
+                (),
+                {
+                    "camera_params": {},
+                    "coordinate_frame": "world",
+                    "coordinate_origin": "wand",
+                    "coordinate_origin_source": "floor_metric_capture",
+                },
+            )()
+
+        def set_pose_callback(self, callback):
+            self._pose_callback = callback
+
+        def start(self, session_name=None):
+            self._running = True
+
+        def stop(self):
+            self._running = False
+            return {}
+
+        def get_status(self):
+            return {"running": self._running, "calibration_loaded": True}
+
+        def get_latest_triangulation_snapshot(self):
+            return {
+                "timestamp": 321,
+                "points_3d": [[0.0, 0.0, 0.0]],
+                "reprojection_errors": [],
+                "pair_timestamp_range_us": 0,
+            }
+
+    monkeypatch.setattr("host.tracking_runtime.TrackingPipeline", _FakePipeline)
+
+    runtime = TrackingRuntime()
+    runtime.start(calibration_path="calibration", patterns=["waist"])
+    runtime._on_pose({})
+
+    scene = runtime.scene_snapshot()
+
+    assert scene["coordinate_frame"] == "world"
+    assert scene["coordinate_origin"] == "wand"
+    assert scene["coordinate_origin_source"] == "floor_metric_capture"

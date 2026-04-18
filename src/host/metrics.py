@@ -93,7 +93,8 @@ class MetricsCollector:
         camera_id: str,
         timestamp: int,
         blob_count: int,
-        frame_index: int
+        frame_index: int,
+        received_at: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         Record a received frame and update metrics.
@@ -108,7 +109,7 @@ class MetricsCollector:
             Updated metrics for this camera
         """
         with self._lock:
-            received_at = time.time()
+            frame_received_at = float(received_at) if received_at is not None else time.time()
             
             # Get or create camera metrics
             if camera_id not in self._cameras:
@@ -120,30 +121,31 @@ class MetricsCollector:
             
             cam = self._cameras[camera_id]
             
-            # Check for missing frames (gap in frame_index)
+            # Check for missing frames while tolerating occasional UDP/out-of-order delivery.
             if cam.frame_count > 0 and frame_index > cam.last_frame_index + 1:
                 gap = frame_index - cam.last_frame_index - 1
                 cam.missing_frames += gap
             
             # Update frame counts
             cam.frame_count += 1
-            cam.last_frame_index = frame_index
+            if cam.frame_count == 1 or frame_index > cam.last_frame_index:
+                cam.last_frame_index = frame_index
             cam.last_timestamp = timestamp
             
             # Calculate latency (if timestamp is PTP-synchronized)
             # Convert timestamp from us to seconds
             frame_time_seconds = timestamp / 1_000_000.0
-            current_time_seconds = time.time()
+            current_time_seconds = frame_received_at
             # Note: This assumes PTP sync; without PTP, this is relative
             cam.latency_ms = (current_time_seconds - frame_time_seconds) * 1000
             
             # Record timestamp for FPS calculation
-            cam._timestamps.append(received_at)
+            cam._timestamps.append(frame_received_at)
             cam._blob_counts.append(blob_count)
             
             # Calculate FPS (frames in last window / time span)
             if len(cam._timestamps) >= 2:
-                time_span = cam._timestamps[-1] - cam._timestamps[0]
+                time_span = max(cam._timestamps) - min(cam._timestamps)
                 if time_span > 0:
                     cam.fps = (len(cam._timestamps) - 1) / time_span
             
@@ -153,7 +155,7 @@ class MetricsCollector:
             
             # Update global metrics
             self._global_frame_count += 1
-            self._frame_times.append(received_at)
+            self._frame_times.append(frame_received_at)
             
             return {
                 "camera_id": camera_id,
@@ -214,7 +216,7 @@ class MetricsCollector:
             # Calculate global FPS
             global_fps = 0.0
             if len(self._frame_times) >= 2:
-                time_span = self._frame_times[-1] - self._frame_times[0]
+                time_span = max(self._frame_times) - min(self._frame_times)
                 if time_span > 0:
                     global_fps = (len(self._frame_times) - 1) / time_span
             

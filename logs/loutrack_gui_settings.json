@@ -1,32 +1,32 @@
 {
   "meta": {
     "version": 2,
-    "updated_at": 1774595241
+    "updated_at": 1776541799
   },
   "calibration": {
     "draft": {
-      "exposure_us": 6100,
-      "gain": 2.9,
+      "exposure_us": 12000,
+      "gain": 8.0,
       "fps": 56,
-      "focus": 0.358,
-      "threshold": 130,
+      "focus": 5.215,
+      "threshold": 200,
       "blob_min_diameter_px": null,
-      "blob_max_diameter_px": 29,
-      "circularity_min": 0,
-      "mask_threshold": 73,
+      "blob_max_diameter_px": null,
+      "circularity_min": 0.0,
+      "mask_threshold": 200,
       "mask_seconds": 0.5,
-      "wand_metric_seconds": 3
+      "wand_metric_seconds": 3.0
     },
     "committed": {
-      "exposure_us": 6100,
-      "gain": 2.9,
+      "exposure_us": 12000,
+      "gain": 8.0,
       "fps": 56,
-      "focus": 0.358,
-      "threshold": 130,
+      "focus": 5.215,
+      "threshold": 200,
       "blob_min_diameter_px": null,
-      "blob_max_diameter_px": 29.0,
+      "blob_max_diameter_px": null,
       "circularity_min": 0.0,
-      "mask_threshold": 73,
+      "mask_threshold": 200,
       "mask_seconds": 0.5,
       "wand_metric_seconds": 3.0
     }
@@ -34,18 +34,18 @@
   "intrinsics": {
     "draft": {
       "camera_id": "pi-cam-01",
-      "mjpeg_url": "http://192.168.8.223:8555/mjpeg",
-      "square_length_mm": "30",
+      "mjpeg_url": "",
+      "square_length_mm": 60.0,
       "marker_length_mm": null,
-      "squares_x": "6",
-      "squares_y": "8",
-      "min_frames": "25",
-      "cooldown_s": "1.5"
+      "squares_x": 6,
+      "squares_y": 8,
+      "min_frames": 25,
+      "cooldown_s": 1.5
     },
     "committed": {
       "camera_id": "pi-cam-01",
-      "mjpeg_url": "http://192.168.8.223:8555/mjpeg",
-      "square_length_mm": 30.0,
+      "mjpeg_url": "",
+      "square_length_mm": 60.0,
       "marker_length_mm": null,
       "squares_x": 6,
       "squares_y": 8,
@@ -61,7 +61,8 @@
       "output_path": "calibration/extrinsics_pose_v2.json",
       "pair_window_us": 2000,
       "wand_pair_window_us": 8000,
-      "min_pairs": 8
+      "min_pairs": 8,
+      "wand_face": "front_up"
     },
     "committed": {
       "intrinsics_path": "calibration",
@@ -70,7 +71,8 @@
       "output_path": "calibration/extrinsics_pose_v2.json",
       "pair_window_us": 2000,
       "wand_pair_window_us": 8000,
-      "min_pairs": 8
+      "min_pairs": 8,
+      "wand_face": "front_up"
     },
     "locks": {
       "pose_log_path_manual": false,
@@ -78,8 +80,8 @@
     }
   },
   "ui": {
-    "active_page": "calibration",
-    "active_view": "blob",
+    "active_page": "tracking",
+    "active_view": "tracking",
     "selected_camera_ids": [
       "pi-cam-01",
       "pi-cam-02"

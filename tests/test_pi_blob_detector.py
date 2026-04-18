@@ -558,7 +558,7 @@ def test_intrinsics_start_dispatch_sets_pipeline_session(monkeypatch: pytest.Mon
         "pi-cam-01",
         {
             "camera_id": "pi-cam-01",
-            "square_length_mm": 30.0,
+            "square_length_mm": 60.0,
             "marker_length_mm": 22.5,
             "squares_x": 6,
             "squares_y": 8,

@@ -300,12 +300,15 @@ def test_solver_resolves_metric_and_world_with_wand_log(tmp_path: Path) -> None:
         wand_metric_log_path=wand_log,
         output_path=output_path,
         min_pairs=8,
+        wand_face="back_up",
     )
 
     assert result["metric"]["status"] == "resolved"
     assert result["world"]["status"] == "resolved"
     assert result["metric"]["source"] == "wand_floor_metric"
     assert result["world"]["source"] == "wand_floor_metric"
+    assert result["world"]["wand_face"] == "back_up"
+    assert result["world"]["floor_normal_sign_source"] == "wand_face"
     assert float(result["metric"]["scale_m_per_unit"]) > 0.0
     assert result["metric"]["wand_metric_frames"] >= 1
     assert result["world"]["to_world_matrix"] is not None
@@ -315,6 +318,18 @@ def test_solver_resolves_metric_and_world_with_wand_log(tmp_path: Path) -> None:
     assert result["pose"]["solve_summary"]["matched_delta_us_max"] == 900
     for row in result["pose"]["camera_poses"]:
         assert 0.8 <= float(row["focal_scale"]) <= 1.2
+    world_transform = np.asarray(result["world"]["to_world_matrix"], dtype=np.float64)
+    metric_camera_rows = result["metric"]["camera_poses"]
+    world_camera_centers = []
+    for row in metric_camera_rows:
+        rotation = np.asarray(row["R"], dtype=np.float64)
+        translation = np.asarray(row["t"], dtype=np.float64)
+        center_metric = (-(rotation.T @ translation.reshape(3, 1))).reshape(3)
+        center_world = (
+            world_transform[:3, :3] @ center_metric.reshape(3, 1)
+        ).reshape(3) + world_transform[:3, 3]
+        world_camera_centers.append(center_world)
+    assert min(center[2] for center in world_camera_centers) > 0.0
 
 
 def test_solver_payload_paths_do_not_expose_absolute_directories(tmp_path: Path) -> None:

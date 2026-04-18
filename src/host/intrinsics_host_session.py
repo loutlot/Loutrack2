@@ -74,7 +74,12 @@ class IntrinsicsHostSession:
         self._image_size: Optional[Tuple[int, int]] = None
         self._grid_coverage: np.ndarray = np.zeros((3, 3), dtype=int)
         self._calibration_result: Optional[Dict[str, Any]] = None
-        self._last_error: Optional[str] = None
+        self._host_last_error: Optional[str] = None
+        self._host_error_sticky: bool = False
+        self._remote_last_error: Optional[str] = None
+        self._remote_frames_captured: Optional[int] = None
+        self._remote_frames_needed: Optional[int] = None
+        self._remote_frames_target: Optional[int] = None
         self._rejected_cooldown: int = 0
         self._rejected_spatial: int = 0
         self._rejected_detection: int = 0
@@ -103,6 +108,12 @@ class IntrinsicsHostSession:
         with self._lock:
             self._phase = "capturing"
             self._stop_event.clear()
+            self._host_last_error = None
+            self._host_error_sticky = False
+            self._remote_last_error = None
+            self._remote_frames_captured = None
+            self._remote_frames_needed = None
+            self._remote_frames_target = None
         self._poll_once()
         self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._poll_thread.start()
@@ -115,8 +126,9 @@ class IntrinsicsHostSession:
             self._poll_thread.join(timeout=3.0)
         try:
             self._broadcast_fn("intrinsics_stop")
-        except Exception:
-            pass
+        except Exception as exc:
+            self._set_host_error(str(exc), sticky=False)
+            return
         with self._lock:
             if self._phase == "capturing":
                 self._phase = "idle"
@@ -133,7 +145,12 @@ class IntrinsicsHostSession:
             self._image_size = None
             self._grid_coverage = np.zeros((3, 3), dtype=int)
             self._calibration_result = None
-            self._last_error = None
+            self._host_last_error = None
+            self._host_error_sticky = False
+            self._remote_last_error = None
+            self._remote_frames_captured = None
+            self._remote_frames_needed = None
+            self._remote_frames_target = None
             self._rejected_cooldown = 0
             self._rejected_spatial = 0
             self._rejected_detection = 0
@@ -145,6 +162,17 @@ class IntrinsicsHostSession:
             local_count = len(self._captured_corners)
             if local_count < self._config.min_frames:
                 remote_count = self._get_remote_frames_captured()
+                sync_error = self._host_last_error
+                if (
+                    remote_count is not None
+                    and remote_count >= self._config.min_frames
+                    and isinstance(sync_error, str)
+                    and sync_error.strip()
+                ):
+                    raise ValueError(
+                        "Failed to sync remote intrinsics frames before calibration: "
+                        f"{sync_error.strip()} (remote reports {remote_count})"
+                    )
                 raise ValueError(
                     f"Need at least {self._config.min_frames} frames, "
                     f"got {local_count}"
@@ -154,10 +182,12 @@ class IntrinsicsHostSession:
             ids = list(self._captured_ids)
             image_size = self._image_size
             self._phase = "calibrating"
+            self._host_last_error = None
+            self._host_error_sticky = False
         if image_size is None:
             with self._lock:
                 self._phase = "error"
-                self._last_error = "no_image_size"
+                self._set_host_error("no_image_size", sticky=True)
             return
         t = threading.Thread(
             target=self._run_calibration,
@@ -171,14 +201,26 @@ class IntrinsicsHostSession:
             return {
                 "phase": self._phase,
                 "camera_id": self._config.camera_id,
-                "frames_captured": len(self._captured_corners),
-                "frames_needed": self._config.min_frames,
-                "frames_target": self._config.target_frames,
+                "frames_captured": (
+                    self._remote_frames_captured
+                    if self._remote_frames_captured is not None
+                    else len(self._captured_corners)
+                ),
+                "frames_needed": (
+                    self._remote_frames_needed
+                    if self._remote_frames_needed is not None
+                    else self._config.min_frames
+                ),
+                "frames_target": (
+                    self._remote_frames_target
+                    if self._remote_frames_target is not None
+                    else self._config.target_frames
+                ),
                 "frames_rejected_cooldown": self._rejected_cooldown,
                 "frames_rejected_spatial": self._rejected_spatial,
                 "frames_rejected_detection": self._rejected_detection,
                 "grid_coverage": self._grid_coverage.tolist(),
-                "last_error": self._last_error,
+                "last_error": self._host_last_error or self._remote_last_error,
                 "calibration_result": self._calibration_result,
                 "output_path": str(
                     self._config.output_dir
@@ -210,6 +252,12 @@ class IntrinsicsHostSession:
     def sync_remote_frames(self) -> None:
         self._poll_once()
 
+    def apply_remote_status(self, payload: Dict[str, Any]) -> None:
+        self._apply_remote_observation(payload, include_frames=False)
+
+    def record_remote_status_error(self, message: str) -> None:
+        self._set_host_error(message, sticky=False)
+
     def _get_remote_frames_captured(self) -> int | None:
         try:
             payload = self._broadcast_fn("intrinsics_status")
@@ -228,8 +276,7 @@ class IntrinsicsHostSession:
                 max_frames=REMOTE_INTRINSICS_FETCH_BATCH,
             )
         except Exception as exc:
-            with self._lock:
-                self._last_error = str(exc)
+            self._set_host_error(str(exc), sticky=False)
             return
 
         self._apply_remote_payload(payload)
@@ -242,8 +289,7 @@ class IntrinsicsHostSession:
                     max_frames=REMOTE_INTRINSICS_FETCH_BATCH,
                 )
             except Exception as exc:
-                with self._lock:
-                    self._last_error = str(exc)
+                self._set_host_error(str(exc), sticky=False)
                 return
             returned_count = int(payload.get("returned_count", len(payload.get("frames", []))))
             self._apply_remote_payload(payload)
@@ -251,25 +297,43 @@ class IntrinsicsHostSession:
                 break
 
     def _apply_remote_payload(self, payload: Dict[str, Any]) -> None:
+        self._apply_remote_observation(payload, include_frames=True)
+
+    def _set_host_error(self, message: str, *, sticky: bool) -> None:
+        self._host_last_error = message
+        self._host_error_sticky = sticky
+
+    def _clear_nonsticky_host_error(self) -> None:
+        if not self._host_error_sticky:
+            self._host_last_error = None
+
+    def _apply_remote_observation(self, payload: Dict[str, Any], *, include_frames: bool) -> None:
         frames = payload.get("frames", [])
         image_size_raw = payload.get("image_size")
         last_error_raw = payload.get("last_error")
-        phase_raw = payload.get("phase")
 
         with self._lock:
-            for f in frames:
+            for f in frames if include_frames else []:
                 c = np.array(f["corners"], dtype=np.float32)
                 i = np.array(f["ids"], dtype=np.int32)
                 self._captured_corners.append(c)
                 self._captured_ids.append(i)
             if self._image_size is None and image_size_raw:
                 self._image_size = (int(image_size_raw[0]), int(image_size_raw[1]))
-            if isinstance(phase_raw, str) and phase_raw.strip():
-                self._phase = phase_raw
-            if isinstance(last_error_raw, str):
-                self._last_error = last_error_raw
+            self._clear_nonsticky_host_error()
+            if isinstance(last_error_raw, str) and last_error_raw.strip():
+                self._remote_last_error = last_error_raw
             elif last_error_raw is None:
-                self._last_error = None
+                self._remote_last_error = None
+            frames_captured_raw = payload.get("frames_captured")
+            if isinstance(frames_captured_raw, (int, float)):
+                self._remote_frames_captured = int(frames_captured_raw)
+            frames_needed_raw = payload.get("frames_needed")
+            if isinstance(frames_needed_raw, (int, float)):
+                self._remote_frames_needed = int(frames_needed_raw)
+            frames_target_raw = payload.get("frames_target")
+            if isinstance(frames_target_raw, (int, float)):
+                self._remote_frames_target = int(frames_target_raw)
             self._rejected_cooldown = int(
                 payload.get("frames_rejected_cooldown", self._rejected_cooldown)
             )
@@ -340,7 +404,9 @@ class IntrinsicsHostSession:
             with self._lock:
                 self._calibration_result = output
                 self._phase = "done"
-                self._last_error = None
+                self._host_last_error = None
+                self._host_error_sticky = False
+                self._remote_last_error = None
 
         except Exception as exc:
             print(
@@ -349,8 +415,8 @@ class IntrinsicsHostSession:
                 flush=True,
             )
             with self._lock:
-                self._last_error = f"calibration_failed: {exc}"
                 self._phase = "error"
+                self._set_host_error(f"calibration_failed: {exc}", sticky=True)
 
     def _ensure_cal_module(self) -> Any:
         if self._cal is not None:

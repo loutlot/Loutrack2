@@ -193,6 +193,17 @@ class FramePairer:
         self.timestamp_tolerance_us = timestamp_tolerance_us
         self.min_cameras = min_cameras
         self.frame_index_fallback = frame_index_fallback
+        self._emitted_frame_keys: set[tuple[str, int, int]] = set()
+
+    @staticmethod
+    def _frame_key(frame: Frame) -> tuple[str, int, int]:
+        return (frame.camera_id, int(frame.frame_index), int(frame.timestamp))
+
+    def _prune_emitted_keys(self, buffer: FrameBuffer, camera_ids: List[str]) -> None:
+        live_keys: set[tuple[str, int, int]] = set()
+        for camera_id in camera_ids:
+            live_keys.update(self._frame_key(frame) for frame in buffer.get_all_frames(camera_id))
+        self._emitted_frame_keys.intersection_update(live_keys)
     
     def pair_frames(
         self,
@@ -212,6 +223,7 @@ class FramePairer:
         camera_ids = buffer.get_camera_ids()
         if len(camera_ids) < self.min_cameras:
             return []
+        self._prune_emitted_keys(buffer, camera_ids)
         
         # Choose reference camera (one with most frames, or specified)
         if reference_camera and reference_camera in camera_ids:
@@ -225,9 +237,12 @@ class FramePairer:
             return []
         
         paired = []
-        used_frame_indices: Dict[str, set] = defaultdict(set)
+        used_frame_keys: Dict[str, set] = defaultdict(set)
         
-        for ref_frame in ref_frames:
+        for ref_frame in reversed(ref_frames):
+            ref_key = self._frame_key(ref_frame)
+            if ref_key in self._emitted_frame_keys:
+                continue
             pair = PairedFrames(
                 timestamp=ref_frame.timestamp,
                 frames={ref_cam: ref_frame}
@@ -248,7 +263,8 @@ class FramePairer:
                 # Filter out already-used frames
                 candidates = [
                     f for f in candidates
-                    if f.frame_index not in used_frame_indices[cam_id]
+                    if self._frame_key(f) not in self._emitted_frame_keys
+                    and self._frame_key(f) not in used_frame_keys[cam_id]
                 ]
                 
                 if not candidates and self.frame_index_fallback:
@@ -258,13 +274,14 @@ class FramePairer:
                     candidates = [
                         f for f in all_frames
                         if f.frame_index == target_index
-                        and f.frame_index not in used_frame_indices[cam_id]
+                        and self._frame_key(f) not in self._emitted_frame_keys
+                        and self._frame_key(f) not in used_frame_keys[cam_id]
                     ]
                 
                 if candidates:
                     best_match = candidates[0]
                     pair.frames[cam_id] = best_match
-                    used_frame_indices[cam_id].add(best_match.frame_index)
+                    used_frame_keys[cam_id].add(self._frame_key(best_match))
             
             # Only return pairs with enough cameras
             if pair.frame_count >= self.min_cameras:
@@ -272,6 +289,10 @@ class FramePairer:
                 timestamps = [f.timestamp for f in pair.frames.values()]
                 pair.timestamp_range_us = max(timestamps) - min(timestamps)
                 paired.append(pair)
+                for camera_id, frame in pair.frames.items():
+                    frame_key = self._frame_key(frame)
+                    self._emitted_frame_keys.add(frame_key)
+                    used_frame_keys[camera_id].add(frame_key)
         
         return paired
 
@@ -502,6 +523,7 @@ class FrameProcessor:
     
     def _process_pairs(self) -> None:
         """Process and emit paired frames."""
+        self.buffer.cleanup_old_frames()
         pairs = self.pairer.pair_frames(self.buffer)
         
         for pair in pairs:

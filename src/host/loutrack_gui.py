@@ -105,6 +105,8 @@ class LoutrackGuiState:
         # Kept for backward-compatibility with existing tests and callers.
         self._generate_extrinsics_solver = self._generate_extrinsics_registry.get("blob_pose_v2").solve
         self.tracking_runtime = tracking_runtime or TrackingRuntime()
+        self._receiver_paused_for_tracking = False
+        self._tracking_camera_ids: List[str] = []
         self.latest_extrinsics_path: Path | None = None
         self.latest_extrinsics_quality: Dict[str, Any] | None = None
         self._restore_latest_extrinsics(DEFAULT_EXTRINSICS_OUTPUT_PATH)
@@ -172,7 +174,7 @@ class LoutrackGuiState:
         return {
             "camera_id": "pi-cam-01",
             "mjpeg_url": "",
-            "square_length_mm": 30.0,
+            "square_length_mm": 60.0,
             "marker_length_mm": None,
             "squares_x": 6,
             "squares_y": 8,
@@ -190,6 +192,7 @@ class LoutrackGuiState:
             "pair_window_us": 2000,
             "wand_pair_window_us": 8000,
             "min_pairs": 8,
+            "wand_face": "front_up",
         }
 
     def _migrate_settings_once(self) -> None:
@@ -560,6 +563,12 @@ class LoutrackGuiState:
                 next_committed[key] = value
             except Exception:
                 errors[key] = message
+        if "wand_face" in draft:
+            value = self._to_string(draft.get("wand_face")).strip().lower()
+            if value in ("front_up", "back_up"):
+                next_committed["wand_face"] = value
+            else:
+                errors["wand_face"] = "must be front_up or back_up"
         return next_committed, errors
 
     def _refresh_committed_from_draft(self, bundle: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
@@ -632,15 +641,10 @@ class LoutrackGuiState:
     ) -> None:
         bundle = self._load_settings_bundle()
         hints = bundle["runtime_hints"]
-        locks = bundle["extrinsics"]["locks"]
         if pose_log_path is not None:
             hints["pose_log_path"] = str(pose_log_path)
-            if not bool(locks.get("pose_log_path_manual")):
-                bundle["extrinsics"]["draft"]["pose_log_path"] = str(pose_log_path)
         if wand_metric_log_path is not None:
             hints["wand_metric_log_path"] = str(wand_metric_log_path)
-            if not bool(locks.get("wand_metric_log_path_manual")):
-                bundle["extrinsics"]["draft"]["wand_metric_log_path"] = str(wand_metric_log_path)
         validation = self._refresh_committed_from_draft(bundle)
         bundle["validation"] = validation
         self._save_settings_bundle(bundle)
@@ -757,8 +761,35 @@ class LoutrackGuiState:
             output_dir=source.output_dir,
         )
 
-    def _discover_workflow_targets(self) -> List[Any]:
-        return self.session.discover_targets(None)
+    @staticmethod
+    def _normalize_camera_ids(camera_ids_obj: Any) -> List[str]:
+        if not isinstance(camera_ids_obj, list):
+            return []
+        cleaned = [str(item).strip() for item in camera_ids_obj if str(item).strip()]
+        return list(dict.fromkeys(cleaned))
+
+    def _discover_workflow_targets(self, camera_ids: List[str] | None = None) -> List[Any]:
+        return self.session.discover_targets(camera_ids or None)
+
+    def _resolve_requested_targets(self, payload: Dict[str, Any], *, refresh: bool = False) -> List[Any]:
+        if refresh:
+            return self.session.discover_targets(None)
+        camera_ids = self._normalize_camera_ids(payload.get("camera_ids"))
+        if not camera_ids:
+            raise ValueError("camera_ids must not be empty")
+        targets = self._discover_workflow_targets(camera_ids)
+        if not targets:
+            raise ValueError(f"no target cameras discovered for camera_ids={camera_ids}")
+        return targets
+
+    def _ensure_calibration_settings_valid(self) -> Dict[str, Any]:
+        bundle = self._load_settings_bundle()
+        validation = bundle.get("validation", {}).get("calibration", {})
+        if isinstance(validation, dict) and validation:
+            raise ValueError(f"calibration settings invalid: {validation}")
+        calibration = bundle.get("calibration", {})
+        committed = calibration.get("committed", {}) if isinstance(calibration, dict) else {}
+        return committed if isinstance(committed, dict) else {}
 
     def _apply_capture_settings(self, targets: List[Any]) -> Dict[str, Dict[str, Dict[str, Any]]]:
         return {
@@ -803,7 +834,7 @@ class LoutrackGuiState:
 
     def _workflow_summary(self, cameras: List[Dict[str, Any]]) -> Dict[str, Any]:
         selected = [camera for camera in cameras if bool(camera.get("selected"))]
-        active_cameras = cameras
+        active_cameras = selected if selected else cameras
         with self.lock:
             active_capture_kind = self._active_capture_kind
 
@@ -816,7 +847,7 @@ class LoutrackGuiState:
             return value if isinstance(value, dict) else {}
 
         total_count = len(cameras)
-        selected_count = len(active_cameras)
+        selected_count = len(selected)
         healthy_count = sum(1 for camera in active_cameras if bool(camera.get("healthy")))
         blob_ready_count = sum(
             1
@@ -1004,20 +1035,154 @@ class LoutrackGuiState:
         patterns = payload.get("patterns", ["waist"])
         if not isinstance(patterns, list):
             patterns = ["waist"]
-        status = self.tracking_runtime.start(str(resolved), [str(item) for item in patterns])
-        response = {"ok": True, **status, "running": True}
+        self._ensure_calibration_settings_valid()
+        targets = self._resolve_tracking_targets(payload)
+        camera_ids = [target.camera_id for target in targets]
+        config_result = self._apply_capture_settings(targets)
+        optimization = self._prepare_pis_for_tracking(targets)
+        self._pause_receiver_for_tracking()
+        try:
+            status = self.tracking_runtime.start(str(resolved), [str(item) for item in patterns])
+            stream_start = self.session._broadcast(targets, "start", mode="pose_capture")
+            if not self._all_acked_or_already_running(stream_start):
+                self.tracking_runtime.stop()
+                self._resume_receiver_after_tracking()
+                raise ValueError(f"failed to start tracking camera streams: {stream_start}")
+        except Exception:
+            self.tracking_runtime.stop()
+            self._resume_receiver_after_tracking()
+            raise
+        self._update_camera_status({"tracking_start": stream_start})
+        self._tracking_camera_ids = camera_ids
+        response = {
+            "ok": True,
+            **status,
+            "running": True,
+            "camera_ids": camera_ids,
+            "pi_config": config_result,
+            "pi_tracking_optimization": optimization,
+            "pi_stream_start": stream_start,
+        }
         self.last_result = {"tracking_start": response}
         return response
 
+    @staticmethod
+    def _all_acked_or_already_running(result: Dict[str, Any]) -> bool:
+        for response in result.values():
+            if not isinstance(response, dict):
+                return False
+            if bool(response.get("ack")):
+                continue
+            error_message = str(response.get("error_message") or response.get("error") or "")
+            if "already_running" in error_message:
+                continue
+            return False
+        return True
+
+    def _resolve_tracking_targets(self, payload: Dict[str, Any]) -> List[Any]:
+        camera_ids = self._normalize_camera_ids(payload.get("camera_ids"))
+        if not camera_ids:
+            camera_ids = list(self.selected_camera_ids)
+        targets = self._discover_workflow_targets(camera_ids if camera_ids else None)
+        if not targets:
+            raise ValueError("no target cameras discovered for tracking")
+        return targets
+
+    def _prepare_pis_for_tracking(self, targets: List[Any]) -> Dict[str, Any]:
+        result = self.session._broadcast(
+            targets,
+            "set_preview",
+            render_enabled=False,
+            overlays={"blob": False, "mask": False, "text": False, "charuco": False},
+        )
+        return {
+            "ok": True,
+            "camera_ids": [target.camera_id for target in targets],
+            "preview_render_enabled": False,
+            "overlays": {"blob": False, "mask": False, "text": False, "charuco": False},
+            "result": result,
+        }
+
     def stop_tracking(self) -> Dict[str, Any]:
+        stream_stop: Dict[str, Any] = {}
+        camera_ids = list(self._tracking_camera_ids)
+        if camera_ids:
+            targets = self._discover_workflow_targets(camera_ids)
+            if targets:
+                stream_stop = self.session._broadcast(targets, "stop")
         stop_result = self.tracking_runtime.stop()
+        self._resume_receiver_after_tracking()
         summary = stop_result.get("summary", stop_result) if isinstance(stop_result, dict) else {}
         status = self.tracking_runtime.status()
-        response = {"ok": True, "summary": summary, **status, "running": False}
+        self._update_camera_status({"tracking_stop": stream_stop})
+        self._tracking_camera_ids = []
+        response = {"ok": True, "summary": summary, **status, "running": False, "pi_stream_stop": stream_stop}
         self.last_result = {"tracking_stop": response}
         return response
 
+    def _pause_receiver_for_tracking(self) -> None:
+        if self._receiver_paused_for_tracking:
+            return
+        is_running = bool(getattr(self.receiver, "is_running", False))
+        stop = getattr(self.receiver, "stop", None)
+        if is_running and callable(stop):
+            stop()
+            self._receiver_paused_for_tracking = True
+
+    def _resume_receiver_after_tracking(self) -> None:
+        if not self._receiver_paused_for_tracking:
+            return
+        start = getattr(self.receiver, "start", None)
+        if callable(start):
+            start()
+        self._receiver_paused_for_tracking = False
+
     # ── Intrinsics capture ─────────────────────────────────────────────
+
+    def _build_intrinsics_host_session(self, committed: Dict[str, Any]) -> IntrinsicsHostSession:
+        camera_id = str(committed.get("camera_id", "pi-cam-01")).strip()
+        if not camera_id:
+            raise ValueError("intrinsics camera_id is required")
+        square_length_mm = float(committed.get("square_length_mm", 60.0))
+        marker_length_mm_raw = committed.get("marker_length_mm")
+        marker_length_mm = (
+            float(marker_length_mm_raw)
+            if marker_length_mm_raw is not None
+            else square_length_mm * 0.75
+        )
+        squares_x = int(committed.get("squares_x", 6))
+        squares_y = int(committed.get("squares_y", 8))
+        min_frames = int(committed.get("min_frames", 25))
+        cooldown_s = float(committed.get("cooldown_s", 1.5))
+        mjpeg_url = str(committed.get("mjpeg_url", "")).strip()
+        config = IntrinsicsHostSessionConfig(
+            camera_id=camera_id,
+            mjpeg_url=mjpeg_url,
+            square_length_mm=square_length_mm,
+            marker_length_mm=marker_length_mm,
+            squares_x=squares_x,
+            squares_y=squares_y,
+            min_frames=min_frames,
+            poll_interval_s=cooldown_s,
+            output_dir=PROJECT_ROOT / "calibration",
+        )
+        broadcast_fn = lambda fn, **kw: self._intrinsics_send_command(camera_id, fn, **kw)  # noqa: E731
+        return IntrinsicsHostSession(config, broadcast_fn)
+
+    def _ensure_intrinsics_host_session_from_settings(self) -> IntrinsicsHostSession:
+        if self._intrinsics_host_session is not None:
+            return self._intrinsics_host_session
+        bundle = self._load_settings_bundle()
+        validation = bundle.get("validation", {}).get("intrinsics", {})
+        if isinstance(validation, dict) and validation:
+            raise ValueError(f"intrinsics settings invalid: {validation}")
+        intrinsics = bundle.get("intrinsics", {})
+        committed = intrinsics.get("committed", {}) if isinstance(intrinsics, dict) else {}
+        if not isinstance(committed, dict):
+            committed = self._default_intrinsics_payload()
+        session = self._build_intrinsics_host_session(committed)
+        self._intrinsics_host_session = session
+        return session
 
     def start_intrinsics_capture(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         bundle = self._load_settings_bundle()
@@ -1047,21 +1212,7 @@ class LoutrackGuiState:
         if not isinstance(committed, dict):
             committed = self._default_intrinsics_payload()
         camera_id = str(committed.get("camera_id", "pi-cam-01")).strip()
-        if not camera_id:
-            raise ValueError("intrinsics camera_id is required")
         self._intrinsics_assert_capability(camera_id)
-        square_length_mm = float(committed.get("square_length_mm", 30.0))
-        marker_length_mm_raw = committed.get("marker_length_mm")
-        marker_length_mm = (
-            float(marker_length_mm_raw)
-            if marker_length_mm_raw is not None
-            else square_length_mm * 0.75
-        )
-        squares_x = int(committed.get("squares_x", 6))
-        squares_y = int(committed.get("squares_y", 8))
-        min_frames = int(committed.get("min_frames", 25))
-        cooldown_s = float(committed.get("cooldown_s", 1.5))
-        mjpeg_url = str(committed.get("mjpeg_url", "")).strip()
 
         if self._intrinsics_host_session is not None:
             try:
@@ -1069,19 +1220,7 @@ class LoutrackGuiState:
             except Exception:
                 pass
 
-        config = IntrinsicsHostSessionConfig(
-            camera_id=camera_id,
-            mjpeg_url=mjpeg_url,
-            square_length_mm=square_length_mm,
-            marker_length_mm=marker_length_mm,
-            squares_x=squares_x,
-            squares_y=squares_y,
-            min_frames=min_frames,
-            poll_interval_s=cooldown_s,
-            output_dir=PROJECT_ROOT / "calibration",
-        )
-        broadcast_fn = lambda fn, **kw: self._intrinsics_send_command(camera_id, fn, **kw)  # noqa: E731
-        self._intrinsics_host_session = IntrinsicsHostSession(config, broadcast_fn)
+        self._intrinsics_host_session = self._build_intrinsics_host_session(committed)
         self._intrinsics_host_session.start()
         self._persist_intrinsics_settings(committed)
         return {"ok": True, "camera_id": camera_id, "status": self._intrinsics_host_session.get_status()}
@@ -1099,40 +1238,31 @@ class LoutrackGuiState:
         return {"ok": True, "status": self.get_intrinsics_status()}
 
     def trigger_intrinsics_calibration(self) -> Dict[str, Any]:
-        if self._intrinsics_host_session is None:
-            raise ValueError("No intrinsics capture session active")
-        self._intrinsics_host_session.trigger_calibration()
-        return {"ok": True, "status": self._intrinsics_host_session.get_status()}
+        session = self._ensure_intrinsics_host_session_from_settings()
+        session.trigger_calibration()
+        return {"ok": True, "status": session.get_status()}
 
     def get_intrinsics_status(self) -> Dict[str, Any]:
         targets = self.session.discover_targets(None)
         camera_list = [{"camera_id": t.camera_id, "ip": t.ip} for t in targets]
         if self._intrinsics_host_session is None:
-            status = self._intrinsics_idle_status(None)
-            status["cameras"] = camera_list
-            return status
+            try:
+                self._ensure_intrinsics_host_session_from_settings()
+            except ValueError:
+                status = self._intrinsics_idle_status(None)
+                status["cameras"] = camera_list
+                return status
+        assert self._intrinsics_host_session is not None
         status = self._intrinsics_host_session.get_status()
         camera_id = str(status.get("camera_id", "")).strip()
         if camera_id:
             try:
                 remote_status = self._intrinsics_send_command(camera_id, "intrinsics_status")
             except Exception as exc:
-                status["last_error"] = str(exc)
+                self._intrinsics_host_session.record_remote_status_error(str(exc))
             else:
-                for key in (
-                    "phase",
-                    "frames_captured",
-                    "frames_needed",
-                    "frames_target",
-                    "frames_rejected_cooldown",
-                    "frames_rejected_spatial",
-                    "frames_rejected_detection",
-                    "grid_coverage",
-                    "last_error",
-                    "calibration_result",
-                ):
-                    if key in remote_status:
-                        status[key] = remote_status[key]
+                self._intrinsics_host_session.apply_remote_status(remote_status)
+            status = self._intrinsics_host_session.get_status()
         status["cameras"] = camera_list
         return status
 
@@ -1275,6 +1405,7 @@ class LoutrackGuiState:
 
     def get_state(self) -> Dict[str, Any]:
         cameras = self.refresh_targets()
+        bundle = self._load_settings_bundle()
         return {
             "config": self._config_payload(),
             "cameras": cameras,
@@ -1284,13 +1415,45 @@ class LoutrackGuiState:
             "receiver": self.receiver.stats,
             "tracking": self.get_tracking_status(),
             "intrinsics_settings": self._load_intrinsics_settings(),
+            "settings_meta": {
+                "validation": bundle.get("validation", {}),
+                "runtime_hints": bundle.get("runtime_hints", {}),
+            },
         }
 
     def apply_config(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        self.config = self._build_session_config(payload)
+        targets = self._resolve_requested_targets(payload)
+        bundle = self._load_settings_bundle()
+        calibration = bundle.get("calibration", {})
+        committed = calibration.get("committed", {}) if isinstance(calibration, dict) else {}
+        draft = dict(calibration.get("draft", {})) if isinstance(calibration, dict) else {}
+        calibration_patch = {
+            key: payload[key]
+            for key in (
+                "exposure_us",
+                "gain",
+                "fps",
+                "focus",
+                "threshold",
+                "circularity_min",
+                "blob_min_diameter_px",
+                "blob_max_diameter_px",
+                "mask_threshold",
+                "mask_seconds",
+                "wand_metric_seconds",
+            )
+            if key in payload
+        }
+        draft.update(calibration_patch)
+        next_committed, errors = self._validate_calibration(
+            draft,
+            committed if isinstance(committed, dict) else {},
+        )
+        if errors:
+            raise ValueError(f"calibration settings invalid: {errors}")
+        self.config = self._build_session_config(next_committed)
         self._persist_config()
 
-        targets = self._discover_workflow_targets()
         result = self._apply_capture_settings(targets)
         self._update_camera_status(result)
         self.last_result = result
@@ -1304,7 +1467,9 @@ class LoutrackGuiState:
             self.last_result = result
             return result
 
-        targets = self._discover_workflow_targets()
+        targets = self._resolve_requested_targets(payload)
+        if command in {"mask_start", "start", "start_pose_capture", "start_wand_metric_capture"}:
+            self._ensure_calibration_settings_valid()
         command_handlers = {
             "ping": lambda: self.session._broadcast(targets, "ping"),
             "mask_start": lambda: self.session._broadcast(targets, "mask_start", **self._mask_params()),
@@ -1405,6 +1570,7 @@ class LoutrackGuiState:
                     "pair_window_us",
                     "wand_pair_window_us",
                     "min_pairs",
+                    "wand_face",
                 )
                 if key in payload
             }
@@ -1434,12 +1600,15 @@ class LoutrackGuiState:
         pair_window_us = int(committed_extrinsics.get("pair_window_us", 2000))
         min_pairs = int(committed_extrinsics.get("min_pairs", 8))
         wand_pair_window_us = int(committed_extrinsics.get("wand_pair_window_us", 8000))
+        wand_face = str(committed_extrinsics.get("wand_face", "front_up")).strip().lower() or "front_up"
         if pair_window_us < 1:
             raise ValueError("pair_window_us must be >= 1")
         if min_pairs < 1:
             raise ValueError("min_pairs must be >= 1")
         if wand_pair_window_us < 1:
             raise ValueError("wand_pair_window_us must be >= 1")
+        if wand_face not in ("front_up", "back_up"):
+            raise ValueError("wand_face must be front_up or back_up")
 
         if not resolved_log_path.exists():
             summary = self._build_generate_extrinsics_failure(
@@ -1473,6 +1642,7 @@ class LoutrackGuiState:
                 min_pairs=min_pairs,
                 wand_metric_log_path=str(resolved_wand_log_path) if resolved_wand_log_path.exists() and resolved_wand_log_path.is_file() else None,
                 wand_pair_window_us=wand_pair_window_us,
+                wand_face=wand_face,
             )
         except (FileNotFoundError, ValueError) as exc:
             reason = str(exc)

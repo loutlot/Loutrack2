@@ -66,6 +66,7 @@ from .control import (
     intrinsics_start,
     intrinsics_stop,
     intrinsics_clear,
+    intrinsics_get_corners,
     intrinsics_calibrate,
     intrinsics_status,
 )
@@ -127,6 +128,7 @@ __all__ = [
     "intrinsics_start",
     "intrinsics_stop",
     "intrinsics_clear",
+    "intrinsics_get_corners",
     "intrinsics_calibrate",
     "intrinsics_status",
     "WAND_NAME",

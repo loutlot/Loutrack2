@@ -65,6 +65,17 @@ Available now:
 
 - Raspberry Pi capture nodes can detect reflective blobs and stream observations to the host
 - the host GUI can drive blob tuning, mask building, pose capture, floor or metric capture, and extrinsics generation
+- the host GUI now keeps selected-camera targeting strict for camera commands and settings application
+- runtime-generated capture paths are surfaced as latest observed values and can be adopted explicitly without silently overwriting draft form inputs
+- stopped intrinsics captures can now be synced back from the Pi for host-side calibration without relying on stale in-memory frame state
+- the intrinsics result panel now refreshes immediately when entering the view or launching host-side calibration, reducing stale "Calibrating on host..." displays
+- the Matplotlib extrinsics viewer can now overlay triangulated wand metric samples in similarity, metric, or world space
+- wand-based world alignment now chooses the floor-normal sign so ceiling cameras appear at positive height above the floor plane
+- wand-based world alignment now constrains floor-normal direction from the wand face: +X is elbow to long branch, +Y is elbow to short branch, and the selected front/back side defines +Z
+- the GUI 3D Tracking viewer now uses the floor/metric capture wand as the world origin when metric/world extrinsics are available, with a black Z-up viewport, Z-axis orbit controls, camera-name labels, and visible triangulated-blob points separate from rigid bodies
+- tracking start now configures selected Pis for low-overhead preview and explicitly starts their `pose_capture` UDP streams before expecting 3D blob points
+- tracking start tolerates Pis that are already streaming so the host receiver can recover cleanly after a GUI restart or partial start failure
+- live tracking pairing now consumes each buffered Pi frame only once, emits pairs in chronological order, and calculates FPS/latency from UDP receive timestamps, preventing inflated 300+ FPS and missing-frame counts from stale or out-of-order buffer reprocessing
 - the calibration flow can produce intrinsics and extrinsics JSON outputs
 - synchronized multi-camera observations can be reconstructed into 3D marker positions
 - the host can inspect tracking state, scene snapshots, and calibration-related metrics
@@ -84,6 +95,7 @@ The project direction after the current baseline includes:
 - IK-friendly pose output
 - SteamVR tracker output
 - further improvements to setup, deployment, and hardware documentation
+- intrinsics calibration status reporting that keeps host-side calibration progress visible in the GUI
 
 ## GUI Workflow
 
@@ -101,6 +113,10 @@ Typical flow:
 6. Capture floor or metric data
 7. Generate extrinsics
 8. Inspect tracking and scene snapshots
+
+The tracking page uses the bundled three.js viewer with both `three.module.min.js` and its split `three.core.min.js` dependency. Its initial loading state does not claim a canvas context before WebGL starts, and the retired 2D canvas fallback has been replaced by a clear WebGL-unavailable message if the renderer cannot start.
+When live tracking starts, the GUI temporarily pauses its passive UDP discovery receiver so the tracking pipeline can bind the same UDP port without an address-in-use failure, then resumes discovery after tracking stops or startup fails.
+Tracking start, stop, and error feedback is also mirrored into the Tracking Control status line so failures are visible without leaving the 3D Tracking page.
 
 ## Hardware Direction
 

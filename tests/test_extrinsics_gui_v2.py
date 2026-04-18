@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 from pathlib import Path
 from typing import Any, Dict
+
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -16,9 +19,20 @@ from host.wand_session import CameraTarget
 class _FakeReceiver:
     def __init__(self):
         self._frame_callback = None
+        self.is_running = False
+        self.start_count = 0
+        self.stop_count = 0
 
     def set_frame_callback(self, callback):
         self._frame_callback = callback
+
+    def start(self):
+        self.is_running = True
+        self.start_count += 1
+
+    def stop(self):
+        self.is_running = False
+        self.stop_count += 1
 
     def emit_frame(self, frame):
         if self._frame_callback:
@@ -190,6 +204,33 @@ class _FakeTrackingRuntime:
         }
 
 
+class _FailingTrackingRuntime(_FakeTrackingRuntime):
+    def start(self, calibration_path: str, patterns):
+        raise RuntimeError("tracking bind failed")
+
+
+class _AlreadyRunningStartSession(_FakeSession):
+    def _broadcast(self, targets, fn_name, **kwargs):
+        if fn_name == "start":
+            self.last_broadcast = {
+                "fn_name": fn_name,
+                "camera_ids": [target.camera_id for target in targets],
+                "kwargs": dict(kwargs),
+            }
+            self.broadcast_history.append(dict(self.last_broadcast))
+            return {
+                target.camera_id: {
+                    "request_id": "test",
+                    "camera_id": target.camera_id,
+                    "ack": False,
+                    "error_code": 5,
+                    "error_message": "already_running",
+                }
+                for target in targets
+            }
+        return super()._broadcast(targets, fn_name, **kwargs)
+
+
 def test_intrinsics_host_session_polls_status_immediately_on_start(tmp_path: Path) -> None:
     calls: list[str] = []
 
@@ -359,7 +400,7 @@ def test_gui_pose_and_floor_capture_paths(tmp_path: Path, monkeypatch) -> None:
     )
     assert start_metric["duration_s"] == 2.5
     assert scheduled == {
-        "camera_ids": ["pi-cam-01", "pi-cam-02"],
+        "camera_ids": ["pi-cam-01"],
         "duration_s": 2.5,
         "capture_kind": "wand_metric_capture",
     }
@@ -436,6 +477,7 @@ def test_generate_extrinsics_summary_and_tracking_use_v2_path(tmp_path: Path, mo
     assert generated["generate_extrinsics"]["metric_status"] == "resolved"
     assert generated["generate_extrinsics"]["world_status"] == "resolved"
     assert called["wand_metric_log_path"] == str(wand_log)
+    assert called["wand_face"] == "front_up"
 
     calibration_dir = tmp_path / "calibration"
     calibration_dir.mkdir()
@@ -445,6 +487,159 @@ def test_generate_extrinsics_summary_and_tracking_use_v2_path(tmp_path: Path, mo
     state.start_tracking({"patterns": ["waist"]})
     assert runtime.started_with == (str(calibration_dir), ["waist"])
     assert PROJECT_ROOT is not None
+
+
+def test_tracking_start_pauses_gui_udp_receiver_and_stop_resumes_it(tmp_path: Path) -> None:
+    receiver = _FakeReceiver()
+    receiver.start()
+    runtime = _FakeTrackingRuntime()
+    state = LoutrackGuiState(
+        session=_FakeSession(),
+        receiver=receiver,
+        settings_path=tmp_path / "loutrack_gui_settings.json",
+        tracking_runtime=runtime,
+    )
+    calibration_dir = tmp_path / "calibration"
+    calibration_dir.mkdir()
+    extrinsics_path = calibration_dir / "extrinsics_pose_v2.json"
+    extrinsics_path.write_text("{}", encoding="utf-8")
+    state.latest_extrinsics_path = extrinsics_path
+
+    state.start_tracking({"patterns": ["waist"]})
+
+    assert runtime.running is True
+    assert receiver.is_running is False
+    assert receiver.stop_count == 1
+
+    state.stop_tracking()
+
+    assert runtime.running is False
+    assert receiver.is_running is True
+    assert receiver.start_count == 2
+
+
+def test_tracking_start_disables_pi_preview_for_explicit_camera_ids(tmp_path: Path) -> None:
+    session = _FakeSession()
+    runtime = _FakeTrackingRuntime()
+    state = LoutrackGuiState(
+        session=session,
+        receiver=_FakeReceiver(),
+        settings_path=tmp_path / "loutrack_gui_settings.json",
+        tracking_runtime=runtime,
+    )
+    calibration_dir = tmp_path / "calibration"
+    calibration_dir.mkdir()
+    extrinsics_path = calibration_dir / "extrinsics_pose_v2.json"
+    extrinsics_path.write_text("{}", encoding="utf-8")
+    state.latest_extrinsics_path = extrinsics_path
+
+    response = state.start_tracking({"patterns": ["waist"], "camera_ids": ["pi-cam-02"]})
+
+    assert runtime.started_with == (str(calibration_dir), ["waist"])
+    assert response["camera_ids"] == ["pi-cam-02"]
+    assert response["pi_tracking_optimization"]["camera_ids"] == ["pi-cam-02"]
+    preview_call = next(item for item in session.broadcast_history if item["fn_name"] == "set_preview")
+    start_call = session.broadcast_history[-1]
+    assert preview_call["camera_ids"] == ["pi-cam-02"]
+    assert preview_call["kwargs"] == {
+        "render_enabled": False,
+        "overlays": {"blob": False, "mask": False, "text": False, "charuco": False},
+    }
+    assert start_call["fn_name"] == "start"
+    assert start_call["camera_ids"] == ["pi-cam-02"]
+    assert start_call["kwargs"] == {"mode": "pose_capture"}
+
+
+def test_tracking_start_uses_saved_selection_for_pi_preview_speedup(tmp_path: Path) -> None:
+    session = _FakeSession()
+    state = LoutrackGuiState(
+        session=session,
+        receiver=_FakeReceiver(),
+        settings_path=tmp_path / "loutrack_gui_settings.json",
+        tracking_runtime=_FakeTrackingRuntime(),
+    )
+    calibration_dir = tmp_path / "calibration"
+    calibration_dir.mkdir()
+    extrinsics_path = calibration_dir / "extrinsics_pose_v2.json"
+    extrinsics_path.write_text("{}", encoding="utf-8")
+    state.latest_extrinsics_path = extrinsics_path
+    state.apply_settings_ui({"selected_camera_ids": ["pi-cam-01"]})
+
+    response = state.start_tracking({"patterns": ["waist"]})
+
+    assert response["camera_ids"] == ["pi-cam-01"]
+    assert response["pi_tracking_optimization"]["camera_ids"] == ["pi-cam-01"]
+    assert session.last_broadcast is not None
+    assert session.last_broadcast["fn_name"] == "start"
+    assert session.last_broadcast["camera_ids"] == ["pi-cam-01"]
+
+
+def test_tracking_stop_stops_only_tracking_camera_streams(tmp_path: Path) -> None:
+    session = _FakeSession()
+    state = LoutrackGuiState(
+        session=session,
+        receiver=_FakeReceiver(),
+        settings_path=tmp_path / "loutrack_gui_settings.json",
+        tracking_runtime=_FakeTrackingRuntime(),
+    )
+    calibration_dir = tmp_path / "calibration"
+    calibration_dir.mkdir()
+    extrinsics_path = calibration_dir / "extrinsics_pose_v2.json"
+    extrinsics_path.write_text("{}", encoding="utf-8")
+    state.latest_extrinsics_path = extrinsics_path
+    state.start_tracking({"patterns": ["waist"], "camera_ids": ["pi-cam-02"]})
+
+    response = state.stop_tracking()
+
+    assert response["pi_stream_stop"]["pi-cam-02"]["ack"] is True
+    assert session.last_broadcast is not None
+    assert session.last_broadcast["fn_name"] == "stop"
+    assert session.last_broadcast["camera_ids"] == ["pi-cam-02"]
+
+
+def test_tracking_start_treats_pi_already_running_as_usable_stream(tmp_path: Path) -> None:
+    runtime = _FakeTrackingRuntime()
+    state = LoutrackGuiState(
+        session=_AlreadyRunningStartSession(),
+        receiver=_FakeReceiver(),
+        settings_path=tmp_path / "loutrack_gui_settings.json",
+        tracking_runtime=runtime,
+    )
+    calibration_dir = tmp_path / "calibration"
+    calibration_dir.mkdir()
+    extrinsics_path = calibration_dir / "extrinsics_pose_v2.json"
+    extrinsics_path.write_text("{}", encoding="utf-8")
+    state.latest_extrinsics_path = extrinsics_path
+
+    response = state.start_tracking({"patterns": ["waist"], "camera_ids": ["pi-cam-01"]})
+
+    assert response["ok"] is True
+    assert response["running"] is True
+    assert runtime.running is True
+    assert response["pi_stream_start"]["pi-cam-01"]["error_message"] == "already_running"
+
+
+def test_tracking_start_resumes_gui_udp_receiver_when_runtime_fails(tmp_path: Path) -> None:
+    receiver = _FakeReceiver()
+    receiver.start()
+    state = LoutrackGuiState(
+        session=_FakeSession(),
+        receiver=receiver,
+        settings_path=tmp_path / "loutrack_gui_settings.json",
+        tracking_runtime=_FailingTrackingRuntime(),
+    )
+    calibration_dir = tmp_path / "calibration"
+    calibration_dir.mkdir()
+    extrinsics_path = calibration_dir / "extrinsics_pose_v2.json"
+    extrinsics_path.write_text("{}", encoding="utf-8")
+    state.latest_extrinsics_path = extrinsics_path
+
+    with pytest.raises(RuntimeError, match="tracking bind failed"):
+        state.start_tracking({"patterns": ["waist"]})
+
+    assert receiver.is_running is True
+    assert receiver.stop_count == 1
+    assert receiver.start_count == 2
 
 
 def test_generate_extrinsics_returns_diagnostic_instead_of_raising_for_missing_pose_rows(
@@ -533,7 +728,7 @@ def test_settings_draft_updates_committed_and_returns_validation(tmp_path: Path)
 
     invalid = state.apply_settings_draft({"intrinsics": {"square_length_mm": 0}})
     assert "square_length_mm" in invalid["validation"]["intrinsics"]
-    assert invalid["intrinsics"]["committed"]["square_length_mm"] == 30.0
+    assert invalid["intrinsics"]["committed"]["square_length_mm"] == 60.0
 
     updated = state.apply_settings_draft(
         {
@@ -572,6 +767,30 @@ def test_settings_manual_log_lock_and_reset_to_runtime_hint(tmp_path: Path) -> N
     reset = state.apply_settings_draft({"reset_runtime": ["pose_log_path"]})
     assert reset["extrinsics"]["locks"]["pose_log_path_manual"] is False
     assert reset["extrinsics"]["draft"]["pose_log_path"] == "logs/runtime_pose.jsonl"
+
+
+def test_runtime_hints_do_not_mutate_draft_without_explicit_adopt(tmp_path: Path) -> None:
+    state = LoutrackGuiState(
+        session=_FakeSession(),
+        receiver=_FakeReceiver(),
+        settings_path=tmp_path / "loutrack_gui_settings.json",
+        tracking_runtime=_FakeTrackingRuntime(),
+    )
+    before = state.get_settings()
+
+    state._update_runtime_hints(
+        pose_log_path="logs/runtime_pose.jsonl",
+        wand_metric_log_path="logs/runtime_wand.jsonl",
+    )
+
+    after = state.get_settings()
+    assert after["runtime_hints"]["pose_log_path"] == "logs/runtime_pose.jsonl"
+    assert after["runtime_hints"]["wand_metric_log_path"] == "logs/runtime_wand.jsonl"
+    assert after["extrinsics"]["draft"]["pose_log_path"] == before["extrinsics"]["draft"]["pose_log_path"]
+    assert (
+        after["extrinsics"]["draft"]["wand_metric_log_path"]
+        == before["extrinsics"]["draft"]["wand_metric_log_path"]
+    )
 
 
 def test_get_state_no_longer_reloads_config_from_settings_file(tmp_path: Path) -> None:
@@ -655,6 +874,7 @@ def test_get_settings_does_not_rewrite_existing_settings_file(tmp_path: Path) ->
                 "pair_window_us": 2000,
                 "wand_pair_window_us": 8000,
                 "min_pairs": 8,
+                "wand_face": "front_up",
             },
             "committed": {
                 "intrinsics_path": "calibration",
@@ -664,6 +884,7 @@ def test_get_settings_does_not_rewrite_existing_settings_file(tmp_path: Path) ->
                 "pair_window_us": 2000,
                 "wand_pair_window_us": 8000,
                 "min_pairs": 8,
+                "wand_face": "front_up",
             },
             "locks": {
                 "pose_log_path_manual": False,
@@ -714,9 +935,10 @@ def test_run_command_does_not_persist_selected_camera_ids_from_payload(tmp_path:
 
 
 def test_apply_config_does_not_persist_selected_camera_ids_from_payload(tmp_path: Path) -> None:
+    session = _FakeSession()
     settings_path = tmp_path / "loutrack_gui_settings.json"
     state = LoutrackGuiState(
-        session=_FakeSession(),
+        session=session,
         receiver=_FakeReceiver(),
         settings_path=settings_path,
         tracking_runtime=_FakeTrackingRuntime(),
@@ -728,6 +950,9 @@ def test_apply_config_does_not_persist_selected_camera_ids_from_payload(tmp_path
     payload = json.loads(settings_path.read_text(encoding="utf-8"))
     assert payload["ui"]["selected_camera_ids"] == ["pi-cam-02"]
     assert state.selected_camera_ids == ["pi-cam-02"]
+    assert session.last_broadcast is not None
+    assert session.last_broadcast["camera_ids"] == ["pi-cam-01"]
+    assert all(item["camera_ids"] == ["pi-cam-01"] for item in session.broadcast_history)
 
 
 def test_set_preview_forwards_overlays_and_charuco(tmp_path: Path) -> None:
@@ -754,7 +979,7 @@ def test_set_preview_forwards_overlays_and_charuco(tmp_path: Path) -> None:
     )
     assert session.last_broadcast is not None
     assert session.last_broadcast["fn_name"] == "set_preview"
-    assert session.last_broadcast["camera_ids"] == ["pi-cam-01", "pi-cam-02"]
+    assert session.last_broadcast["camera_ids"] == ["pi-cam-01"]
     kwargs = session.last_broadcast["kwargs"]
     assert kwargs["render_enabled"] is True
     assert kwargs["overlays"] == {"blob": False, "mask": False, "text": True, "charuco": True}
@@ -1099,6 +1324,292 @@ def test_intrinsics_calibration_after_stop_syncs_remote_frames(
     assert called["count"] == 1
 
 
+def test_intrinsics_calibration_restores_host_session_from_saved_settings(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    state = LoutrackGuiState(
+        session=_FakeSession(),
+        receiver=_FakeReceiver(),
+        settings_path=tmp_path / "loutrack_gui_settings.json",
+        tracking_runtime=_FakeTrackingRuntime(),
+    )
+    state.apply_settings_draft(
+        {
+            "intrinsics": {
+                "camera_id": "pi-cam-01",
+                "mjpeg_url": "http://192.168.8.223:8555/mjpeg",
+                "square_length_mm": 60,
+                "marker_length_mm": 45,
+                "squares_x": 6,
+                "squares_y": 8,
+                "min_frames": 5,
+                "cooldown_s": 1.5,
+            }
+        }
+    )
+
+    remote_frame = {
+        "corners": [[[10.0, 20.0]], [[30.0, 40.0]], [[50.0, 60.0]], [[70.0, 80.0]], [[90.0, 100.0]], [[110.0, 120.0]]],
+        "ids": [[0], [1], [2], [3], [4], [5]],
+    }
+    original_broadcast = state.session._broadcast
+
+    def _broadcast_with_remote_frames(targets, fn_name, **kwargs):
+        response = original_broadcast(targets, fn_name, **kwargs)
+        if fn_name == "intrinsics_get_corners":
+            return {
+                target.camera_id: {
+                    "ack": True,
+                    "result": {
+                        **response[target.camera_id]["result"],
+                        "frames": [remote_frame, remote_frame, remote_frame, remote_frame, remote_frame][
+                            int(kwargs.get("start_index", 0) or 0):
+                        ][: int(kwargs.get("max_frames", 8) or 8)],
+                        "count": 5,
+                        "returned_count": len(
+                            [remote_frame, remote_frame, remote_frame, remote_frame, remote_frame][
+                                int(kwargs.get("start_index", 0) or 0):
+                            ][: int(kwargs.get("max_frames", 8) or 8)]
+                        ),
+                        "image_size": [1280, 960],
+                        "phase": "idle",
+                        "frames_captured": 5,
+                    },
+                }
+                for target in targets
+            }
+        if fn_name == "intrinsics_status":
+            return {
+                target.camera_id: {
+                    "ack": True,
+                    "result": {
+                        **response[target.camera_id]["result"],
+                        "phase": "idle",
+                        "frames_captured": 5,
+                    },
+                }
+                for target in targets
+            }
+        return response
+
+    state.session._broadcast = _broadcast_with_remote_frames  # type: ignore[method-assign]
+
+    called = {"count": 0}
+    calibration_started = threading.Event()
+
+    def _fake_run_calibration(self, corners, ids, image_size):
+        called["count"] += 1
+        assert len(corners) == 5
+        assert len(ids) == 5
+        assert image_size == (1280, 960)
+        calibration_started.set()
+
+    monkeypatch.setattr(IntrinsicsHostSession, "_run_calibration", _fake_run_calibration)
+    resp = state.trigger_intrinsics_calibration()
+
+    assert resp["ok"] is True
+    assert calibration_started.wait(timeout=1.0)
+    assert called["count"] == 1
+    assert state._intrinsics_host_session is not None
+
+
+def test_get_intrinsics_status_preserves_host_calibrating_phase_and_result(
+    tmp_path: Path,
+) -> None:
+    state = LoutrackGuiState(
+        session=_FakeSession(),
+        receiver=_FakeReceiver(),
+        settings_path=tmp_path / "loutrack_gui_settings.json",
+        tracking_runtime=_FakeTrackingRuntime(),
+    )
+    state.apply_settings_draft(
+        {
+            "intrinsics": {
+                "camera_id": "pi-cam-01",
+                "square_length_mm": 60,
+                "marker_length_mm": 45,
+                "squares_x": 6,
+                "squares_y": 8,
+                "min_frames": 5,
+                "cooldown_s": 1.5,
+            }
+        }
+    )
+    _ = state.start_intrinsics_capture({})
+    host_session = state._intrinsics_host_session
+    assert host_session is not None
+
+    host_session._phase = "done"
+    host_session._calibration_result = {"camera_id": "pi-cam-01", "rms_error": 0.42}
+    host_session._host_last_error = None
+
+    status = state.get_intrinsics_status()
+
+    assert status["phase"] == "done"
+    assert status["calibration_result"] == {"camera_id": "pi-cam-01", "rms_error": 0.42}
+    assert status["frames_captured"] >= 0
+
+
+def test_intrinsics_host_session_remote_payload_does_not_overwrite_host_owned_phase_or_error(tmp_path: Path) -> None:
+    session = IntrinsicsHostSession(
+        IntrinsicsHostSessionConfig(
+            camera_id="pi-cam-01",
+            mjpeg_url="",
+            square_length_mm=60.0,
+            marker_length_mm=45.0,
+            squares_x=6,
+            squares_y=8,
+            output_dir=tmp_path,
+        ),
+        lambda fn_name, **kwargs: {},
+    )
+    session._phase = "calibrating"
+    session._host_last_error = "host_failed"
+    session._host_error_sticky = True
+
+    session._apply_remote_payload(
+        {
+            "frames": [],
+            "count": 0,
+            "image_size": [1280, 960],
+            "phase": "capturing",
+            "last_error": "remote_failed",
+            "frames_rejected_cooldown": 4,
+            "frames_rejected_spatial": 5,
+            "frames_rejected_detection": 6,
+            "grid_coverage": [[1, 0, 0], [0, 0, 0], [0, 0, 0]],
+        }
+    )
+
+    status = session.get_status()
+
+    assert status["phase"] == "calibrating"
+    assert status["last_error"] == "host_failed"
+    assert status["frames_rejected_cooldown"] == 4
+    assert status["frames_rejected_spatial"] == 5
+    assert status["frames_rejected_detection"] == 6
+    assert status["grid_coverage"] == [[1, 0, 0], [0, 0, 0], [0, 0, 0]]
+
+
+def test_get_intrinsics_status_merges_remote_counters_without_overwriting_host_phase(tmp_path: Path) -> None:
+    session = _FakeSession()
+    state = LoutrackGuiState(
+        session=session,
+        receiver=_FakeReceiver(),
+        settings_path=tmp_path / "loutrack_gui_settings.json",
+        tracking_runtime=_FakeTrackingRuntime(),
+    )
+    state.apply_settings_draft(
+        {
+            "intrinsics": {
+                "camera_id": "pi-cam-01",
+                "square_length_mm": 60,
+                "marker_length_mm": 45,
+                "squares_x": 6,
+                "squares_y": 8,
+                "min_frames": 5,
+                "cooldown_s": 1.5,
+            }
+        }
+    )
+    _ = state.start_intrinsics_capture({})
+    host_session = state._intrinsics_host_session
+    assert host_session is not None
+    host_session._phase = "calibrating"
+    session.intrinsics_status = {
+        **session.intrinsics_status,
+        "phase": "capturing",
+        "frames_captured": 12,
+        "frames_rejected_cooldown": 7,
+    }
+
+    status = state.get_intrinsics_status()
+
+    assert status["phase"] == "calibrating"
+    assert status["frames_captured"] == 12
+    assert status["frames_rejected_cooldown"] == 7
+
+
+def test_get_intrinsics_status_restores_session_from_saved_settings(tmp_path: Path) -> None:
+    session = _FakeSession()
+    state = LoutrackGuiState(
+        session=session,
+        receiver=_FakeReceiver(),
+        settings_path=tmp_path / "loutrack_gui_settings.json",
+        tracking_runtime=_FakeTrackingRuntime(),
+    )
+    state.apply_settings_draft(
+        {
+            "intrinsics": {
+                "camera_id": "pi-cam-01",
+                "mjpeg_url": "http://192.168.8.223:8555/mjpeg",
+                "square_length_mm": 60,
+                "marker_length_mm": 45,
+                "squares_x": 6,
+                "squares_y": 8,
+                "min_frames": 5,
+                "cooldown_s": 1.5,
+            }
+        }
+    )
+    session.intrinsics_status = {
+        **session.intrinsics_status,
+        "phase": "idle",
+        "frames_captured": 12,
+    }
+
+    status = state.get_intrinsics_status()
+
+    assert status["camera_id"] == "pi-cam-01"
+    assert status["frames_captured"] == 12
+    assert state._intrinsics_host_session is not None
+
+
+def test_intrinsics_calibration_reports_remote_sync_failure_when_remote_frames_exist(tmp_path: Path) -> None:
+    def _broadcast(fn_name: str, **kwargs: Any) -> Dict[str, Any]:
+        _ = kwargs
+        if fn_name == "intrinsics_get_corners":
+            raise RuntimeError("missing transport for intrinsics_get_corners")
+        if fn_name == "intrinsics_status":
+            return {"frames_captured": 42}
+        raise AssertionError(f"unexpected command: {fn_name}")
+
+    session = IntrinsicsHostSession(
+        IntrinsicsHostSessionConfig(
+            camera_id="pi-cam-01",
+            mjpeg_url="",
+            square_length_mm=60.0,
+            marker_length_mm=45.0,
+            squares_x=6,
+            squares_y=8,
+            min_frames=25,
+            output_dir=tmp_path,
+        ),
+        _broadcast,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Failed to sync remote intrinsics frames before calibration: missing transport for intrinsics_get_corners \\(remote reports 42\\)",
+    ):
+        session.trigger_calibration()
+
+
+def test_run_command_rejects_invalid_calibration_settings(tmp_path: Path) -> None:
+    state = LoutrackGuiState(
+        session=_FakeSession(),
+        receiver=_FakeReceiver(),
+        settings_path=tmp_path / "loutrack_gui_settings.json",
+        tracking_runtime=_FakeTrackingRuntime(),
+    )
+    invalid = state.apply_settings_draft({"calibration": {"exposure_us": 0}})
+    assert "exposure_us" in invalid["validation"]["calibration"]
+
+    with pytest.raises(ValueError, match="calibration settings invalid"):
+        state.run_command({"command": "start_pose_capture", "camera_ids": ["pi-cam-01"]})
+
+
 def test_resolve_static_asset_prefers_repo_root_static(tmp_path: Path, monkeypatch) -> None:
     repo_static = tmp_path / "static"
     module_static = tmp_path / "src" / "static"
@@ -1113,3 +1624,35 @@ def test_resolve_static_asset_prefers_repo_root_static(tmp_path: Path, monkeypat
     monkeypatch.setattr("host.loutrack_gui.STATIC_DIR_CANDIDATES", (repo_static, module_static))
     resolved = _resolve_static_asset("vendor/three.module.min.js")
     assert resolved == repo_asset
+
+
+def test_tracking_viewer_uses_webgl_without_canvas_fallback() -> None:
+    assert "createTrackingPlaceholderViewer" in HTML_PAGE
+    assert "createCanvasTrackingViewer" not in HTML_PAGE
+    assert "FLOOR WAND ORIGIN" not in HTML_PAGE
+    assert "createTextSprite(cameraId" in HTML_PAGE
+    assert "scene.background = new THREE.Color(0x020617)" in HTML_PAGE
+    assert "camera.up.set(0, 0, 1)" in HTML_PAGE
+    assert "new THREE.Spherical" not in HTML_PAGE
+    assert "floor/metric wand origin" not in HTML_PAGE
+    assert "triangulated blobs" in HTML_PAGE
+    assert "0xfb923c, size: 0.065" in HTML_PAGE
+    assert "camera_ids: selectedCameraIds()" in HTML_PAGE
+    assert 'return createTrackingPlaceholderViewer();' in HTML_PAGE
+    assert "Falling back to built-in tracking viewer" not in HTML_PAGE
+    assert "Using built-in tracking viewer" not in HTML_PAGE
+    assert "3D viewer unavailable: WebGL renderer could not start." in HTML_PAGE
+
+
+def test_tracking_page_surfaces_start_stop_status_messages() -> None:
+    assert 'activePage === "tracking" && elements.trackingLastUpdate' in HTML_PAGE
+    assert "elements.trackingLastUpdate.textContent = msg" in HTML_PAGE
+
+
+def test_bundled_three_split_dependency_is_available() -> None:
+    module_asset = _resolve_static_asset("vendor/three.module.min.js")
+    core_asset = _resolve_static_asset("vendor/three.core.min.js")
+    assert module_asset is not None
+    assert core_asset is not None
+    assert 'from"./three.core.min.js"' in module_asset.read_text(encoding="utf-8")
+    assert 'REVISION' in core_asset.read_text(encoding="utf-8")
