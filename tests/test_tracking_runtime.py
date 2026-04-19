@@ -233,12 +233,16 @@ def test_tracking_runtime_updates_scene_even_without_valid_rigid_body(monkeypatc
 
     runtime = TrackingRuntime()
     runtime.start(calibration_path="calibration", patterns=["waist"])
+    initial_sequence = runtime.scene_snapshot()["sequence"]
     runtime._on_pose({})
 
     scene = runtime.scene_snapshot()
+    waited_scene = runtime.wait_for_scene_update(initial_sequence, timeout=0.01)
     assert scene["tracking"]["running"] is True
     assert scene["rigid_bodies"] == []
     assert scene["raw_points"] == [[4.0, 5.0, 6.0]]
+    assert scene["sequence"] > initial_sequence
+    assert waited_scene["sequence"] == scene["sequence"]
     assert scene["coordinate_origin"] == "reference_camera"
     assert scene["coordinate_origin_source"] == "extrinsics_pose_reference"
 

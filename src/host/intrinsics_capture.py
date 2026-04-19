@@ -1,8 +1,9 @@
 """
-IntrinsicsCapture: MJPEG-based Charuco intrinsics calibration for GUI workflow.
+IntrinsicsCapture: MJPEG-based Charuco intrinsics calibration.
 
-Connects to a Pi's MJPEG stream, detects Charuco corners with 3-layer diversity
-filtering, and runs calibration in the background.
+This module is kept as the alternate host-side intrinsics path. The production
+GUI now prefers IntrinsicsHostSession, but tests and ad hoc workflows still use
+this implementation directly.
 """
 from __future__ import annotations
 

@@ -327,6 +327,7 @@ class SyntheticFrameGenerator:
                 frame_index=frame_index,
                 blobs=blobs,
                 received_at=0.0,
+                host_received_at_us=timestamp_us,
             )
 
         paired = PairedFrames(timestamp=timestamp_us, frames=frames_dict, timestamp_range_us=0)
@@ -442,6 +443,7 @@ def run_closed_loop(
                 frame_index=i,
                 blobs=blobs,
                 received_at=0.0,
+                host_received_at_us=timestamp_us,
             )
             frames_dict[cam_id] = frame
             frame_logger.log_frame(frame.to_dict())

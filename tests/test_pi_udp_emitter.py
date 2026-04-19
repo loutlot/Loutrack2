@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.pi.service.capture_runtime import DummyBackend, DummyBackendConfig, UDPFrameEmitter
+from src.pi.service import capture_runtime
 
 
 def test_udp_frame_emitter_sends_three_frames() -> None:
@@ -56,7 +57,16 @@ def test_udp_frame_emitter_sends_three_frames() -> None:
 
     assert len(received) == 3
 
-    required_keys = {"camera_id", "timestamp", "timestamp_source", "frame_index", "blobs", "capture_mode"}
+    required_keys = {
+        "camera_id",
+        "timestamp",
+        "timestamp_source",
+        "frame_index",
+        "blobs",
+        "capture_mode",
+        "capture_to_process_ms",
+        "capture_to_send_ms",
+    }
     frame_indices: list[int] = []
     for msg in received:
         assert set(msg.keys()) == required_keys
@@ -67,6 +77,9 @@ def test_udp_frame_emitter_sends_three_frames() -> None:
         assert msg["capture_mode"] == "capture"
         assert isinstance(msg["frame_index"], int)
         frame_indices.append(msg["frame_index"])
+        assert isinstance(msg["capture_to_process_ms"], float)
+        assert isinstance(msg["capture_to_send_ms"], float)
+        assert msg["capture_to_send_ms"] >= msg["capture_to_process_ms"]
         assert isinstance(msg["blobs"], list)
 
     assert frame_indices[0] < frame_indices[1] < frame_indices[2]
@@ -101,7 +114,57 @@ def test_udp_frame_emitter_pose_capture_keeps_full_blobs() -> None:
     assert isinstance(msg_obj, dict)
     msg = cast(dict[str, object], msg_obj)
     assert msg["capture_mode"] == "pose_capture"
+    assert "frame_index" not in msg
+    assert msg["timestamp_source"] == "capture_dequeue"
+    assert "capture_to_process_ms" in msg
+    assert "capture_to_send_ms" in msg
     assert isinstance(msg["blobs"], list)
     assert int(cast(object, msg["blob_count"])) == len(cast(list[object], msg["blobs"]))
     assert len(cast(list[object], msg["blobs"])) >= 1
     assert "quality" in msg
+
+
+def test_udp_frame_emitter_includes_sensor_timestamp_when_available() -> None:
+    class _SensorBackend:
+        def next_captured_frame(self):
+            import numpy as np
+            import cv2
+
+            image = np.zeros((60, 80), dtype=np.uint8)
+            cv2.circle(image, (20, 20), 3, 255, -1)
+            return capture_runtime.CapturedFrame(
+                image=image,
+                timestamp_us=1_700_000_000_000_000,
+                timestamp_source="sensor_metadata",
+                sensor_timestamp_ns=123_456_789,
+            )
+
+    recv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    recv_sock.bind(("127.0.0.1", 0))
+    recv_sock.settimeout(1.0)
+    _host, port = cast(tuple[str, int], recv_sock.getsockname())
+
+    emitter = UDPFrameEmitter(
+        camera_id="pi-cam-test",
+        udp_host="127.0.0.1",
+        udp_port=int(port),
+        target_fps=200.0,
+        backend=cast(object, _SensorBackend()),
+        threshold=200,
+        max_frames=1,
+        capture_mode="pose_capture",
+    )
+
+    try:
+        emitter.start()
+        data, _addr = cast(tuple[bytes, tuple[str, int]], recv_sock.recvfrom(65536))
+    finally:
+        emitter.stop()
+        recv_sock.close()
+
+    msg_obj = cast(object, json.loads(data.decode("utf-8")))
+    assert isinstance(msg_obj, dict)
+    msg = cast(dict[str, object], msg_obj)
+    assert msg["timestamp_source"] == "sensor_metadata"
+    assert msg["sensor_timestamp_ns"] == 123_456_789
+    assert "frame_index" not in msg

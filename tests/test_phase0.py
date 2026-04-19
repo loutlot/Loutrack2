@@ -148,6 +148,7 @@ def test_end_to_end(tmp_path) -> None:
         {
             "camera_id": "pi-cam-01",
             "timestamp": 1708594800000000 + i * 16667,
+            "host_received_at_us": 1708594800005000 + i * 16667,
             "frame_index": i,
             "blobs": [{"x": float(100 + i), "y": 200.0, "area": 50.0}]
         }
@@ -175,6 +176,8 @@ def test_end_to_end(tmp_path) -> None:
     for original, entry in zip(test_frames, replayed_frames):
         assert entry.data["camera_id"] == original["camera_id"]
         assert entry.data["timestamp"] == original["timestamp"]
+        assert entry.data["host_received_at_us"] == original["host_received_at_us"]
+        assert entry.received_at
         assert entry.data["frame_index"] == original["frame_index"]
         assert entry.blobs == original["blobs"]
     

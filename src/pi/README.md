@@ -7,7 +7,7 @@
 - デフォルトバックエンド: Raspberry Pi では `picamera2`、それ以外では `dummy`
 - デフォルトキャプチャ解像度: `2304x1296`
 - 起動時のログはリスンアドレス、バックエンド、プレビュー状態、キャプチャ開始/停止ステータスを出力します
-- UDP ペイロードは既存キーを保持し、`timestamp_source` を追加します
+- UDP ペイロードは `timestamp_source` と capture-to-process/send 診断値を含みます。`pose_capture` では同期キーとして信用しない `frame_index` を送信しません
 
 正規モジュール:
 
@@ -154,6 +154,7 @@ sudo ./src/pi/manual_ntp_sync.sh
 
 - `timestamp_source="sensor_metadata"`: `picamera2` のメタデータがセンサータイムスタンプを提供し、`capture_runtime.py` がエポック時間に変換します
 - `timestamp_source="capture_dequeue"`: メタデータが無いまたは無効な場合、フレームキューからデキューした直後のクロック読み取りをフォールバックとして使用します
+- `capture_to_process_ms` / `capture_to_send_ms`: Pi 内部で古いフレームが詰まっていないかをHost側で診断するための経過時間です
 
 PTP は Raspberry Pi 実行時の OS レベルの前提条件です。
 

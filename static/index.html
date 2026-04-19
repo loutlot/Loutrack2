@@ -1364,6 +1364,8 @@
       const rigidsContainer = new THREE.Group();
       scene.add(rigidsContainer);
       const rigidHelpers = new Map();
+      const markerGeometry = new THREE.SphereGeometry(0.011, 8, 8);
+      const markerMaterial = new THREE.MeshBasicMaterial({ color: 0xffc107 });
 
       function animate() {
         updateCameraPosition();
@@ -1455,9 +1457,9 @@
             );
             const markerParent = new THREE.Group();
             group.add(axis);
-            group.add(trailLine);
-            group.add(markerParent);
             rigidsContainer.add(group);
+            scene.add(trailLine);
+            scene.add(markerParent);
             entry = { group, axis, trailLine, markerParent };
             rigidHelpers.set(name, entry);
           }
@@ -1483,21 +1485,24 @@
             trailLine.geometry.attributes.position.needsUpdate = true;
             trailLine.visible = false;
           }
-          while (markerParent.children.length) {
-            markerParent.remove(markerParent.children[0]);
+          const markers = body.markers_world || [];
+          while (markerParent.children.length < markers.length) {
+            markerParent.add(new THREE.Mesh(markerGeometry, markerMaterial));
           }
-          (body.markers_world || []).forEach((marker) => {
-            const sphere = new THREE.Mesh(
-              new THREE.SphereGeometry(0.011, 8, 8),
-              new THREE.MeshBasicMaterial({ color: 0xffc107 })
-            );
+          while (markerParent.children.length > markers.length) {
+            markerParent.remove(markerParent.children[markerParent.children.length - 1]);
+          }
+          markers.forEach((marker, markerIndex) => {
+            const sphere = markerParent.children[markerIndex];
             sphere.position.set(marker[0], marker[1], marker[2]);
-            markerParent.add(sphere);
+            sphere.visible = true;
           });
         });
         rigidHelpers.forEach((entry, id) => {
           if (!seen.has(id)) {
             rigidsContainer.remove(entry.group);
+            scene.remove(entry.trailLine);
+            scene.remove(entry.markerParent);
             rigidHelpers.delete(id);
           }
         });
@@ -1551,6 +1556,9 @@
     let activePage = "calibration";
     let loadStateInFlight = false;
     let trackingSceneIntervalId = null;
+    let trackingSceneStream = null;
+    let trackingPanelLastRenderMs = 0;
+    let latestTrackingStatus = {};
     let settingsSnapshot = null;
     let persistedSelectedCameraIds = [];
     let initialUiState = { active_page: "calibration", active_view: "cameras" };
@@ -2343,16 +2351,47 @@
         const resp = await fetch("/api/tracking/scene");
         if (!resp.ok) return;
         const scene = await resp.json();
-        trackingViewer.update(scene, scene.empty_state || "");
+        applyTrackingScene(scene);
       } catch (_) {}
     }
 
+    function applyTrackingScene(scene) {
+      trackingViewer.update(scene, scene.empty_state || "");
+      const nowMs = performance.now();
+      if (activePage === "tracking" && nowMs - trackingPanelLastRenderMs > 250) {
+        trackingPanelLastRenderMs = nowMs;
+        if (elements.trackingScene) {
+          elements.trackingScene.textContent = JSON.stringify(scene, null, 2);
+        }
+        renderTrackingFooter(latestTrackingStatus, scene);
+        renderRigidHealth(scene);
+      }
+    }
+
     function startTrackingScenePoller() {
-      if (trackingSceneIntervalId) return;
+      if (trackingSceneIntervalId || trackingSceneStream) return;
+      if ("EventSource" in window) {
+        trackingSceneStream = new EventSource("/api/tracking/stream");
+        trackingSceneStream.addEventListener("scene", (event) => {
+          try {
+            applyTrackingScene(JSON.parse(event.data));
+          } catch (_) {}
+        });
+        trackingSceneStream.onerror = () => {
+          if (elements.trackingLastUpdate && activePage === "tracking") {
+            elements.trackingLastUpdate.textContent = "Reconnecting scene stream...";
+          }
+        };
+        return;
+      }
       trackingSceneIntervalId = setInterval(loadTrackingSceneFast, 100);
     }
 
     function stopTrackingScenePoller() {
+      if (trackingSceneStream) {
+        trackingSceneStream.close();
+        trackingSceneStream = null;
+      }
       if (trackingSceneIntervalId) {
         clearInterval(trackingSceneIntervalId);
         trackingSceneIntervalId = null;
@@ -2369,6 +2408,7 @@
       }
       const status = await statusResponse.json();
       const scene = await sceneResponse.json();
+      latestTrackingStatus = status;
       elements.trackingStart.disabled = !status.start_allowed;
       elements.trackingExtrinsicsPath.textContent = `Extrinsics: ${status.latest_extrinsics_path || "(none)"}`;
       elements.trackingStatus.textContent = JSON.stringify(status, null, 2);

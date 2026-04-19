@@ -4,7 +4,7 @@ UDP receiver module for collecting frame messages from Raspberry Pi cameras.
 Provides functionality to:
 - Receive UDP JSON messages from multiple cameras
 - Buffer frames per camera with timestamp-based ordering
-- Pair frames across cameras using timestamp (primary) and frame_index (secondary)
+- Pair frames across cameras using timestamp (primary) and optional frame_index fallback
 - Integrate with logger and metrics collectors
 """
 
@@ -23,17 +23,33 @@ class Frame:
     """Received frame data with metadata."""
     camera_id: str
     timestamp: int  # microseconds
-    frame_index: int
+    frame_index: Optional[int]
     blobs: List[Dict[str, float]]
     received_at: float  # system time in seconds
+    host_received_at_us: int
+    timestamp_source: Optional[str] = None
+    sensor_timestamp_ns: Optional[int] = None
+    capture_to_process_ms: Optional[float] = None
+    capture_to_send_ms: Optional[float] = None
     
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        payload: Dict[str, Any] = {
             "camera_id": self.camera_id,
             "timestamp": self.timestamp,
-            "frame_index": self.frame_index,
+            "host_received_at_us": self.host_received_at_us,
             "blobs": self.blobs
         }
+        if self.frame_index is not None:
+            payload["frame_index"] = self.frame_index
+        if self.timestamp_source is not None:
+            payload["timestamp_source"] = self.timestamp_source
+        if self.sensor_timestamp_ns is not None:
+            payload["sensor_timestamp_ns"] = self.sensor_timestamp_ns
+        if self.capture_to_process_ms is not None:
+            payload["capture_to_process_ms"] = self.capture_to_process_ms
+        if self.capture_to_send_ms is not None:
+            payload["capture_to_send_ms"] = self.capture_to_send_ms
+        return payload
 
 
 @dataclass
@@ -173,7 +189,7 @@ class FramePairer:
     Pairs frames across multiple cameras using timestamp.
     
     Uses timestamp as primary pairing key with configurable tolerance,
-    falling back to frame_index for cameras with timestamp issues.
+    optionally falling back to frame_index for legacy capture flows.
     """
     
     def __init__(
@@ -194,10 +210,12 @@ class FramePairer:
         self.min_cameras = min_cameras
         self.frame_index_fallback = frame_index_fallback
         self._emitted_frame_keys: set[tuple[str, int, int]] = set()
+        self._timestamp_unmatched_frames = 0
+        self._frame_index_fallback_pairs = 0
 
     @staticmethod
     def _frame_key(frame: Frame) -> tuple[str, int, int]:
-        return (frame.camera_id, int(frame.frame_index), int(frame.timestamp))
+        return (frame.camera_id, int(frame.timestamp), int(frame.host_received_at_us))
 
     def _prune_emitted_keys(self, buffer: FrameBuffer, camera_ids: List[str]) -> None:
         live_keys: set[tuple[str, int, int]] = set()
@@ -267,21 +285,29 @@ class FramePairer:
                     and self._frame_key(f) not in used_frame_keys[cam_id]
                 ]
                 
-                if not candidates and self.frame_index_fallback:
+                matched_by_frame_index = False
+                if not candidates:
+                    self._timestamp_unmatched_frames += 1
+
+                if not candidates and self.frame_index_fallback and ref_frame.frame_index is not None:
                     # Fallback to frame_index matching
                     target_index = ref_frame.frame_index
                     all_frames = buffer.get_all_frames(cam_id)
                     candidates = [
                         f for f in all_frames
-                        if f.frame_index == target_index
+                        if f.frame_index is not None
+                        and f.frame_index == target_index
                         and self._frame_key(f) not in self._emitted_frame_keys
                         and self._frame_key(f) not in used_frame_keys[cam_id]
                     ]
+                    matched_by_frame_index = bool(candidates)
                 
                 if candidates:
                     best_match = candidates[0]
                     pair.frames[cam_id] = best_match
                     used_frame_keys[cam_id].add(self._frame_key(best_match))
+                    if matched_by_frame_index:
+                        self._frame_index_fallback_pairs += 1
             
             # Only return pairs with enough cameras
             if pair.frame_count >= self.min_cameras:
@@ -295,6 +321,12 @@ class FramePairer:
                     used_frame_keys[camera_id].add(frame_key)
         
         return paired
+
+    def get_stats(self) -> Dict[str, int]:
+        return {
+            "timestamp_unmatched_frames": self._timestamp_unmatched_frames,
+            "frame_index_fallback_pairs": self._frame_index_fallback_pairs,
+        }
 
 
 # Try to use orjson for 5-10x faster JSON parsing; fall back to stdlib json.
@@ -409,18 +441,27 @@ class UDPReceiver:
                     continue
                 
                 # Validate required fields
-                required = ['camera_id', 'timestamp', 'frame_index', 'blobs']
+                required = ['camera_id', 'timestamp', 'blobs']
                 if not all(k in msg for k in required):
                     self._errors += 1
                     continue
+
+                host_received_at = time.time()
+                host_received_at_us = int(host_received_at * 1_000_000)
+                frame_index = msg.get("frame_index")
                 
                 # Create Frame object
                 frame = Frame(
                     camera_id=msg['camera_id'],
                     timestamp=int(msg['timestamp']),
-                    frame_index=int(msg['frame_index']),
+                    frame_index=int(frame_index) if frame_index is not None else None,
                     blobs=msg['blobs'],
-                    received_at=time.time()
+                    received_at=host_received_at,
+                    host_received_at_us=host_received_at_us,
+                    timestamp_source=str(msg["timestamp_source"]) if msg.get("timestamp_source") is not None else None,
+                    sensor_timestamp_ns=int(msg["sensor_timestamp_ns"]) if msg.get("sensor_timestamp_ns") is not None else None,
+                    capture_to_process_ms=float(msg["capture_to_process_ms"]) if msg.get("capture_to_process_ms") is not None else None,
+                    capture_to_send_ms=float(msg["capture_to_send_ms"]) if msg.get("capture_to_send_ms") is not None else None,
                 )
                 
                 # Record camera address
@@ -476,7 +517,9 @@ class FrameProcessor:
         udp_port: int = 5000,
         buffer_size: int = 300,
         timestamp_tolerance_us: int = 5000,
-        min_cameras_for_pair: int = 2
+        min_cameras_for_pair: int = 2,
+        pair_interval_s: float = 0.0,
+        frame_index_fallback: bool = True,
     ):
         """
         Initialize frame processor.
@@ -486,17 +529,21 @@ class FrameProcessor:
             buffer_size: Frame buffer size per camera
             timestamp_tolerance_us: Timestamp tolerance for pairing
             min_cameras_for_pair: Minimum cameras for valid pair
+            pair_interval_s: Minimum seconds between pairing passes. Defaults
+                to 0 so live tracking emits newly completed pairs immediately.
+            frame_index_fallback: Whether to use legacy frame_index fallback.
         """
         self.buffer = FrameBuffer(buffer_size=buffer_size)
         self.pairer = FramePairer(
             timestamp_tolerance_us=timestamp_tolerance_us,
-            min_cameras=min_cameras_for_pair
+            min_cameras=min_cameras_for_pair,
+            frame_index_fallback=frame_index_fallback,
         )
         self.receiver = UDPReceiver(port=udp_port)
         
         self._paired_callback: Optional[Callable[[PairedFrames], None]] = None
         self._last_pair_time = 0.0
-        self._pair_interval = 0.016  # ~60fps
+        self._pair_interval = max(0.0, float(pair_interval_s))
     
     def set_paired_callback(self, callback: Callable[[PairedFrames], None]) -> None:
         """Set callback for paired frames."""
@@ -517,7 +564,7 @@ class FrameProcessor:
         
         # Periodically try to pair frames
         now = time.time()
-        if now - self._last_pair_time >= self._pair_interval:
+        if self._pair_interval == 0.0 or now - self._last_pair_time >= self._pair_interval:
             self._last_pair_time = now
             self._process_pairs()
     
@@ -539,4 +586,5 @@ class FrameProcessor:
             "buffer_sizes": {
                 cam: self.buffer.get_buffer_size(cam) for cam in cam_ids
             },
+            "pairer": self.pairer.get_stats(),
         }

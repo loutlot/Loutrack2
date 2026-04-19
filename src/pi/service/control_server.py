@@ -8,7 +8,6 @@ if _SERVICE_DIR not in _sys.path:
 del _os, _sys
 
 import json
-import math
 import os
 import re
 import socket
@@ -22,6 +21,7 @@ import cv2
 import numpy as np
 
 import capture_runtime as _capture_runtime_mod
+from control_manifest import MVP_SUPPORTED_COMMANDS, MVP_SUPPORTED_COMMAND_SET, SCHEMA_COMMAND_SET
 
 from capture_runtime import (
     ControlServerConfig,
@@ -53,8 +53,6 @@ from capture_runtime import (
     # Protocol constants
     MAX_LINE_BYTES,
     LINE_TIMEOUT_SECONDS,
-    SCHEMA_COMMANDS,
-    MVP_SUPPORTED_COMMANDS,
     # Error codes
     ERROR_INVALID_JSON,
     ERROR_INVALID_REQUEST,
@@ -587,7 +585,7 @@ class ControlServer:
 
         cmd = cmd_obj
 
-        if cmd not in SCHEMA_COMMANDS:
+        if cmd not in SCHEMA_COMMAND_SET:
             return self._error_response(
                 request_id=request_id,
                 request_camera_id=request_camera_id,
@@ -595,7 +593,7 @@ class ControlServer:
                 error_message=f"invalid_request: cmd_not_in_schema ({cmd})",
             )
 
-        if cmd not in MVP_SUPPORTED_COMMANDS:
+        if cmd not in MVP_SUPPORTED_COMMAND_SET:
             return self._error_response(
                 request_id=request_id,
                 request_camera_id=request_camera_id,
@@ -1651,65 +1649,6 @@ class ControlServer:
         self._mask_ratio = 0.0
         self._mask_warning = None
 
-    def _build_static_mask(
-        self,
-        backend: FrameBackend,
-        frames: int,
-        threshold: int,
-        hit_ratio: float,
-        min_area: int,
-        dilate: int,
-        deadline_monotonic: float | None = None,
-    ) -> tuple[np.ndarray, int]:
-        hit_counts: np.ndarray | None = None
-        self._log(f"mask init frame loop begin frames={frames}")
-        for frame_index in range(frames):
-            if deadline_monotonic is not None and time.perf_counter() > deadline_monotonic:
-                raise TimeoutError("mask_init_timed_out")
-            self._log(f"mask init frame {frame_index + 1}/{frames} capture begin")
-            frame = backend.capture_array()
-            self._log(
-                "mask init frame "
-                f"{frame_index + 1}/{frames} capture ok shape={getattr(frame, 'shape', None)}"
-            )
-            gray = (
-                cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                if frame.ndim == 3
-                else frame
-            )
-            if hit_counts is None:
-                hit_counts = np.zeros(gray.shape, dtype=np.uint16)
-                self._log(
-                    "mask init accumulator allocated "
-                    f"shape={gray.shape} dtype={hit_counts.dtype}"
-                )
-            hit_counts += (gray > threshold).astype(np.uint16)
-            self._log(f"mask init frame {frame_index + 1}/{frames} accumulated")
-
-        assert hit_counts is not None
-        self._log("mask init postprocess begin")
-        required = max(1, math.ceil(hit_ratio * frames))
-        self._log(f"mask init postprocess required_hits={required}")
-        mask_uint8 = (hit_counts >= required).astype(np.uint8) * 255
-
-        if min_area > 0:
-            contours_info = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            contours = contours_info[0] if len(contours_info) == 2 else contours_info[1]
-            self._log(f"mask init postprocess contours={len(contours)}")
-            for contour in contours:
-                if cv2.contourArea(contour) < min_area:
-                    cv2.drawContours(mask_uint8, [contour], -1, 0, thickness=-1)
-
-        if dilate > 0:
-            kernel_size = max(1, dilate) * 2 + 1
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
-            mask_uint8 = cv2.dilate(mask_uint8, kernel)
-            self._log(f"mask init postprocess dilate kernel={kernel_size}")
-
-        mask = mask_uint8.astype(bool)
-        self._log(f"mask init postprocess complete pixels={int(np.count_nonzero(mask))}")
-        return mask, int(np.count_nonzero(mask))
-
     def _apply_backend_settings(self, backend: FrameBackend) -> None:
         if self._desired_exposure_us is not None:
             backend.set_exposure_us(int(self._desired_exposure_us))
@@ -1936,7 +1875,7 @@ class ControlServer:
                 "stream_active": False,
             }
         )
-        diagnostics["supported_commands"] = sorted(MVP_SUPPORTED_COMMANDS)
+        diagnostics["supported_commands"] = list(MVP_SUPPORTED_COMMANDS)
         return self._ok_response(request_id, request_camera_id, result=diagnostics)
 
     def _get_clock_sync_diagnostics(self) -> dict[str, object]:

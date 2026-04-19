@@ -4,7 +4,7 @@
   "title": "Pi to Host Frame Message",
   "description": "Schema for frame messages sent from Raspberry Pi to Host via UDP/JSON",
   "type": "object",
-  "required": ["camera_id", "timestamp", "frame_index", "blobs"],
+  "required": ["camera_id", "timestamp", "blobs"],
   "properties": {
     "camera_id": {
       "type": "string",
@@ -21,6 +21,26 @@
       "type": "string",
       "enum": ["sensor_metadata", "capture_dequeue"],
       "description": "Source used to derive the public timestamp"
+    },
+    "sensor_timestamp_ns": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Raw sensor timestamp from camera metadata when available"
+    },
+    "host_received_at_us": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Host-side UDP receive timestamp in Unix epoch microseconds, added by the host receiver"
+    },
+    "capture_to_process_ms": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Pi-side elapsed time from captured frame handoff to blob processing completion"
+    },
+    "capture_to_send_ms": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Pi-side elapsed time from captured frame handoff to UDP payload send"
     },
     "frame_index": {
       "type": "integer",

@@ -20,7 +20,10 @@ SyncEvaluator = _mod.SyncEvaluator
 @dataclass
 class _Frame:
     timestamp: int
-    frame_index: int
+    frame_index: int | None = None
+    received_at: float | None = None
+    timestamp_source: str | None = None
+    capture_to_send_ms: float | None = None
 
 
 @dataclass
@@ -35,8 +38,20 @@ def test_sync_evaluator_basic() -> None:
     p1 = _Pair(
         timestamp=1_000_000,
         frames={
-            "cam_a": _Frame(timestamp=1_000_000, frame_index=10),
-            "cam_b": _Frame(timestamp=1_001_000, frame_index=10),
+            "cam_a": _Frame(
+                timestamp=1_000_000,
+                frame_index=10,
+                received_at=1.010,
+                timestamp_source="sensor_metadata",
+                capture_to_send_ms=3.0,
+            ),
+            "cam_b": _Frame(
+                timestamp=1_001_000,
+                frame_index=10,
+                received_at=1.011,
+                timestamp_source="sensor_metadata",
+                capture_to_send_ms=4.0,
+            ),
         },
     )
     p2 = _Pair(
@@ -56,6 +71,9 @@ def test_sync_evaluator_basic() -> None:
     assert "window_sweep" in status
     assert "camera_offsets" in status
     assert status["missing_behavior"]["total_missing_frames"] >= 1
+    assert status["camera_offsets"]["cam_a"]["timestamp_sources"]["sensor_metadata"] == 1
+    assert status["camera_offsets"]["cam_a"]["host_latency_ms"]["max"] > 0
+    assert status["camera_offsets"]["cam_a"]["capture_to_send_ms"]["max"] == 3.0
     assert status["recommendation"]["recommended_window_us"] is not None
 
 

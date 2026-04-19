@@ -9,7 +9,7 @@ from pathlib import Path
 
 def _load_module():
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-    module_path = Path(__file__).resolve().parents[1] / "src" / "host" / "render_pose_log_2d.py"
+    module_path = Path(__file__).resolve().parents[1] / "src" / "host" / "auxiliary" / "render_pose_log_2d.py"
     spec = importlib.util.spec_from_file_location("render_pose_log_2d", module_path)
     if spec is None or spec.loader is None:
         raise RuntimeError("Failed to load render_pose_log_2d")

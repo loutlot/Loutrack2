@@ -71,7 +71,9 @@ class TrackingRuntime:
         self._selected_pattern_names: List[str] = []
         self._last_stop_summary: Dict[str, Any] = {}
         self._latest_scene: Dict[str, Any] = self._empty_scene()
+        self._scene_sequence = 0
         self._lock = threading.Lock()
+        self._scene_condition = threading.Condition(self._lock)
 
     def start(self, calibration_path: str, patterns: Optional[List[str]] = None) -> Dict[str, Any]:
         """Start tracking runtime and attach pose callback."""
@@ -99,14 +101,16 @@ class TrackingRuntime:
             self._patterns_by_name = {pattern.name: pattern for pattern in selected_patterns}
             self._trail_by_name = defaultdict(lambda: deque(maxlen=self.trail_length))
             self._last_stop_summary = {}
-            self._latest_scene = self._empty_scene(
-                cameras=self._build_camera_scene(pipeline),
-                coordinate_frame=getattr(pipeline.geometry, "coordinate_frame", "camera_similarity"),
-                coordinate_origin=getattr(pipeline.geometry, "coordinate_origin", "reference_camera"),
-                coordinate_origin_source=getattr(
-                    pipeline.geometry,
-                    "coordinate_origin_source",
-                    "extrinsics_pose_reference",
+            self._set_latest_scene_locked(
+                self._empty_scene(
+                    cameras=self._build_camera_scene(pipeline),
+                    coordinate_frame=getattr(pipeline.geometry, "coordinate_frame", "camera_similarity"),
+                    coordinate_origin=getattr(pipeline.geometry, "coordinate_origin", "reference_camera"),
+                    coordinate_origin_source=getattr(
+                        pipeline.geometry,
+                        "coordinate_origin_source",
+                        "extrinsics_pose_reference",
+                    ),
                 ),
             )
 
@@ -127,14 +131,16 @@ class TrackingRuntime:
             self._patterns_by_name = {}
             self._trail_by_name = defaultdict(lambda: deque(maxlen=self.trail_length))
             self._last_stop_summary = dict(summary)
-            self._latest_scene = self._empty_scene(
-                cameras=cameras,
-                coordinate_frame=getattr(pipeline.geometry, "coordinate_frame", "camera_similarity"),
-                coordinate_origin=getattr(pipeline.geometry, "coordinate_origin", "reference_camera"),
-                coordinate_origin_source=getattr(
-                    pipeline.geometry,
-                    "coordinate_origin_source",
-                    "extrinsics_pose_reference",
+            self._set_latest_scene_locked(
+                self._empty_scene(
+                    cameras=cameras,
+                    coordinate_frame=getattr(pipeline.geometry, "coordinate_frame", "camera_similarity"),
+                    coordinate_origin=getattr(pipeline.geometry, "coordinate_origin", "reference_camera"),
+                    coordinate_origin_source=getattr(
+                        pipeline.geometry,
+                        "coordinate_origin_source",
+                        "extrinsics_pose_reference",
+                    ),
                 ),
             )
         return summary
@@ -174,16 +180,17 @@ class TrackingRuntime:
     def scene_snapshot(self) -> Dict[str, Any]:
         """Return latest scene snapshot for GUI polling."""
         with self._lock:
-            return {
-                "tracking": dict(self._latest_scene["tracking"]),
-                "cameras": [dict(camera) for camera in self._latest_scene["cameras"]],
-                "rigid_bodies": [dict(body) for body in self._latest_scene["rigid_bodies"]],
-                "raw_points": [list(point) for point in self._latest_scene["raw_points"]],
-                "coordinate_frame": self._latest_scene.get("coordinate_frame", "camera_similarity"),
-                "coordinate_origin": self._latest_scene.get("coordinate_origin", "reference_camera"),
-                "coordinate_origin_source": self._latest_scene.get("coordinate_origin_source", "extrinsics_pose_reference"),
-                "timestamp_us": self._latest_scene["timestamp_us"],
-            }
+            return self._scene_snapshot_locked()
+
+    def wait_for_scene_update(self, last_sequence: Optional[int], timeout: float = 15.0) -> Dict[str, Any]:
+        """Wait for a newer scene snapshot, or return the latest snapshot on timeout."""
+        with self._scene_condition:
+            if last_sequence is not None and self._scene_sequence <= last_sequence:
+                self._scene_condition.wait_for(
+                    lambda: self._scene_sequence > last_sequence,
+                    timeout=timeout,
+                )
+            return self._scene_snapshot_locked()
 
     def _on_pose(self, poses: Dict[str, RigidBodyPose]) -> None:
         pipeline = None
@@ -224,24 +231,45 @@ class TrackingRuntime:
                     }
                 )
 
-            self._latest_scene = {
-                "tracking": {
-                    "running": status.get("running", False),
-                    "frames_processed": status.get("frames_processed", 0),
-                    "poses_estimated": status.get("poses_estimated", 0),
-                },
-                "cameras": self._build_camera_scene(pipeline),
-                "rigid_bodies": rigid_bodies,
-                "raw_points": list(triangulation.get("points_3d", [])),
-                "coordinate_frame": getattr(pipeline.geometry, "coordinate_frame", "camera_similarity"),
-                "coordinate_origin": getattr(pipeline.geometry, "coordinate_origin", "reference_camera"),
-                "coordinate_origin_source": getattr(
-                    pipeline.geometry,
-                    "coordinate_origin_source",
-                    "extrinsics_pose_reference",
-                ),
-                "timestamp_us": int(triangulation.get("timestamp", 0)),
-            }
+            self._set_latest_scene_locked(
+                {
+                    "tracking": {
+                        "running": status.get("running", False),
+                        "frames_processed": status.get("frames_processed", 0),
+                        "poses_estimated": status.get("poses_estimated", 0),
+                    },
+                    "cameras": self._build_camera_scene(pipeline),
+                    "rigid_bodies": rigid_bodies,
+                    "raw_points": list(triangulation.get("points_3d", [])),
+                    "coordinate_frame": getattr(pipeline.geometry, "coordinate_frame", "camera_similarity"),
+                    "coordinate_origin": getattr(pipeline.geometry, "coordinate_origin", "reference_camera"),
+                    "coordinate_origin_source": getattr(
+                        pipeline.geometry,
+                        "coordinate_origin_source",
+                        "extrinsics_pose_reference",
+                    ),
+                    "timestamp_us": int(triangulation.get("timestamp", 0)),
+                }
+            )
+
+    def _set_latest_scene_locked(self, scene: Dict[str, Any]) -> None:
+        self._scene_sequence += 1
+        scene["sequence"] = self._scene_sequence
+        self._latest_scene = scene
+        self._scene_condition.notify_all()
+
+    def _scene_snapshot_locked(self) -> Dict[str, Any]:
+        return {
+            "tracking": dict(self._latest_scene["tracking"]),
+            "cameras": [dict(camera) for camera in self._latest_scene["cameras"]],
+            "rigid_bodies": [dict(body) for body in self._latest_scene["rigid_bodies"]],
+            "raw_points": [list(point) for point in self._latest_scene["raw_points"]],
+            "coordinate_frame": self._latest_scene.get("coordinate_frame", "camera_similarity"),
+            "coordinate_origin": self._latest_scene.get("coordinate_origin", "reference_camera"),
+            "coordinate_origin_source": self._latest_scene.get("coordinate_origin_source", "extrinsics_pose_reference"),
+            "timestamp_us": self._latest_scene["timestamp_us"],
+            "sequence": int(self._latest_scene.get("sequence", self._scene_sequence)),
+        }
 
     def _build_camera_scene(self, pipeline: TrackingPipeline) -> List[Dict[str, Any]]:
         cameras: List[Dict[str, Any]] = []

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import deque
+from collections import Counter, deque
 from dataclasses import dataclass, field
 from statistics import mean, median
 from threading import Lock
@@ -26,6 +26,9 @@ def _percentile(values: List[float], p: float) -> float:
 class _CameraState:
     last_frame_index: Optional[int] = None
     offset_samples: deque = field(default_factory=lambda: deque(maxlen=2000))
+    host_latency_samples_ms: deque = field(default_factory=lambda: deque(maxlen=2000))
+    capture_to_send_ms: deque = field(default_factory=lambda: deque(maxlen=2000))
+    timestamp_sources: Counter = field(default_factory=Counter)
     missing_total: int = 0
     gap_events: int = 0
     longest_gap: int = 0
@@ -92,17 +95,39 @@ class SyncEvaluator:
             for camera_id, frame in frames.items():
                 state = self._camera_states.setdefault(camera_id, _CameraState())
                 frame_ts = int(getattr(frame, "timestamp", timestamp))
-                frame_index = int(getattr(frame, "frame_index", 0))
+                frame_index_raw = getattr(frame, "frame_index", None)
                 offset_us = frame_ts - timestamp
                 state.offset_samples.append((frame_ts, offset_us))
 
-                if state.last_frame_index is not None and frame_index > state.last_frame_index + 1:
+                received_at = getattr(frame, "received_at", None)
+                if received_at is not None:
+                    state.host_latency_samples_ms.append((float(received_at) - frame_ts / 1_000_000.0) * 1000.0)
+
+                capture_to_send = getattr(frame, "capture_to_send_ms", None)
+                if capture_to_send is not None:
+                    state.capture_to_send_ms.append(float(capture_to_send))
+
+                timestamp_source = getattr(frame, "timestamp_source", None)
+                if timestamp_source is not None:
+                    state.timestamp_sources.update([str(timestamp_source)])
+
+                if frame_index_raw is not None:
+                    frame_index = int(frame_index_raw)
+                else:
+                    frame_index = None
+
+                if (
+                    frame_index is not None
+                    and state.last_frame_index is not None
+                    and frame_index > state.last_frame_index + 1
+                ):
                     gap = frame_index - state.last_frame_index - 1
                     state.missing_total += gap
                     state.gap_events += 1
                     if gap > state.longest_gap:
                         state.longest_gap = gap
-                state.last_frame_index = frame_index
+                if frame_index is not None:
+                    state.last_frame_index = frame_index
 
         return {
             "pair_count": self._pair_count,
@@ -111,7 +136,7 @@ class SyncEvaluator:
         }
 
     def _camera_offset_summary(self) -> Dict[str, Dict[str, float]]:
-        result: Dict[str, Dict[str, float]] = {}
+        result: Dict[str, Dict[str, Any]] = {}
         for camera_id, state in self._camera_states.items():
             offsets = [float(o) for _, o in state.offset_samples]
             if not offsets:
@@ -124,8 +149,23 @@ class SyncEvaluator:
                 "p99_offset_us": _percentile(offsets, 99),
                 "jitter_std_us": (mean([(x - avg_offset) ** 2 for x in offsets])) ** 0.5,
                 "drift_us_per_s": self._estimate_drift_us_per_s(state.offset_samples),
+                "host_latency_ms": self._sample_summary(state.host_latency_samples_ms),
+                "capture_to_send_ms": self._sample_summary(state.capture_to_send_ms),
+                "timestamp_sources": dict(state.timestamp_sources),
             }
         return result
+
+    @staticmethod
+    def _sample_summary(samples: deque) -> Dict[str, float]:
+        values = [float(value) for value in samples]
+        if not values:
+            return {"mean": 0.0, "median": 0.0, "p95": 0.0, "max": 0.0}
+        return {
+            "mean": mean(values),
+            "median": median(values),
+            "p95": _percentile(values, 95),
+            "max": max(values),
+        }
 
     @staticmethod
     def _estimate_drift_us_per_s(samples: deque) -> float:

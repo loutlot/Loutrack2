@@ -12,7 +12,7 @@ import time
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, field
-from collections import deque
+from collections import Counter, deque
 import threading
 import json
 
@@ -24,7 +24,7 @@ class FrameStats:
     timestamp: int  # Frame timestamp (us)
     received_at: float  # System time when received (seconds)
     blob_count: int
-    frame_index: int
+    frame_index: Optional[int] = None
 
 
 @dataclass
@@ -32,16 +32,23 @@ class CameraMetrics:
     """Per-camera metrics."""
     camera_id: str
     frame_count: int = 0
-    last_frame_index: int = 0
+    last_frame_index: Optional[int] = None
     last_timestamp: int = 0
     fps: float = 0.0
     latency_ms: float = 0.0
     missing_frames: int = 0
     blob_count_avg: float = 0.0
+    last_timestamp_source: Optional[str] = None
+    last_capture_to_send_ms: Optional[float] = None
+    last_capture_to_process_ms: Optional[float] = None
     
     # Rolling windows for FPS calculation
     _timestamps: deque = field(default_factory=lambda: deque(maxlen=60))
     _blob_counts: deque = field(default_factory=lambda: deque(maxlen=60))
+    _host_latency_ms: deque = field(default_factory=lambda: deque(maxlen=60))
+    _capture_to_send_ms: deque = field(default_factory=lambda: deque(maxlen=60))
+    _capture_to_process_ms: deque = field(default_factory=lambda: deque(maxlen=60))
+    _timestamp_sources: Counter = field(default_factory=Counter)
 
 
 @dataclass
@@ -93,8 +100,11 @@ class MetricsCollector:
         camera_id: str,
         timestamp: int,
         blob_count: int,
-        frame_index: int,
+        frame_index: Optional[int] = None,
         received_at: Optional[float] = None,
+        timestamp_source: Optional[str] = None,
+        capture_to_process_ms: Optional[float] = None,
+        capture_to_send_ms: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         Record a received frame and update metrics.
@@ -103,7 +113,7 @@ class MetricsCollector:
             camera_id: Camera identifier
             timestamp: Frame timestamp in microseconds
             blob_count: Number of blobs detected in frame
-            frame_index: Frame sequence number
+            frame_index: Optional legacy frame sequence number
             
         Returns:
             Updated metrics for this camera
@@ -122,15 +132,22 @@ class MetricsCollector:
             cam = self._cameras[camera_id]
             
             # Check for missing frames while tolerating occasional UDP/out-of-order delivery.
-            if cam.frame_count > 0 and frame_index > cam.last_frame_index + 1:
+            if (
+                frame_index is not None
+                and cam.last_frame_index is not None
+                and frame_index > cam.last_frame_index + 1
+            ):
                 gap = frame_index - cam.last_frame_index - 1
                 cam.missing_frames += gap
             
             # Update frame counts
             cam.frame_count += 1
-            if cam.frame_count == 1 or frame_index > cam.last_frame_index:
+            if frame_index is not None and (cam.last_frame_index is None or frame_index > cam.last_frame_index):
                 cam.last_frame_index = frame_index
             cam.last_timestamp = timestamp
+            if timestamp_source is not None:
+                cam.last_timestamp_source = timestamp_source
+                cam._timestamp_sources.update([timestamp_source])
             
             # Calculate latency (if timestamp is PTP-synchronized)
             # Convert timestamp from us to seconds
@@ -138,6 +155,14 @@ class MetricsCollector:
             current_time_seconds = frame_received_at
             # Note: This assumes PTP sync; without PTP, this is relative
             cam.latency_ms = (current_time_seconds - frame_time_seconds) * 1000
+            cam._host_latency_ms.append(cam.latency_ms)
+
+            if capture_to_process_ms is not None:
+                cam.last_capture_to_process_ms = float(capture_to_process_ms)
+                cam._capture_to_process_ms.append(float(capture_to_process_ms))
+            if capture_to_send_ms is not None:
+                cam.last_capture_to_send_ms = float(capture_to_send_ms)
+                cam._capture_to_send_ms.append(float(capture_to_send_ms))
             
             # Record timestamp for FPS calculation
             cam._timestamps.append(frame_received_at)
@@ -164,6 +189,17 @@ class MetricsCollector:
                 "blob_count": blob_count,
                 "frame_index": frame_index
             }
+
+    @staticmethod
+    def _summary(values: deque) -> Dict[str, float]:
+        if not values:
+            return {"mean": 0.0, "last": 0.0, "max": 0.0}
+        items = [float(value) for value in values]
+        return {
+            "mean": round(sum(items) / len(items), 3),
+            "last": round(items[-1], 3),
+            "max": round(max(items), 3),
+        }
     
     def record_triangulation(
         self,
@@ -226,10 +262,15 @@ class MetricsCollector:
                 cameras[cam_id] = {
                     "fps": round(cam.fps, 2),
                     "latency_ms": round(cam.latency_ms, 2),
+                    "host_latency_ms": self._summary(cam._host_latency_ms),
                     "frame_count": cam.frame_count,
                     "missing_frames": cam.missing_frames,
                     "blob_count_avg": round(cam.blob_count_avg, 2),
-                    "last_frame_index": cam.last_frame_index
+                    "last_frame_index": cam.last_frame_index,
+                    "last_timestamp_source": cam.last_timestamp_source,
+                    "timestamp_sources": dict(cam._timestamp_sources),
+                    "capture_to_process_ms": self._summary(cam._capture_to_process_ms),
+                    "capture_to_send_ms": self._summary(cam._capture_to_send_ms),
                 }
             
             return {
@@ -260,9 +301,14 @@ class MetricsCollector:
                 "camera_id": camera_id,
                 "fps": round(cam.fps, 2),
                 "latency_ms": round(cam.latency_ms, 2),
+                "host_latency_ms": self._summary(cam._host_latency_ms),
                 "frame_count": cam.frame_count,
                 "missing_frames": cam.missing_frames,
-                "blob_count_avg": round(cam.blob_count_avg, 2)
+                "blob_count_avg": round(cam.blob_count_avg, 2),
+                "last_timestamp_source": cam.last_timestamp_source,
+                "timestamp_sources": dict(cam._timestamp_sources),
+                "capture_to_process_ms": self._summary(cam._capture_to_process_ms),
+                "capture_to_send_ms": self._summary(cam._capture_to_send_ms),
             }
     
     def export_prometheus(self) -> str:

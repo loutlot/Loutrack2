@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import sys
 import time
 import threading
@@ -27,6 +26,11 @@ if __package__ in (None, ""):
     from host.wand_session import CalibrationSession, CalibrationSessionConfig
     from host.extrinsics_methods import ExtrinsicsMethodRegistry, build_default_extrinsics_registry
     from host.intrinsics_host_session import IntrinsicsHostSession, IntrinsicsHostSessionConfig
+    from host.gui_settings_store import GuiSettingsStore
+    from host.gui_tracking_service import GuiTrackingService
+    from host.gui_intrinsics_service import GuiIntrinsicsService
+    from host.gui_capture_log_service import GuiCaptureLogService
+    from host.gui_extrinsics_service import GuiExtrinsicsService
 else:
     from .receiver import UDPReceiver
     from .logger import FrameLogger
@@ -34,6 +38,11 @@ else:
     from .wand_session import CalibrationSession, CalibrationSessionConfig
     from .extrinsics_methods import ExtrinsicsMethodRegistry, build_default_extrinsics_registry
     from .intrinsics_host_session import IntrinsicsHostSession, IntrinsicsHostSessionConfig
+    from .gui_settings_store import GuiSettingsStore
+    from .gui_tracking_service import GuiTrackingService
+    from .gui_intrinsics_service import GuiIntrinsicsService
+    from .gui_capture_log_service import GuiCaptureLogService
+    from .gui_extrinsics_service import GuiExtrinsicsService
 
 
 DEFAULT_SETTINGS_PATH = Path("logs") / "loutrack_gui_settings.json"
@@ -83,14 +92,28 @@ class LoutrackGuiState:
         if not default_settings_path.is_absolute():
             default_settings_path = (PROJECT_ROOT / default_settings_path).resolve()
         self.settings_path = (settings_path or default_settings_path).resolve()
+        old_settings_path = OLD_SETTINGS_PATH
+        if not old_settings_path.is_absolute():
+            old_settings_path = (PROJECT_ROOT / old_settings_path).resolve()
+        self._settings_store = GuiSettingsStore(
+            project_root=PROJECT_ROOT,
+            settings_path=self.settings_path,
+            old_settings_path=old_settings_path,
+            uses_default_settings_path=self._uses_default_settings_path,
+            default_pose_log_path=self._default_pose_log_path(),
+            default_wand_metric_log_path=self._default_wand_metric_log_path(),
+            default_extrinsics_output_path=self._default_extrinsics_output_path(),
+            default_wand_metric_duration_s=DEFAULT_WAND_METRIC_DURATION_S,
+        )
+        self.settings_path = self._settings_store.settings_path
         self._migrate_settings_once()
         self.selected_camera_ids: List[str] = []
         self.config = self._load_initial_config()
         self.camera_status: Dict[str, Dict[str, Any]] = {}
         self.last_result: Dict[str, Any] = {"status": "idle"}
         self.capture_log_dir: Path = DEFAULT_CAPTURE_LOG_DIR
-        self.pose_capture_log_path: Path = DEFAULT_POSE_LOG_PATH
-        self.wand_metric_log_path: Path = DEFAULT_WAND_METRIC_LOG_PATH
+        self.pose_capture_log_path: Path = self._default_pose_log_path()
+        self.wand_metric_log_path: Path = self._default_wand_metric_log_path()
         self._capture_logger: FrameLogger | None = None
         self._capture_log_active: bool = False
         self._capture_completed: Dict[str, bool] = {"pose_capture": False, "wand_metric_capture": False}
@@ -109,8 +132,12 @@ class LoutrackGuiState:
         self._tracking_camera_ids: List[str] = []
         self.latest_extrinsics_path: Path | None = None
         self.latest_extrinsics_quality: Dict[str, Any] | None = None
-        self._restore_latest_extrinsics(DEFAULT_EXTRINSICS_OUTPUT_PATH)
+        self._restore_latest_extrinsics(self._default_extrinsics_output_path())
         self._intrinsics_host_session: IntrinsicsHostSession | None = None
+        self._tracking_service = GuiTrackingService(self)
+        self._intrinsics_service = GuiIntrinsicsService(self)
+        self._capture_log_service = GuiCaptureLogService(self)
+        self._extrinsics_service = GuiExtrinsicsService(self)
         self._ensure_settings_file_exists()
         settings_bundle = self._load_settings_bundle()
         ui_payload = settings_bundle.get("ui", {})
@@ -121,517 +148,147 @@ class LoutrackGuiState:
 
     @staticmethod
     def _default_settings_payload() -> Dict[str, Any]:
-        calibration_defaults = LoutrackGuiState._default_calibration_payload()
-        intrinsics_defaults = LoutrackGuiState._default_intrinsics_payload()
-        extrinsics_defaults = LoutrackGuiState._default_extrinsics_payload()
-        return {
-            "meta": {"version": 2, "updated_at": int(time.time())},
-            "calibration": {
-                "draft": dict(calibration_defaults),
-                "committed": dict(calibration_defaults),
-            },
-            "intrinsics": {
-                "draft": dict(intrinsics_defaults),
-                "committed": dict(intrinsics_defaults),
-            },
-            "extrinsics": {
-                "draft": dict(extrinsics_defaults),
-                "committed": dict(extrinsics_defaults),
-                "locks": {
-                    "pose_log_path_manual": False,
-                    "wand_metric_log_path_manual": False,
-                },
-            },
-            "ui": {
-                "active_page": "calibration",
-                "active_view": "cameras",
-                "selected_camera_ids": [],
-            },
-            "runtime_hints": {
-                "pose_log_path": str(DEFAULT_POSE_LOG_PATH),
-                "wand_metric_log_path": str(DEFAULT_WAND_METRIC_LOG_PATH),
-            },
-        }
+        store = GuiSettingsStore(
+            project_root=PROJECT_ROOT,
+            settings_path=DEFAULT_SETTINGS_PATH if DEFAULT_SETTINGS_PATH.is_absolute() else (PROJECT_ROOT / DEFAULT_SETTINGS_PATH),
+            old_settings_path=OLD_SETTINGS_PATH if OLD_SETTINGS_PATH.is_absolute() else (PROJECT_ROOT / OLD_SETTINGS_PATH),
+            uses_default_settings_path=True,
+            default_pose_log_path=DEFAULT_POSE_LOG_PATH,
+            default_wand_metric_log_path=DEFAULT_WAND_METRIC_LOG_PATH,
+            default_extrinsics_output_path=DEFAULT_EXTRINSICS_OUTPUT_PATH,
+            default_wand_metric_duration_s=DEFAULT_WAND_METRIC_DURATION_S,
+        )
+        return store.default_settings_payload()
 
     @staticmethod
     def _default_calibration_payload() -> Dict[str, Any]:
-        return {
-            "exposure_us": 12000,
-            "gain": 8.0,
-            "fps": 56,
-            "focus": 5.215,
-            "threshold": 200,
-            "blob_min_diameter_px": None,
-            "blob_max_diameter_px": None,
-            "circularity_min": 0.0,
-            "mask_threshold": 200,
-            "mask_seconds": 0.5,
-            "wand_metric_seconds": DEFAULT_WAND_METRIC_DURATION_S,
-        }
+        store = GuiSettingsStore(
+            project_root=PROJECT_ROOT,
+            settings_path=DEFAULT_SETTINGS_PATH if DEFAULT_SETTINGS_PATH.is_absolute() else (PROJECT_ROOT / DEFAULT_SETTINGS_PATH),
+            old_settings_path=OLD_SETTINGS_PATH if OLD_SETTINGS_PATH.is_absolute() else (PROJECT_ROOT / OLD_SETTINGS_PATH),
+            uses_default_settings_path=True,
+            default_pose_log_path=DEFAULT_POSE_LOG_PATH,
+            default_wand_metric_log_path=DEFAULT_WAND_METRIC_LOG_PATH,
+            default_extrinsics_output_path=DEFAULT_EXTRINSICS_OUTPUT_PATH,
+            default_wand_metric_duration_s=DEFAULT_WAND_METRIC_DURATION_S,
+        )
+        return store.default_calibration_payload()
 
     @staticmethod
     def _default_intrinsics_payload() -> Dict[str, Any]:
-        return {
-            "camera_id": "pi-cam-01",
-            "mjpeg_url": "",
-            "square_length_mm": 60.0,
-            "marker_length_mm": None,
-            "squares_x": 6,
-            "squares_y": 8,
-            "min_frames": 25,
-            "cooldown_s": 1.5,
-        }
+        return GuiSettingsStore.default_intrinsics_payload()
 
     @staticmethod
     def _default_extrinsics_payload() -> Dict[str, Any]:
-        return {
-            "intrinsics_path": "calibration",
-            "pose_log_path": str(DEFAULT_POSE_LOG_PATH),
-            "wand_metric_log_path": str(DEFAULT_WAND_METRIC_LOG_PATH),
-            "output_path": str(DEFAULT_EXTRINSICS_OUTPUT_PATH),
-            "pair_window_us": 2000,
-            "wand_pair_window_us": 8000,
-            "min_pairs": 8,
-            "wand_face": "front_up",
-        }
+        store = GuiSettingsStore(
+            project_root=PROJECT_ROOT,
+            settings_path=DEFAULT_SETTINGS_PATH if DEFAULT_SETTINGS_PATH.is_absolute() else (PROJECT_ROOT / DEFAULT_SETTINGS_PATH),
+            old_settings_path=OLD_SETTINGS_PATH if OLD_SETTINGS_PATH.is_absolute() else (PROJECT_ROOT / OLD_SETTINGS_PATH),
+            uses_default_settings_path=True,
+            default_pose_log_path=DEFAULT_POSE_LOG_PATH,
+            default_wand_metric_log_path=DEFAULT_WAND_METRIC_LOG_PATH,
+            default_extrinsics_output_path=DEFAULT_EXTRINSICS_OUTPUT_PATH,
+            default_wand_metric_duration_s=DEFAULT_WAND_METRIC_DURATION_S,
+        )
+        return store.default_extrinsics_payload()
 
     def _migrate_settings_once(self) -> None:
-        if not self._uses_default_settings_path:
-            return
-        old_path = OLD_SETTINGS_PATH
-        if not old_path.is_absolute():
-            old_path = (PROJECT_ROOT / old_path).resolve()
-        if not old_path.exists() or old_path == self.settings_path:
-            return
-        self.settings_path.parent.mkdir(parents=True, exist_ok=True)
-        if self.settings_path.exists():
-            old_path.unlink(missing_ok=True)
-            return
-        try:
-            payload = json.loads(old_path.read_text(encoding="utf-8"))
-            if not isinstance(payload, dict):
-                raise ValueError("legacy settings is not an object")
-            self.settings_path.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            old_path.unlink(missing_ok=True)
-            return
-        except Exception:
-            backup_path = old_path.with_suffix(old_path.suffix + ".invalid.bak")
-            try:
-                shutil.move(str(old_path), str(backup_path))
-            except Exception:
-                old_path.unlink(missing_ok=True)
-            self.settings_path.write_text(
-                json.dumps(self._default_settings_payload(), ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+        self._settings_store.migrate_once()
 
     def _default_config(self) -> CalibrationSessionConfig:
         return CalibrationSessionConfig(exposure_us=12000, gain=8.0, fps=56, duration_s=DEFAULT_WAND_METRIC_DURATION_S)
 
+    @staticmethod
+    def _default_pose_log_path() -> Path:
+        return DEFAULT_POSE_LOG_PATH
+
+    @staticmethod
+    def _default_wand_metric_log_path() -> Path:
+        return DEFAULT_WAND_METRIC_LOG_PATH
+
+    @staticmethod
+    def _default_extrinsics_output_path() -> Path:
+        return DEFAULT_EXTRINSICS_OUTPUT_PATH
+
+    def _build_intrinsics_host_session_config(
+        self,
+        *,
+        camera_id: str,
+        mjpeg_url: str,
+        square_length_mm: float,
+        marker_length_mm: float,
+        squares_x: int,
+        squares_y: int,
+        min_frames: int,
+        cooldown_s: float,
+    ) -> IntrinsicsHostSessionConfig:
+        return IntrinsicsHostSessionConfig(
+            camera_id=camera_id,
+            mjpeg_url=mjpeg_url,
+            square_length_mm=square_length_mm,
+            marker_length_mm=marker_length_mm,
+            squares_x=squares_x,
+            squares_y=squares_y,
+            min_frames=min_frames,
+            poll_interval_s=cooldown_s,
+            output_dir=PROJECT_ROOT / "calibration",
+        )
+
+    def _create_intrinsics_host_session(
+        self,
+        config: IntrinsicsHostSessionConfig,
+        broadcast_fn: Any,
+    ) -> IntrinsicsHostSession:
+        return IntrinsicsHostSession(config, broadcast_fn)
+
     def _read_settings_payload(self) -> Dict[str, Any]:
-        try:
-            payload = json.loads(self.settings_path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            return {}
-        except Exception:
-            return {}
-        if isinstance(payload, dict):
-            return payload
-        return {}
+        return self._settings_store._read_settings_payload()
 
     def _write_settings_payload(self, payload: Dict[str, Any]) -> None:
-        payload.setdefault("meta", {})
-        if isinstance(payload["meta"], dict):
-            payload["meta"]["version"] = 2
-            payload["meta"]["updated_at"] = int(time.time())
-        self.settings_path.parent.mkdir(parents=True, exist_ok=True)
-        self.settings_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        self._settings_store._write_settings_payload(payload)
 
     def _ensure_settings_file_exists(self) -> None:
-        if self.settings_path.exists():
-            return
-        self._write_settings_payload(self._default_settings_payload())
+        self._settings_store.ensure_settings_file_exists()
 
     @staticmethod
     def _to_int(value: Any) -> int:
-        if isinstance(value, bool):
-            raise ValueError("boolean is not an integer")
-        if isinstance(value, str):
-            text = value.strip()
-            if text == "":
-                raise ValueError("empty string")
-            return int(float(text)) if "." in text else int(text)
-        return int(value)
+        return GuiSettingsStore._to_int(value)
 
     @staticmethod
     def _to_float(value: Any) -> float:
-        if isinstance(value, bool):
-            raise ValueError("boolean is not a number")
-        if isinstance(value, str):
-            text = value.strip()
-            if text == "":
-                raise ValueError("empty string")
-            return float(text)
-        return float(value)
+        return GuiSettingsStore._to_float(value)
 
     @staticmethod
     def _to_nullable_float(value: Any) -> float | None:
-        if value is None:
-            return None
-        if isinstance(value, str) and value.strip() == "":
-            return None
-        return LoutrackGuiState._to_float(value)
+        return GuiSettingsStore._to_nullable_float(value)
 
     @staticmethod
     def _to_string(value: Any) -> str:
-        if value is None:
-            return ""
-        return str(value).strip()
+        return GuiSettingsStore._to_string(value)
 
     def _normalize_settings_payload(self, raw_payload: Dict[str, Any]) -> Dict[str, Any]:
-        defaults = self._default_settings_payload()
-        if not isinstance(raw_payload, dict):
-            return defaults
-
-        has_sectioned_shape = any(
-            isinstance(raw_payload.get(key), dict) for key in ("calibration", "intrinsics", "extrinsics")
-        )
-        if has_sectioned_shape:
-            normalized = defaults
-
-            calibration_src = raw_payload.get("calibration")
-            if isinstance(calibration_src, dict):
-                for key in normalized["calibration"]["draft"]:
-                    if key in calibration_src.get("draft", {}):
-                        normalized["calibration"]["draft"][key] = calibration_src["draft"][key]
-                    elif key in calibration_src:
-                        normalized["calibration"]["draft"][key] = calibration_src[key]
-                    if key in calibration_src.get("committed", {}):
-                        normalized["calibration"]["committed"][key] = calibration_src["committed"][key]
-                    elif key in calibration_src:
-                        normalized["calibration"]["committed"][key] = calibration_src[key]
-            else:
-                for key in normalized["calibration"]["draft"]:
-                    if key in raw_payload:
-                        normalized["calibration"]["draft"][key] = raw_payload[key]
-                        normalized["calibration"]["committed"][key] = raw_payload[key]
-
-            intrinsics_src = raw_payload.get("intrinsics")
-            if isinstance(intrinsics_src, dict):
-                for key in normalized["intrinsics"]["draft"]:
-                    if key in intrinsics_src.get("draft", {}):
-                        normalized["intrinsics"]["draft"][key] = intrinsics_src["draft"][key]
-                    elif key in intrinsics_src:
-                        normalized["intrinsics"]["draft"][key] = intrinsics_src[key]
-                    if key in intrinsics_src.get("committed", {}):
-                        normalized["intrinsics"]["committed"][key] = intrinsics_src["committed"][key]
-                    elif key in intrinsics_src:
-                        normalized["intrinsics"]["committed"][key] = intrinsics_src[key]
-
-            extrinsics_src = raw_payload.get("extrinsics")
-            if isinstance(extrinsics_src, dict):
-                for key in normalized["extrinsics"]["draft"]:
-                    if key in extrinsics_src.get("draft", {}):
-                        normalized["extrinsics"]["draft"][key] = extrinsics_src["draft"][key]
-                    elif key in extrinsics_src:
-                        normalized["extrinsics"]["draft"][key] = extrinsics_src[key]
-                    if key in extrinsics_src.get("committed", {}):
-                        normalized["extrinsics"]["committed"][key] = extrinsics_src["committed"][key]
-                    elif key in extrinsics_src:
-                        normalized["extrinsics"]["committed"][key] = extrinsics_src[key]
-                locks = extrinsics_src.get("locks", {})
-                if isinstance(locks, dict):
-                    normalized["extrinsics"]["locks"]["pose_log_path_manual"] = bool(
-                        locks.get("pose_log_path_manual", False)
-                    )
-                    normalized["extrinsics"]["locks"]["wand_metric_log_path_manual"] = bool(
-                        locks.get("wand_metric_log_path_manual", False)
-                    )
-
-            ui_src = raw_payload.get("ui")
-            if isinstance(ui_src, dict):
-                normalized["ui"]["active_page"] = str(
-                    ui_src.get("active_page", normalized["ui"]["active_page"])
-                )
-                normalized["ui"]["active_view"] = str(
-                    ui_src.get("active_view", normalized["ui"]["active_view"])
-                )
-                selected_ids = ui_src.get("selected_camera_ids", [])
-                if isinstance(selected_ids, list):
-                    normalized["ui"]["selected_camera_ids"] = [
-                        str(item).strip() for item in selected_ids if str(item).strip()
-                    ]
-
-            hints_src = raw_payload.get("runtime_hints")
-            if isinstance(hints_src, dict):
-                normalized["runtime_hints"]["pose_log_path"] = str(
-                    hints_src.get("pose_log_path", normalized["runtime_hints"]["pose_log_path"])
-                )
-                normalized["runtime_hints"]["wand_metric_log_path"] = str(
-                    hints_src.get("wand_metric_log_path", normalized["runtime_hints"]["wand_metric_log_path"])
-                )
-
-            meta_src = raw_payload.get("meta")
-            if isinstance(meta_src, dict):
-                normalized["meta"]["updated_at"] = int(meta_src.get("updated_at", normalized["meta"]["updated_at"]))
-            return normalized
-
-        # Legacy shape migration.
-        normalized = defaults
-        calibration_keys = set(normalized["calibration"]["draft"].keys())
-        for key in calibration_keys:
-            if key in raw_payload:
-                normalized["calibration"]["draft"][key] = raw_payload[key]
-                normalized["calibration"]["committed"][key] = raw_payload[key]
-
-        intrinsics_src = raw_payload.get("intrinsics", {})
-        if isinstance(intrinsics_src, dict):
-            for key in normalized["intrinsics"]["draft"]:
-                if key in intrinsics_src:
-                    normalized["intrinsics"]["draft"][key] = intrinsics_src[key]
-                    normalized["intrinsics"]["committed"][key] = intrinsics_src[key]
-
-        if "selected_camera_ids" in raw_payload and isinstance(raw_payload["selected_camera_ids"], list):
-            normalized["ui"]["selected_camera_ids"] = [
-                str(item).strip() for item in raw_payload["selected_camera_ids"] if str(item).strip()
-            ]
-        if "active_page" in raw_payload:
-            normalized["ui"]["active_page"] = str(raw_payload["active_page"])
-        if "active_view" in raw_payload:
-            normalized["ui"]["active_view"] = str(raw_payload["active_view"])
-        return normalized
+        return self._settings_store._normalize_settings_payload(raw_payload)
 
     def _load_settings_bundle(self) -> Dict[str, Any]:
-        raw_payload = self._read_settings_payload()
-        bundle = self._normalize_settings_payload(raw_payload)
-        validation = self._refresh_committed_from_draft(bundle)
-        bundle["validation"] = validation
-        return bundle
+        return self._settings_store.load_bundle()
 
     def _save_settings_bundle(self, bundle: Dict[str, Any]) -> None:
-        payload = {
-            "meta": bundle.get("meta", {}),
-            "calibration": bundle.get("calibration", {}),
-            "intrinsics": bundle.get("intrinsics", {}),
-            "extrinsics": bundle.get("extrinsics", {}),
-            "ui": bundle.get("ui", {}),
-            "runtime_hints": bundle.get("runtime_hints", {}),
-        }
-        self._write_settings_payload(payload)
+        self._settings_store.save_bundle(bundle)
 
     def _validate_calibration(self, draft: Dict[str, Any], committed: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, str]]:
-        next_committed = dict(committed)
-        errors: Dict[str, str] = {}
-        numeric_specs = {
-            "exposure_us": ("int", lambda v: v > 0, "must be integer > 0"),
-            "gain": ("float", lambda v: v > 0.0, "must be > 0"),
-            "fps": ("int", lambda v: v > 0, "must be integer > 0"),
-            "focus": ("float", lambda v: True, "must be numeric"),
-            "threshold": ("int", lambda v: 0 <= v <= 255, "must be in [0,255]"),
-            "circularity_min": ("float", lambda v: 0.0 <= v <= 1.0, "must be in [0,1]"),
-            "mask_threshold": ("int", lambda v: 0 <= v <= 255, "must be in [0,255]"),
-            "mask_seconds": ("float", lambda v: v > 0.0, "must be > 0"),
-            "wand_metric_seconds": ("float", lambda v: v > 0.0, "must be > 0"),
-        }
-        for key, (kind, predicate, message) in numeric_specs.items():
-            if key not in draft:
-                continue
-            raw_value = draft.get(key)
-            try:
-                parsed = self._to_int(raw_value) if kind == "int" else self._to_float(raw_value)
-                if not predicate(parsed):
-                    raise ValueError(message)
-                next_committed[key] = parsed
-            except Exception:
-                errors[key] = message
-
-        for key in ("blob_min_diameter_px", "blob_max_diameter_px"):
-            if key not in draft:
-                continue
-            raw_value = draft.get(key)
-            try:
-                parsed_nullable = self._to_nullable_float(raw_value)
-                if parsed_nullable is not None and parsed_nullable <= 0.0:
-                    raise ValueError("must be > 0 when set")
-                next_committed[key] = parsed_nullable
-            except Exception:
-                errors[key] = "must be empty or > 0"
-
-        min_blob = next_committed.get("blob_min_diameter_px")
-        max_blob = next_committed.get("blob_max_diameter_px")
-        if isinstance(min_blob, (int, float)) and isinstance(max_blob, (int, float)) and min_blob > max_blob:
-            errors["blob_max_diameter_px"] = "must be >= blob_min_diameter_px"
-        return next_committed, errors
+        return GuiSettingsStore.validate_calibration(draft, committed)
 
     def _validate_intrinsics(self, draft: Dict[str, Any], committed: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, str]]:
-        next_committed = dict(committed)
-        errors: Dict[str, str] = {}
-
-        if "camera_id" in draft:
-            value = self._to_string(draft.get("camera_id"))
-            if value:
-                next_committed["camera_id"] = value
-            else:
-                errors["camera_id"] = "must not be empty"
-        if "mjpeg_url" in draft:
-            value = self._to_string(draft.get("mjpeg_url"))
-            # MJPEG is optional for frame preview; Pi-side intrinsics capture should still run without it.
-            next_committed["mjpeg_url"] = value
-
-        int_specs = {
-            "squares_x": (2, "must be integer >= 2"),
-            "squares_y": (2, "must be integer >= 2"),
-            "min_frames": (5, "must be integer >= 5"),
-        }
-        for key, (lower_bound, message) in int_specs.items():
-            if key not in draft:
-                continue
-            try:
-                value = self._to_int(draft.get(key))
-                if value < lower_bound:
-                    raise ValueError(message)
-                next_committed[key] = value
-            except Exception:
-                errors[key] = message
-
-        float_specs = {
-            "square_length_mm": (lambda v: v > 0.0, "must be > 0"),
-            "cooldown_s": (lambda v: v > 0.0, "must be > 0"),
-        }
-        for key, (predicate, message) in float_specs.items():
-            if key not in draft:
-                continue
-            try:
-                value = self._to_float(draft.get(key))
-                if not predicate(value):
-                    raise ValueError(message)
-                next_committed[key] = value
-            except Exception:
-                errors[key] = message
-
-        if "marker_length_mm" in draft:
-            try:
-                marker_value = self._to_nullable_float(draft.get("marker_length_mm"))
-                if marker_value is not None and marker_value <= 0.0:
-                    raise ValueError("must be > 0 when set")
-                next_committed["marker_length_mm"] = marker_value
-            except Exception:
-                errors["marker_length_mm"] = "must be empty or > 0"
-
-        square_length = next_committed.get("square_length_mm")
-        marker_length = next_committed.get("marker_length_mm")
-        if (
-            isinstance(square_length, (int, float))
-            and isinstance(marker_length, (int, float))
-            and marker_length >= square_length
-        ):
-            errors["marker_length_mm"] = "must be smaller than square_length_mm"
-        return next_committed, errors
+        return GuiSettingsStore.validate_intrinsics(draft, committed)
 
     def _validate_extrinsics(self, draft: Dict[str, Any], committed: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, str]]:
-        next_committed = dict(committed)
-        errors: Dict[str, str] = {}
-        text_keys = ("intrinsics_path", "pose_log_path", "output_path")
-        for key in text_keys:
-            if key not in draft:
-                continue
-            value = self._to_string(draft.get(key))
-            if value:
-                next_committed[key] = value
-            else:
-                errors[key] = "must not be empty"
-
-        if "wand_metric_log_path" in draft:
-            value = self._to_string(draft.get("wand_metric_log_path"))
-            next_committed["wand_metric_log_path"] = value
-
-        int_specs = {
-            "pair_window_us": ("must be integer >= 1", 1),
-            "wand_pair_window_us": ("must be integer >= 1", 1),
-            "min_pairs": ("must be integer >= 1", 1),
-        }
-        for key, (message, lower_bound) in int_specs.items():
-            if key not in draft:
-                continue
-            try:
-                value = self._to_int(draft.get(key))
-                if value < lower_bound:
-                    raise ValueError(message)
-                next_committed[key] = value
-            except Exception:
-                errors[key] = message
-        if "wand_face" in draft:
-            value = self._to_string(draft.get("wand_face")).strip().lower()
-            if value in ("front_up", "back_up"):
-                next_committed["wand_face"] = value
-            else:
-                errors["wand_face"] = "must be front_up or back_up"
-        return next_committed, errors
+        return GuiSettingsStore.validate_extrinsics(draft, committed)
 
     def _refresh_committed_from_draft(self, bundle: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
-        calibration = bundle.get("calibration", {})
-        intrinsics = bundle.get("intrinsics", {})
-        extrinsics = bundle.get("extrinsics", {})
-
-        cal_committed, cal_errors = self._validate_calibration(
-            calibration.get("draft", {}),
-            calibration.get("committed", {}),
-        )
-        int_committed, int_errors = self._validate_intrinsics(
-            intrinsics.get("draft", {}),
-            intrinsics.get("committed", {}),
-        )
-        ext_committed, ext_errors = self._validate_extrinsics(
-            extrinsics.get("draft", {}),
-            extrinsics.get("committed", {}),
-        )
-        calibration["committed"] = cal_committed
-        intrinsics["committed"] = int_committed
-        extrinsics["committed"] = ext_committed
-        return {
-            "calibration": cal_errors,
-            "intrinsics": int_errors,
-            "extrinsics": ext_errors,
-        }
+        return self._settings_store._refresh_committed_from_draft(bundle)
 
     def _apply_draft_patch(self, bundle: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any]:
-        calibration_patch = patch.get("calibration", {})
-        if isinstance(calibration_patch, dict):
-            bundle["calibration"]["draft"].update(calibration_patch)
-
-        intrinsics_patch = patch.get("intrinsics", {})
-        if isinstance(intrinsics_patch, dict):
-            bundle["intrinsics"]["draft"].update(intrinsics_patch)
-
-        extrinsics_patch = patch.get("extrinsics", {})
-        if isinstance(extrinsics_patch, dict):
-            bundle["extrinsics"]["draft"].update(extrinsics_patch)
-            locks = bundle["extrinsics"]["locks"]
-            if "pose_log_path" in extrinsics_patch:
-                locks["pose_log_path_manual"] = True
-            if "wand_metric_log_path" in extrinsics_patch:
-                locks["wand_metric_log_path_manual"] = True
-
-        reset_runtime = patch.get("reset_runtime")
-        if isinstance(reset_runtime, list):
-            hints = bundle.get("runtime_hints", {})
-            for key in reset_runtime:
-                if key == "pose_log_path":
-                    bundle["extrinsics"]["locks"]["pose_log_path_manual"] = False
-                    latest_pose = str(hints.get("pose_log_path", DEFAULT_POSE_LOG_PATH))
-                    bundle["extrinsics"]["draft"]["pose_log_path"] = latest_pose
-                if key == "wand_metric_log_path":
-                    bundle["extrinsics"]["locks"]["wand_metric_log_path_manual"] = False
-                    latest_wand = str(hints.get("wand_metric_log_path", DEFAULT_WAND_METRIC_LOG_PATH))
-                    bundle["extrinsics"]["draft"]["wand_metric_log_path"] = latest_wand
-
-        validation = self._refresh_committed_from_draft(bundle)
-        bundle["validation"] = validation
-        self._save_settings_bundle(bundle)
-        return bundle
+        return self._settings_store.apply_draft_patch(bundle, patch)
 
     def _update_runtime_hints(
         self,
@@ -639,26 +296,13 @@ class LoutrackGuiState:
         pose_log_path: str | None = None,
         wand_metric_log_path: str | None = None,
     ) -> None:
-        bundle = self._load_settings_bundle()
-        hints = bundle["runtime_hints"]
-        if pose_log_path is not None:
-            hints["pose_log_path"] = str(pose_log_path)
-        if wand_metric_log_path is not None:
-            hints["wand_metric_log_path"] = str(wand_metric_log_path)
-        validation = self._refresh_committed_from_draft(bundle)
-        bundle["validation"] = validation
-        self._save_settings_bundle(bundle)
+        self._settings_store.update_runtime_hints(
+            pose_log_path=pose_log_path,
+            wand_metric_log_path=wand_metric_log_path,
+        )
 
     def get_settings(self) -> Dict[str, Any]:
-        bundle = self._load_settings_bundle()
-        return {
-            "calibration": bundle.get("calibration", {}),
-            "intrinsics": bundle.get("intrinsics", {}),
-            "extrinsics": bundle.get("extrinsics", {}),
-            "ui": bundle.get("ui", {}),
-            "runtime_hints": bundle.get("runtime_hints", {}),
-            "validation": bundle.get("validation", {}),
-        }
+        return self._settings_store.get_settings()
 
     def apply_settings_draft(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         bundle = self._load_settings_bundle()
@@ -676,21 +320,7 @@ class LoutrackGuiState:
         }
 
     def apply_settings_ui(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        bundle = self._load_settings_bundle()
-        ui_payload = bundle.get("ui", {})
-        if "active_page" in payload:
-            ui_payload["active_page"] = str(payload.get("active_page") or "calibration")
-        if "active_view" in payload:
-            ui_payload["active_view"] = str(payload.get("active_view") or "cameras")
-        if "selected_camera_ids" in payload:
-            selected_ids = payload.get("selected_camera_ids")
-            if isinstance(selected_ids, list):
-                cleaned = list(dict.fromkeys(str(item).strip() for item in selected_ids if str(item).strip()))
-                ui_payload["selected_camera_ids"] = cleaned
-                self.selected_camera_ids = cleaned
-        bundle["ui"] = ui_payload
-        self._save_settings_bundle(bundle)
-        return {"ok": True, "ui": bundle.get("ui", {})}
+        return self._settings_store.apply_ui(payload, self.selected_camera_ids)
 
     def _load_initial_config(self) -> CalibrationSessionConfig:
         config = self._default_config()
@@ -702,12 +332,7 @@ class LoutrackGuiState:
         return self._build_session_config(committed, base_config=config)
 
     def _persist_config(self) -> None:
-        payload = self._config_payload()
-        bundle = self._load_settings_bundle()
-        bundle["calibration"]["draft"].update(payload)
-        bundle["calibration"]["committed"].update(payload)
-        bundle["validation"] = self._refresh_committed_from_draft(bundle)
-        self._save_settings_bundle(bundle)
+        self._settings_store.persist_calibration_payload(self._config_payload())
 
     def _mask_params(self, config: CalibrationSessionConfig | None = None) -> Dict[str, Any]:
         source = config or self.config
@@ -783,13 +408,7 @@ class LoutrackGuiState:
         return targets
 
     def _ensure_calibration_settings_valid(self) -> Dict[str, Any]:
-        bundle = self._load_settings_bundle()
-        validation = bundle.get("validation", {}).get("calibration", {})
-        if isinstance(validation, dict) and validation:
-            raise ValueError(f"calibration settings invalid: {validation}")
-        calibration = bundle.get("calibration", {})
-        committed = calibration.get("committed", {}) if isinstance(calibration, dict) else {}
-        return committed if isinstance(committed, dict) else {}
+        return self._settings_store.ensure_calibration_settings_valid()
 
     def _apply_capture_settings(self, targets: List[Any]) -> Dict[str, Dict[str, Dict[str, Any]]]:
         return {
@@ -1003,68 +622,16 @@ class LoutrackGuiState:
         raise ValueError("tracking calibration_path must be a calibration directory or extrinsics file")
 
     def get_tracking_status(self) -> Dict[str, Any]:
-        status = self.tracking_runtime.status()
-        start_allowed = self._tracking_extrinsics_ready()
-        return {
-            **status,
-            "start_allowed": start_allowed,
-            "empty_state": None if start_allowed else "Generate extrinsics first",
-            "latest_extrinsics_path": str(self.latest_extrinsics_path) if self.latest_extrinsics_path else None,
-            "latest_extrinsics_quality": self.latest_extrinsics_quality,
-        }
+        return self._tracking_service.get_tracking_status()
 
     def get_tracking_scene(self) -> Dict[str, Any]:
-        start_allowed = self._tracking_extrinsics_ready()
-        if not start_allowed:
-            return {
-                "tracking": {
-                    "running": False,
-                    "frames_processed": 0,
-                    "poses_estimated": 0,
-                },
-                "cameras": [],
-                "rigid_bodies": [],
-                "raw_points": [],
-                "timestamp_us": int(time.time() * 1_000_000),
-                "empty_state": "Generate extrinsics first",
-            }
-        return self.tracking_runtime.scene_snapshot()
+        return self._tracking_service.get_tracking_scene()
+
+    def wait_tracking_scene(self, last_sequence: int | None, timeout: float = 15.0) -> Dict[str, Any]:
+        return self._tracking_service.wait_tracking_scene(last_sequence, timeout=timeout)
 
     def start_tracking(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        resolved = self._resolve_tracking_calibration_path(str(payload.get("calibration_path") or ""))
-        patterns = payload.get("patterns", ["waist"])
-        if not isinstance(patterns, list):
-            patterns = ["waist"]
-        self._ensure_calibration_settings_valid()
-        targets = self._resolve_tracking_targets(payload)
-        camera_ids = [target.camera_id for target in targets]
-        config_result = self._apply_capture_settings(targets)
-        optimization = self._prepare_pis_for_tracking(targets)
-        self._pause_receiver_for_tracking()
-        try:
-            status = self.tracking_runtime.start(str(resolved), [str(item) for item in patterns])
-            stream_start = self.session._broadcast(targets, "start", mode="pose_capture")
-            if not self._all_acked_or_already_running(stream_start):
-                self.tracking_runtime.stop()
-                self._resume_receiver_after_tracking()
-                raise ValueError(f"failed to start tracking camera streams: {stream_start}")
-        except Exception:
-            self.tracking_runtime.stop()
-            self._resume_receiver_after_tracking()
-            raise
-        self._update_camera_status({"tracking_start": stream_start})
-        self._tracking_camera_ids = camera_ids
-        response = {
-            "ok": True,
-            **status,
-            "running": True,
-            "camera_ids": camera_ids,
-            "pi_config": config_result,
-            "pi_tracking_optimization": optimization,
-            "pi_stream_start": stream_start,
-        }
-        self.last_result = {"tracking_start": response}
-        return response
+        return self._tracking_service.start_tracking(payload)
 
     @staticmethod
     def _all_acked_or_already_running(result: Dict[str, Any]) -> bool:
@@ -1104,21 +671,7 @@ class LoutrackGuiState:
         }
 
     def stop_tracking(self) -> Dict[str, Any]:
-        stream_stop: Dict[str, Any] = {}
-        camera_ids = list(self._tracking_camera_ids)
-        if camera_ids:
-            targets = self._discover_workflow_targets(camera_ids)
-            if targets:
-                stream_stop = self.session._broadcast(targets, "stop")
-        stop_result = self.tracking_runtime.stop()
-        self._resume_receiver_after_tracking()
-        summary = stop_result.get("summary", stop_result) if isinstance(stop_result, dict) else {}
-        status = self.tracking_runtime.status()
-        self._update_camera_status({"tracking_stop": stream_stop})
-        self._tracking_camera_ids = []
-        response = {"ok": True, "summary": summary, **status, "running": False, "pi_stream_stop": stream_stop}
-        self.last_result = {"tracking_stop": response}
-        return response
+        return self._tracking_service.stop_tracking()
 
     def _pause_receiver_for_tracking(self) -> None:
         if self._receiver_paused_for_tracking:
@@ -1185,103 +738,22 @@ class LoutrackGuiState:
         return session
 
     def start_intrinsics_capture(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        bundle = self._load_settings_bundle()
-        if payload:
-            intrinsics_patch = {
-                key: payload[key]
-                for key in (
-                    "camera_id",
-                    "mjpeg_url",
-                    "square_length_mm",
-                    "marker_length_mm",
-                    "squares_x",
-                    "squares_y",
-                    "min_frames",
-                    "cooldown_s",
-                )
-                if key in payload
-            }
-            if intrinsics_patch:
-                bundle = self._apply_draft_patch(bundle, {"intrinsics": intrinsics_patch})
-
-        validation = bundle.get("validation", {}).get("intrinsics", {})
-        if isinstance(validation, dict) and validation:
-            raise ValueError(f"intrinsics settings invalid: {validation}")
-
-        committed = bundle.get("intrinsics", {}).get("committed", {})
-        if not isinstance(committed, dict):
-            committed = self._default_intrinsics_payload()
-        camera_id = str(committed.get("camera_id", "pi-cam-01")).strip()
-        self._intrinsics_assert_capability(camera_id)
-
-        if self._intrinsics_host_session is not None:
-            try:
-                self._intrinsics_host_session.stop()
-            except Exception:
-                pass
-
-        self._intrinsics_host_session = self._build_intrinsics_host_session(committed)
-        self._intrinsics_host_session.start()
-        self._persist_intrinsics_settings(committed)
-        return {"ok": True, "camera_id": camera_id, "status": self._intrinsics_host_session.get_status()}
+        return self._intrinsics_service.start_intrinsics_capture(payload)
 
     def stop_intrinsics_capture(self) -> Dict[str, Any]:
-        if self._intrinsics_host_session is not None:
-            self._intrinsics_host_session.stop()
-            return {"ok": True, "status": self.get_intrinsics_status()}
-        return {"ok": True, "status": self._intrinsics_idle_status(None)}
+        return self._intrinsics_service.stop_intrinsics_capture()
 
     def clear_intrinsics_frames(self) -> Dict[str, Any]:
-        if self._intrinsics_host_session is None:
-            raise ValueError("No intrinsics capture session active")
-        self._intrinsics_host_session.clear()
-        return {"ok": True, "status": self.get_intrinsics_status()}
+        return self._intrinsics_service.clear_intrinsics_frames()
 
     def trigger_intrinsics_calibration(self) -> Dict[str, Any]:
-        session = self._ensure_intrinsics_host_session_from_settings()
-        session.trigger_calibration()
-        return {"ok": True, "status": session.get_status()}
+        return self._intrinsics_service.trigger_intrinsics_calibration()
 
     def get_intrinsics_status(self) -> Dict[str, Any]:
-        targets = self.session.discover_targets(None)
-        camera_list = [{"camera_id": t.camera_id, "ip": t.ip} for t in targets]
-        if self._intrinsics_host_session is None:
-            try:
-                self._ensure_intrinsics_host_session_from_settings()
-            except ValueError:
-                status = self._intrinsics_idle_status(None)
-                status["cameras"] = camera_list
-                return status
-        assert self._intrinsics_host_session is not None
-        status = self._intrinsics_host_session.get_status()
-        camera_id = str(status.get("camera_id", "")).strip()
-        if camera_id:
-            try:
-                remote_status = self._intrinsics_send_command(camera_id, "intrinsics_status")
-            except Exception as exc:
-                self._intrinsics_host_session.record_remote_status_error(str(exc))
-            else:
-                self._intrinsics_host_session.apply_remote_status(remote_status)
-            status = self._intrinsics_host_session.get_status()
-        status["cameras"] = camera_list
-        return status
+        return self._intrinsics_service.get_intrinsics_status()
 
     def get_intrinsics_jpeg(self) -> Optional[bytes]:
-        if self._intrinsics_host_session is not None:
-            return self._intrinsics_host_session.get_latest_jpeg()
-        # Fallback: no active session — read mjpeg_url from settings for preview
-        bundle = self._load_settings_bundle()
-        intrinsics = bundle.get("intrinsics", {})
-        draft = intrinsics.get("draft", {}) if isinstance(intrinsics, dict) else {}
-        committed = intrinsics.get("committed", {}) if isinstance(intrinsics, dict) else {}
-        mjpeg_url = ""
-        if isinstance(draft, dict):
-            mjpeg_url = str(draft.get("mjpeg_url", "")).strip()
-        if not mjpeg_url and isinstance(committed, dict):
-            mjpeg_url = str(committed.get("mjpeg_url", "")).strip()
-        if not mjpeg_url:
-            return None
-        return self._fetch_single_mjpeg_frame(mjpeg_url)
+        return self._intrinsics_service.get_intrinsics_jpeg()
 
     def _intrinsics_idle_status(self, camera_id: str | None) -> Dict[str, Any]:
         return {
@@ -1384,22 +856,10 @@ class LoutrackGuiState:
             return None
 
     def _persist_intrinsics_settings(self, payload: Dict[str, Any]) -> None:
-        bundle = self._load_settings_bundle()
-        bundle["intrinsics"]["draft"].update(payload)
-        bundle["intrinsics"]["committed"].update(payload)
-        bundle["validation"] = self._refresh_committed_from_draft(bundle)
-        self._save_settings_bundle(bundle)
+        self._settings_store.persist_intrinsics_payload(payload)
 
     def _load_intrinsics_settings(self) -> Dict[str, Any]:
-        defaults: Dict[str, Any] = self._default_intrinsics_payload()
-        bundle = self._load_settings_bundle()
-        intrinsics = bundle.get("intrinsics", {})
-        draft = intrinsics.get("draft", {}) if isinstance(intrinsics, dict) else {}
-        if isinstance(draft, dict):
-            for key in defaults:
-                if key in draft:
-                    defaults[key] = draft[key]
-        return defaults
+        return self._settings_store.load_intrinsics_settings()
 
     # ── end Intrinsics capture ─────────────────────────────────────────
 
@@ -1492,63 +952,11 @@ class LoutrackGuiState:
             self.last_result = {command: result}
             return self.last_result
         if command in ("start", "start_pose_capture"):
-            log_path = self._start_capture_log("pose_capture")
-            self._update_runtime_hints(pose_log_path=str(log_path))
-            result = self.session._broadcast(targets, "start", mode="pose_capture")
-            payload_out: Dict[str, Any] = {command: result, "capture_log": {"path": str(log_path)}}
-            if not self._all_acked(result):
-                stop_meta = self._stop_capture_log()
-                if stop_meta is not None:
-                    payload_out["capture_log"].update(stop_meta)
-            self._update_camera_status({command: result})
-            self.last_result = payload_out
-            return self.last_result
+            return self._capture_log_service.start_capture(command, payload, targets)
         if command == "start_wand_metric_capture":
-            bundle = self._load_settings_bundle()
-            committed_calibration = bundle.get("calibration", {}).get("committed", {})
-            committed_extrinsics = bundle.get("extrinsics", {}).get("committed", {})
-            default_duration = committed_calibration.get("wand_metric_seconds", self.config.duration_s)
-            duration_s = float(payload.get("duration_s", default_duration))
-            if duration_s <= 0.0:
-                raise ValueError("duration_s must be > 0")
-            wand_log_raw = str(payload.get("wand_metric_log_path", committed_extrinsics.get("wand_metric_log_path", ""))).strip()
-            if wand_log_raw:
-                self.wand_metric_log_path = self._resolve_project_path(wand_log_raw, DEFAULT_WAND_METRIC_LOG_PATH)
-            log_path = self._start_capture_log("wand_metric_capture")
-            self._update_runtime_hints(wand_metric_log_path=str(log_path))
-            result = self.session._broadcast(targets, "start", mode="wand_metric_capture")
-            payload_out = {
-                command: result,
-                "capture_log": {"path": str(log_path)},
-                "duration_s": duration_s,
-            }
-            if not self._all_acked(result):
-                stop_meta = self._stop_capture_log()
-                if stop_meta is not None:
-                    payload_out["capture_log"].update(stop_meta)
-            else:
-                self._schedule_auto_stop([target.camera_id for target in targets], duration_s, "wand_metric_capture")
-            self._update_camera_status({command: result})
-            self.last_result = payload_out
-            return self.last_result
+            return self._capture_log_service.start_capture(command, payload, targets)
         if command in ("stop", "stop_pose_capture", "stop_wand_metric_capture"):
-            self._cancel_capture_timer()
-            result = self.session._broadcast(targets, "stop")
-            payload_out = {command: result}
-            with self.lock:
-                active_kind = self._active_capture_kind
-            stop_meta = self._stop_capture_log()
-            if stop_meta is not None:
-                payload_out["capture_log"] = stop_meta
-                log_file = stop_meta.get("log_file") if isinstance(stop_meta, dict) else None
-                if isinstance(log_file, str):
-                    if command == "stop_wand_metric_capture" or active_kind == "wand_metric_capture":
-                        self._update_runtime_hints(wand_metric_log_path=log_file)
-                    else:
-                        self._update_runtime_hints(pose_log_path=log_file)
-            self._update_camera_status({command: result})
-            self.last_result = payload_out
-            return self.last_result
+            return self._capture_log_service.stop_capture(command, targets)
         if handler is None:
             raise ValueError(f"Unsupported command: {command}")
         result = handler()
@@ -1558,147 +966,7 @@ class LoutrackGuiState:
         return self.last_result
 
     def generate_extrinsics(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        bundle = self._load_settings_bundle()
-        if payload:
-            extrinsics_patch = {
-                key: payload[key]
-                for key in (
-                    "intrinsics_path",
-                    "pose_log_path",
-                    "wand_metric_log_path",
-                    "output_path",
-                    "pair_window_us",
-                    "wand_pair_window_us",
-                    "min_pairs",
-                    "wand_face",
-                )
-                if key in payload
-            }
-            if "log_path" in payload and "pose_log_path" not in extrinsics_patch:
-                extrinsics_patch["pose_log_path"] = payload["log_path"]
-            if extrinsics_patch:
-                bundle = self._apply_draft_patch(bundle, {"extrinsics": extrinsics_patch})
-        validation = bundle.get("validation", {}).get("extrinsics", {})
-        if isinstance(validation, dict) and validation:
-            raise ValueError(f"extrinsics settings invalid: {validation}")
-
-        committed_extrinsics = bundle.get("extrinsics", {}).get("committed", {})
-        if not isinstance(committed_extrinsics, dict):
-            committed_extrinsics = self._default_extrinsics_payload()
-
-        extrinsics_method = str(payload.get("extrinsics_method", "blob_pose_v2")).strip() or "blob_pose_v2"
-        intrinsics_raw = str(committed_extrinsics.get("intrinsics_path", "calibration")).strip()
-        log_raw = str(committed_extrinsics.get("pose_log_path", str(DEFAULT_POSE_LOG_PATH))).strip()
-        output_raw = str(committed_extrinsics.get("output_path", str(DEFAULT_EXTRINSICS_OUTPUT_PATH))).strip()
-        intrinsics_path = self._resolve_project_path(intrinsics_raw, Path("calibration"))
-        resolved_log_path = self._resolve_project_path(log_raw, DEFAULT_POSE_LOG_PATH)
-        wand_log_raw = str(
-            committed_extrinsics.get("wand_metric_log_path", str(self.wand_metric_log_path))
-        ).strip()
-        resolved_output = self._resolve_project_path(output_raw, DEFAULT_EXTRINSICS_OUTPUT_PATH)
-        resolved_wand_log_path = self._resolve_project_path(wand_log_raw, DEFAULT_WAND_METRIC_LOG_PATH)
-        pair_window_us = int(committed_extrinsics.get("pair_window_us", 2000))
-        min_pairs = int(committed_extrinsics.get("min_pairs", 8))
-        wand_pair_window_us = int(committed_extrinsics.get("wand_pair_window_us", 8000))
-        wand_face = str(committed_extrinsics.get("wand_face", "front_up")).strip().lower() or "front_up"
-        if pair_window_us < 1:
-            raise ValueError("pair_window_us must be >= 1")
-        if min_pairs < 1:
-            raise ValueError("min_pairs must be >= 1")
-        if wand_pair_window_us < 1:
-            raise ValueError("wand_pair_window_us must be >= 1")
-        if wand_face not in ("front_up", "back_up"):
-            raise ValueError("wand_face must be front_up or back_up")
-
-        if not resolved_log_path.exists():
-            summary = self._build_generate_extrinsics_failure(
-                resolved_log_path=resolved_log_path,
-                resolved_output=resolved_output,
-                reason=f"log_path does not exist: {resolved_log_path}",
-                resolved_wand_log_path=resolved_wand_log_path,
-            )
-            self.last_result = {"generate_extrinsics": summary}
-            return self.last_result
-        if not resolved_log_path.is_file():
-            summary = self._build_generate_extrinsics_failure(
-                resolved_log_path=resolved_log_path,
-                resolved_output=resolved_output,
-                reason=f"log_path is not a file: {resolved_log_path}",
-                resolved_wand_log_path=resolved_wand_log_path,
-            )
-            self.last_result = {"generate_extrinsics": summary}
-            return self.last_result
-
-        try:
-            if extrinsics_method == "blob_pose_v2" and callable(self._generate_extrinsics_solver):
-                solve_fn = self._generate_extrinsics_solver
-            else:
-                solve_fn = self._generate_extrinsics_registry.get(extrinsics_method).solve
-            raw_result = solve_fn(
-                intrinsics_path=str(intrinsics_path),
-                pose_log_path=str(resolved_log_path),
-                output_path=str(resolved_output),
-                pair_window_us=pair_window_us,
-                min_pairs=min_pairs,
-                wand_metric_log_path=str(resolved_wand_log_path) if resolved_wand_log_path.exists() and resolved_wand_log_path.is_file() else None,
-                wand_pair_window_us=wand_pair_window_us,
-                wand_face=wand_face,
-            )
-        except (FileNotFoundError, ValueError) as exc:
-            reason = str(exc)
-            if isinstance(exc, FileNotFoundError):
-                missing_path = Path(getattr(exc, "filename", "") or str(resolved_log_path))
-                reason = f"log_path does not exist: {missing_path}"
-            summary = self._build_generate_extrinsics_failure(
-                resolved_log_path=resolved_log_path,
-                resolved_output=resolved_output,
-                reason=reason,
-                resolved_wand_log_path=resolved_wand_log_path,
-            )
-            self.last_result = {"generate_extrinsics": summary}
-            return self.last_result
-        if not isinstance(raw_result, dict):
-            raise ValueError("extrinsics solver returned invalid response")
-
-        pose_section = raw_result.get("pose", {})
-        camera_rows = pose_section.get("camera_poses", []) if isinstance(pose_section, dict) else []
-        camera_count = len(camera_rows) if isinstance(camera_rows, list) else 0
-        solve_summary = pose_section.get("solve_summary", {}) if isinstance(pose_section, dict) else {}
-        if not isinstance(solve_summary, dict):
-            solve_summary = {}
-        quality_summary = {
-            key: solve_summary.get(key)
-            for key in (
-                "usable_rows",
-                "complete_rows",
-                "median_reproj_error_px",
-                "p90_reproj_error_px",
-                "matched_delta_us_p50",
-                "matched_delta_us_p90",
-                "matched_delta_us_max",
-            )
-            if key in solve_summary
-        }
-
-        summary = {
-            "ok": True,
-            "extrinsics_method": extrinsics_method,
-            "camera_order": raw_result.get("camera_order", []),
-            "camera_count": camera_count,
-            "output_path": str(resolved_output),
-            "quality": quality_summary,
-            "metric_status": raw_result.get("metric", {}).get("status"),
-            "world_status": raw_result.get("world", {}).get("status"),
-            "wand_metric_log_path": str(resolved_wand_log_path) if resolved_wand_log_path.exists() and resolved_wand_log_path.is_file() else None,
-        }
-        self.latest_extrinsics_path = resolved_output
-        self.latest_extrinsics_quality = quality_summary
-        self.last_result = {"generate_extrinsics": summary}
-        self._update_runtime_hints(
-            pose_log_path=str(resolved_log_path),
-            wand_metric_log_path=str(resolved_wand_log_path),
-        )
-        return self.last_result
+        return self._extrinsics_service.generate_extrinsics(payload)
 
     @staticmethod
     def _extract_pose_log_payload(line: str) -> Dict[str, Any] | None:
@@ -1792,110 +1060,23 @@ class LoutrackGuiState:
                     entry["last_error"] = response.get("error") or response.get("error_message")
 
     def _on_frame_received(self, frame: Any) -> None:
-        previous = self._receiver_frame_callback
-        if callable(previous):
-            previous(frame)
-        logger: FrameLogger | None = None
-        with self.lock:
-            if self._capture_log_active:
-                logger = self._capture_logger
-        if logger is None:
-            return
-        frame_dict = frame.to_dict() if hasattr(frame, "to_dict") else dict(frame)
-        try:
-            logger.log_frame(frame_dict)
-        except Exception:
-            return
+        self._capture_log_service.on_frame_received(frame)
 
     def _start_capture_log(self, capture_kind: str) -> Path:
-        with self.lock:
-            if self._capture_logger is not None and self._capture_log_active:
-                if self._active_capture_kind != capture_kind:
-                    raise ValueError(f"capture already active: {self._active_capture_kind}")
-                default_path = (
-                    self.pose_capture_log_path
-                    if capture_kind == "pose_capture"
-                    else self.wand_metric_log_path
-                )
-                return Path(self._capture_logger.current_log_file or str(default_path))
-            self.capture_log_dir.mkdir(parents=True, exist_ok=True)
-            target_path = self.pose_capture_log_path if capture_kind == "pose_capture" else self.wand_metric_log_path
-            if target_path.exists():
-                target_path.unlink(missing_ok=True)
-            logger = FrameLogger(log_dir=str(self.capture_log_dir))
-            log_file = logger.start_recording(session_name=target_path.stem)
-            self._capture_logger = logger
-            self._capture_log_active = True
-            self._active_capture_kind = capture_kind
-            self._capture_completed[capture_kind] = False
-            if capture_kind == "pose_capture":
-                self.pose_capture_log_path = Path(log_file)
-            else:
-                self.wand_metric_log_path = Path(log_file)
-            return Path(log_file)
+        return self._capture_log_service.start_capture_log(capture_kind)
 
     def _stop_capture_log(self) -> Dict[str, Any] | None:
-        with self.lock:
-            logger = self._capture_logger
-            active = self._capture_log_active
-        if logger is None or not active:
-            return None
-        metadata = logger.stop_recording()
-        with self.lock:
-            self._capture_log_active = False
-            active_kind = self._active_capture_kind
-            self._active_capture_kind = None
-            if isinstance(metadata.get("log_file"), str):
-                path = Path(str(metadata["log_file"]))
-                if active_kind == "pose_capture":
-                    self.pose_capture_log_path = path
-                elif active_kind == "wand_metric_capture":
-                    self.wand_metric_log_path = path
-            if active_kind == "pose_capture":
-                self._capture_completed["pose_capture"] = self.pose_capture_log_path.exists() and self.pose_capture_log_path.is_file()
-            elif active_kind == "wand_metric_capture":
-                self._capture_completed["wand_metric_capture"] = self.wand_metric_log_path.exists() and self.wand_metric_log_path.is_file()
-        return metadata
+        return self._capture_log_service.stop_capture_log()
 
     def _cancel_capture_timer(self) -> None:
-        with self.lock:
-            timer = self._capture_auto_stop_timer
-            self._capture_auto_stop_timer = None
-        if timer is not None:
-            timer.cancel()
+        self._capture_log_service.cancel_capture_timer()
 
     def _schedule_auto_stop(self, camera_ids: List[str], duration_s: float, capture_kind: str) -> None:
-        def _auto_stop() -> None:
-            try:
-                targets = self.session.discover_targets(camera_ids or None)
-                result = self.session._broadcast(targets, "stop")
-                payload_out: Dict[str, Any] = {f"stop_{capture_kind}": result}
-                stop_meta = self._stop_capture_log()
-                if stop_meta is not None:
-                    payload_out["capture_log"] = stop_meta
-                    log_file = stop_meta.get("log_file") if isinstance(stop_meta, dict) else None
-                    if isinstance(log_file, str):
-                        if capture_kind == "pose_capture":
-                            self._update_runtime_hints(pose_log_path=log_file)
-                        elif capture_kind == "wand_metric_capture":
-                            self._update_runtime_hints(wand_metric_log_path=log_file)
-                self._update_camera_status({"stop": result})
-                self.last_result = payload_out
-            finally:
-                with self.lock:
-                    self._capture_auto_stop_timer = None
-
-        timer = threading.Timer(duration_s, _auto_stop)
-        timer.daemon = True
-        with self.lock:
-            if self._capture_auto_stop_timer is not None:
-                self._capture_auto_stop_timer.cancel()
-            self._capture_auto_stop_timer = timer
-        timer.start()
+        self._capture_log_service.schedule_auto_stop(camera_ids, duration_s, capture_kind)
 
     @staticmethod
     def _all_acked(responses: Dict[str, Dict[str, Any]]) -> bool:
-        return all(bool(resp.get("ack")) for resp in responses.values())
+        return GuiCaptureLogService.all_acked(responses)
 
 
 class LoutrackGuiHandler(BaseHTTPRequestHandler):
@@ -1925,6 +1106,9 @@ class LoutrackGuiHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/tracking/scene":
             self._send_json(self.state.get_tracking_scene())
+            return
+        if path == "/api/tracking/stream":
+            self._send_tracking_stream()
             return
         if path == "/api/intrinsics/status":
             self._send_json(self.state.get_intrinsics_status())
@@ -2024,6 +1208,32 @@ class LoutrackGuiHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+    def _send_tracking_stream(self) -> None:
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+
+        last_sequence: int | None = None
+        try:
+            while True:
+                scene = self.state.wait_tracking_scene(last_sequence, timeout=15.0)
+                sequence = int(scene.get("sequence", 0))
+                if last_sequence is not None and sequence <= last_sequence:
+                    self.wfile.write(b": keepalive\n\n")
+                    self.wfile.flush()
+                    time.sleep(15.0)
+                    continue
+
+                payload = json.dumps(scene, ensure_ascii=False).replace("\n", "\\n")
+                message = f"id: {sequence}\nevent: scene\ndata: {payload}\n\n".encode("utf-8")
+                self.wfile.write(message)
+                self.wfile.flush()
+                last_sequence = sequence
+        except (BrokenPipeError, ConnectionResetError, TimeoutError):
+            return
 
     def _serve_static(self, rel_path: str) -> None:
         target = _resolve_static_asset(rel_path)

@@ -58,7 +58,7 @@ class TrackingPipeline:
         self.log_dir = log_dir
         
         # Initialize components
-        self.frame_processor = FrameProcessor(udp_port=udp_port)
+        self.frame_processor = FrameProcessor(udp_port=udp_port, frame_index_fallback=False)
         self.geometry = GeometryPipeline()
         self.rigid_estimator = RigidBodyEstimator(patterns=patterns or [WAIST_PATTERN])
         self.metrics = MetricsCollector()
@@ -218,6 +218,9 @@ class TrackingPipeline:
                     blob_count=len(frame.blobs),
                     frame_index=frame.frame_index,
                     received_at=frame.received_at,
+                    timestamp_source=frame.timestamp_source,
+                    capture_to_process_ms=frame.capture_to_process_ms,
+                    capture_to_send_ms=frame.capture_to_send_ms,
                 )
             
             if point_count > 0:
@@ -268,9 +271,11 @@ class TrackingPipeline:
 
 class TrackingSession:
     """
-    High-level session manager for tracking.
-    
-    Handles session lifecycle, output files, and statistics.
+    Legacy high-level session wrapper around TrackingPipeline.
+
+    The host GUI now uses TrackingRuntime as the primary orchestration layer.
+    TrackingSession remains available for older call sites, tests, and scripts
+    that still want a history-owning session facade.
     """
     
     def __init__(self, config: Optional[Dict[str, Any]] = None):

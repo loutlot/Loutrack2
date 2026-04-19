@@ -76,6 +76,10 @@ Available now:
 - tracking start now configures selected Pis for low-overhead preview and explicitly starts their `pose_capture` UDP streams before expecting 3D blob points
 - tracking start tolerates Pis that are already streaming so the host receiver can recover cleanly after a GUI restart or partial start failure
 - live tracking pairing now consumes each buffered Pi frame only once, emits pairs in chronological order, and calculates FPS/latency from UDP receive timestamps, preventing inflated 300+ FPS and missing-frame counts from stale or out-of-order buffer reprocessing
+- live tracking scene updates now use a push stream for the GUI viewer, emit newly completed frame pairs without a fixed 16 ms batching delay, and draw world-space trails and marker positions without double-applying rigid-body transforms
+- tracking UDP diagnostics now keep Pi-side capture timestamps separate from raw host receive time; `pose_capture` payloads omit `frame_index`, and tracking pairing uses timestamp-only matching while surfacing timestamp source and capture-to-send timing
+- Pi control commands are now defined from a shared runtime manifest so the Pi server, host CLI, ping diagnostics, and `schema/control.json` stay aligned as intrinsics commands evolve
+- the host GUI backend now routes settings, tracking, intrinsics, capture-log, and extrinsics orchestration through dedicated internal services while keeping the existing `/api/*` surface unchanged
 - the calibration flow can produce intrinsics and extrinsics JSON outputs
 - synchronized multi-camera observations can be reconstructed into 3D marker positions
 - the host can inspect tracking state, scene snapshots, and calibration-related metrics

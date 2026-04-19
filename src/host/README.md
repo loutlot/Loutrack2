@@ -63,7 +63,7 @@ FPS、遅延、再投影誤差を収集・エクスポート。
 from host import MetricsCollector
 
 metrics = MetricsCollector()
-metrics.record_frame("pi-01", timestamp, blob_count=4, frame_index=42)
+metrics.record_frame("pi-01", timestamp, blob_count=4, received_at=host_received_at)
 metrics.record_triangulation(12, [0.5, 0.3, 0.8])
 print(metrics.get_summary())
 print(metrics.export_prometheus())
@@ -79,7 +79,7 @@ print(metrics.export_prometheus())
 
 ### receiver.py - UDP受信 + ペアリング
 
-複数PiからのUDPメッセージを受信し、timestamp/frame_indexでペアリング。
+複数PiからのUDPメッセージを受信し、timestampでペアリング。`frame_index` は古いcapture flow向けの互換fallbackで、trackingでは使いません。
 
 ```python
 from host import FrameProcessor
@@ -101,7 +101,8 @@ processor.start()
 
 **ペアリングロジック**:
 - 主キー: `timestamp` (±5ms許容)
-- 副キー: `frame_index` (フォールバック)
+- 互換fallback: `frame_index` (tracking runtimeでは無効)
+- 診断: raw host receive timeは `host_received_at_us` としてログに残し、Pi timestampとの遅延評価に使います
 
 ---
 
@@ -246,8 +247,8 @@ print(status["recommendation"])
 |------|------|
 | `pair_spread_us` | ペア内時刻差の統計（mean/median/p95/p99/max） |
 | `window_sweep` | 許容窓ごとの通過率 |
-| `camera_offsets` | カメラ別 offset/jitter/drift |
-| `missing_behavior` | frame_index gapに基づく欠損挙動 |
+| `camera_offsets` | カメラ別 offset/jitter/drift と host latency / capture-to-send 診断 |
+| `missing_behavior` | 互換 `frame_index` がある場合のみ gap に基づく欠損挙動 |
 | `recommendation` | 推奨許容窓と判定状態 |
 
 ---

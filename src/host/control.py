@@ -3,7 +3,19 @@ import socket
 import uuid
 import argparse
 import sys
+from pathlib import Path
 from typing import Optional, Dict, Any
+
+
+MODULE_SRC_ROOT = Path(__file__).resolve().parents[1]
+if str(MODULE_SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(MODULE_SRC_ROOT))
+
+from pi.service.control_manifest import HOST_CONTROL_CLI_COMMANDS
+
+
+def public_cli_commands() -> tuple[str, ...]:
+    return HOST_CONTROL_CLI_COMMANDS
 
 
 def _recv_line(sock: socket.socket, _buf: bytearray = None) -> str:
@@ -311,7 +323,7 @@ def _print_json_and_exit(resp: Dict[str, Any]) -> None:
         sys.exit(1)
 
 
-def _build_cli_and_run() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="host.control", description="Pi host control client (NDJSON over TCP)")
     parser.add_argument("--ip", required=True, help="IP address of the Pi control server")
     parser.add_argument("--port", type=int, default=8554, help="Port of the Pi control server (default 8554)")
@@ -371,6 +383,28 @@ def _build_cli_and_run() -> None:
     preview_p.add_argument("--charuco-square-length-mm", type=float, default=None, help="Charuco square length (mm)")
     preview_p.add_argument("--charuco-marker-length-mm", type=float, default=None, help="Charuco marker length (mm)")
 
+    intrinsics_start_p = sub.add_parser("intrinsics_start", help="Start Pi-side intrinsics frame capture")
+    intrinsics_start_p.add_argument("--square-length-mm", type=float, required=True, help="Charuco square length in mm")
+    intrinsics_start_p.add_argument("--marker-length-mm", type=float, default=None, help="Charuco marker length in mm")
+    intrinsics_start_p.add_argument("--squares-x", type=int, default=6, help="Charuco board squares in X")
+    intrinsics_start_p.add_argument("--squares-y", type=int, default=8, help="Charuco board squares in Y")
+    intrinsics_start_p.add_argument("--min-frames", type=int, default=25, help="Minimum frames before calibration")
+    intrinsics_start_p.add_argument("--cooldown-s", type=float, default=1.5, help="Minimum capture interval in seconds")
+
+    sub.add_parser("intrinsics_stop", help="Stop Pi-side intrinsics frame capture")
+    sub.add_parser("intrinsics_clear", help="Clear Pi-side buffered intrinsics frames")
+
+    intrinsics_get_corners_p = sub.add_parser("intrinsics_get_corners", help="Fetch buffered Pi-side intrinsics corners")
+    intrinsics_get_corners_p.add_argument("--start-index", type=int, default=0, help="Starting buffered frame index")
+    intrinsics_get_corners_p.add_argument("--max-frames", type=int, default=None, help="Maximum buffered frames to return")
+
+    sub.add_parser("intrinsics_status", help="Read Pi-side intrinsics capture status")
+
+    return parser
+
+
+def _build_cli_and_run() -> None:
+    parser = build_parser()
     args = parser.parse_args()
 
     ip = args.ip
@@ -453,6 +487,34 @@ def _build_cli_and_run() -> None:
                 charuco=charuco if charuco else None,
                 request_id=req_id,
             )
+        elif args.cmd == "intrinsics_start":
+            resp = intrinsics_start(
+                ip,
+                port,
+                camera_id=camera_id,
+                square_length_mm=args.square_length_mm,
+                marker_length_mm=args.marker_length_mm,
+                squares_x=args.squares_x,
+                squares_y=args.squares_y,
+                min_frames=args.min_frames,
+                cooldown_s=args.cooldown_s,
+                request_id=req_id,
+            )
+        elif args.cmd == "intrinsics_stop":
+            resp = intrinsics_stop(ip, port, camera_id=camera_id, request_id=req_id)
+        elif args.cmd == "intrinsics_clear":
+            resp = intrinsics_clear(ip, port, camera_id=camera_id, request_id=req_id)
+        elif args.cmd == "intrinsics_get_corners":
+            resp = intrinsics_get_corners(
+                ip,
+                port,
+                camera_id=camera_id,
+                start_index=args.start_index,
+                max_frames=args.max_frames,
+                request_id=req_id,
+            )
+        elif args.cmd == "intrinsics_status":
+            resp = intrinsics_status(ip, port, camera_id=camera_id, request_id=req_id)
         else:
             raise SystemExit("Unknown command")
 

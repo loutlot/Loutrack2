@@ -14,7 +14,9 @@ PiからHostへ送信されるフレームデータのフォーマット。
   "camera_id": "pi-cam-01",
   "timestamp": 1708594800000000,
   "timestamp_source": "sensor_metadata",
-  "frame_index": 42,
+  "sensor_timestamp_ns": 123456789,
+  "capture_to_process_ms": 3.2,
+  "capture_to_send_ms": 4.1,
   "capture_mode": "pose_capture",
   "blob_count": 2,
   "quality": 0.91,
@@ -30,7 +32,11 @@ PiからHostへ送信されるフレームデータのフォーマット。
 | `camera_id` | string | ✅ | カメラ/Pi識別子 |
 | `timestamp` | integer | ✅ | Unix時間 (マイクロ秒, int64) |
 | `timestamp_source` | string | | `sensor_metadata` または `capture_dequeue` |
-| `frame_index` | integer | ✅ | フレーム連番 (uint32) |
+| `sensor_timestamp_ns` | integer | | カメラメタデータのセンサーtimestamp（取得できた場合のみ） |
+| `host_received_at_us` | integer | | Host受信時刻。Host receiverがログ用に付与 |
+| `capture_to_process_ms` | number | | Pi側 capture handoff からblob処理完了まで |
+| `capture_to_send_ms` | number | | Pi側 capture handoff からUDP送信まで |
+| `frame_index` | integer | | 互換用フレーム連番。`pose_capture` では送信しない |
 | `capture_mode` | string | | `capture` / `pose_capture` / `wand_metric_capture` |
 | `blob_count` | integer | | `pose_capture` 時のみ付与される accepted blob 数 |
 | `quality` | number | | `pose_capture` 時のみ付与される単点観測 quality |
@@ -41,7 +47,7 @@ PiからHostへ送信されるフレームデータのフォーマット。
 
 **ペアリングキー**:
 - 主キー: `timestamp` (PTP同期時)
-- 副キー: `frame_index` (フォールバック)
+- 互換フォールバック: `frame_index` (`pose_capture` / tracking runtime では使わない)
 
 ---
 
@@ -231,7 +237,7 @@ with open("schema/messages.json") as f:
     schema = json.load(f)
 
 # メッセージ検証
-message = {"camera_id": "pi-01", "timestamp": 123, "frame_index": 0, "blobs": []}
+message = {"camera_id": "pi-01", "timestamp": 123, "blobs": []}
 validate(instance=message, schema=schema)
 ```
 

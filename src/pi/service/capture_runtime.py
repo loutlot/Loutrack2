@@ -43,6 +43,7 @@ from intrinsics_capture import (
     DEFAULT_INTRINSICS_SPATIAL_THRESHOLD_PX,
     CHARUCO_DETECTION_MIN_CORNERS,
 )
+from control_manifest import MVP_SUPPORTED_COMMANDS, SCHEMA_COMMANDS
 
 
 ERROR_INVALID_JSON = 1
@@ -84,51 +85,6 @@ LINUXPTP_TIMESTAMPING_MODE_PATH = "/etc/linuxptp/loutrack-timestamping-mode"
 
 MAX_LINE_BYTES = 65536
 LINE_TIMEOUT_SECONDS = 2.0
-
-SCHEMA_COMMANDS = {
-    "start",
-    "stop",
-    "set_exposure",
-    "set_gain",
-    "set_fps",
-    "set_focus",
-    "set_threshold",
-    "set_blob_diameter",
-    "set_circularity_min",
-    "mask_start",
-    "mask_stop",
-    "set_preview",
-    "intrinsics_start",
-    "intrinsics_stop",
-    "intrinsics_clear",
-    "intrinsics_get_corners",
-    "intrinsics_status",
-    "led_on",
-    "led_off",
-    "set_resolution",
-    "ping",
-}
-
-MVP_SUPPORTED_COMMANDS = {
-    "ping",
-    "start",
-    "stop",
-    "set_exposure",
-    "set_gain",
-    "set_fps",
-    "set_focus",
-    "set_threshold",
-    "set_blob_diameter",
-    "set_circularity_min",
-    "mask_start",
-    "mask_stop",
-    "set_preview",
-    "intrinsics_start",
-    "intrinsics_stop",
-    "intrinsics_clear",
-    "intrinsics_get_corners",
-    "intrinsics_status",
-}
 
 
 def parse_udp_dest(value: str) -> tuple[str, int]:
@@ -596,6 +552,7 @@ class UDPFrameEmitter:
                 return
 
             try:
+                captured_monotonic_ns = time.monotonic_ns()
                 captured_frame = self._backend.next_captured_frame()
                 frame = captured_frame.image
                 blobs, detection_stats = detect_blobs(
@@ -622,13 +579,21 @@ class UDPFrameEmitter:
                     )
             except Exception:
                 return
+            processed_monotonic_ns = time.monotonic_ns()
+            capture_to_process_ms = float(processed_monotonic_ns - captured_monotonic_ns) / 1_000_000.0
+            capture_to_send_ms = float(time.monotonic_ns() - captured_monotonic_ns) / 1_000_000.0
             msg = {
                 "camera_id": self._camera_id,
                 "timestamp": self._public_timestamp_us(captured_frame),
                 "timestamp_source": str(captured_frame.timestamp_source),
-                "frame_index": int(self._frame_index & 0xFFFFFFFF),
                 "blobs": blobs,
+                "capture_to_process_ms": capture_to_process_ms,
+                "capture_to_send_ms": capture_to_send_ms,
             }
+            if captured_frame.sensor_timestamp_ns is not None:
+                msg["sensor_timestamp_ns"] = int(captured_frame.sensor_timestamp_ns)
+            if self._capture_mode != "pose_capture":
+                msg["frame_index"] = int(self._frame_index & 0xFFFFFFFF)
             if self._capture_mode == "pose_capture":
                 msg["blob_count"] = len(blobs)
                 msg["quality"] = _pose_capture_quality(cast(list[dict[str, object]], blobs))
@@ -2020,14 +1985,20 @@ class _ProcessingWorker:
             if stream_mode is None or sock is None:
                 continue
 
+            capture_to_send_ms = float(time.monotonic_ns() - packet.captured_monotonic_ns) / 1_000_000.0
             msg: dict[str, object] = {
                 "camera_id": self._camera_id,
                 "timestamp": int(packet.captured_frame.timestamp_us),
                 "timestamp_source": str(packet.captured_frame.timestamp_source),
-                "frame_index": int(self._frame_index & 0xFFFFFFFF),
                 "blobs": blobs,
                 "capture_mode": stream_mode,
+                "capture_to_process_ms": capture_to_process_ms,
+                "capture_to_send_ms": capture_to_send_ms,
             }
+            if packet.captured_frame.sensor_timestamp_ns is not None:
+                msg["sensor_timestamp_ns"] = int(packet.captured_frame.sensor_timestamp_ns)
+            if stream_mode != "pose_capture":
+                msg["frame_index"] = int(self._frame_index & 0xFFFFFFFF)
             if stream_mode == "pose_capture":
                 msg["blob_count"] = len(blobs)
                 msg["quality"] = _pose_capture_quality(cast(list[dict[str, object]], blobs))
@@ -2038,12 +2009,9 @@ class _ProcessingWorker:
                 _ = sock.sendto(payload, (self._udp_host, self._udp_port))
             except OSError:
                 continue
-            sent_monotonic_ns = time.monotonic_ns()
             with self._lock:
                 self._frames_sent += 1
-                self._capture_to_send_ms.append(
-                    float(sent_monotonic_ns - packet.captured_monotonic_ns) / 1_000_000.0
-                )
+                self._capture_to_send_ms.append(capture_to_send_ms)
 
 
 class _CapturePipeline:

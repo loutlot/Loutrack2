@@ -235,7 +235,7 @@ tail -f src/deploy/deploy.log
 - エントリポイント: Pi 側のキャプチャ処理は src/pi/service/capture_runtime.py を使用します。
 - TCP 制御 NDJSON ポート: 8554 をデフォルトとして、制御コマンドは PYTHONPATH=src .venv/bin/python -m host.control ... 形式で実行します。
 - UDP フレーム: Pi から Host へ送信される各データグラムは JSON 形式。デフォルトのブロードキャスト先は 255.255.255.255:5000 です。
-- UDP フレーム: 既存キーに加えて `timestamp_source` を含みます。`timestamp` は露光寄りの epoch(us) を優先して送ります。
+- UDP フレーム: `timestamp_source` と capture-to-process/send 診断値を含みます。`timestamp` は露光寄りの epoch(us) を優先し、`pose_capture` では `frame_index` を送信しません。
 - systemd の例: capture_runtime.py を引数付きで実行するか、EnvironmentFile を用いて環境変数を読み込む形で起動します。
 - src/deploy/hosts.ini の camera_id: 文字列で pi-cam-01 等を使用します。
 - 未実装/検討中: mask/LED の制御欄は現時点では未実装、または今後の計画として記載します。
