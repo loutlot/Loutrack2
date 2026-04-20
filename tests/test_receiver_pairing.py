@@ -74,6 +74,50 @@ def test_frame_pairer_can_disable_frame_index_fallback_for_tracking() -> None:
     assert pairer.get_stats()["frame_index_fallback_pairs"] == 0
 
 
+def test_frame_buffer_preserves_timestamp_order_for_out_of_order_inserts() -> None:
+    buffer = FrameBuffer(buffer_size=10)
+
+    buffer.add_frame(_frame("pi-cam-01", 2, timestamp=1_002_000))
+    buffer.add_frame(_frame("pi-cam-01", 0, timestamp=1_000_000))
+    buffer.add_frame(_frame("pi-cam-01", 1, timestamp=1_001_000))
+
+    frames = buffer.get_all_frames("pi-cam-01")
+
+    assert [frame.frame_index for frame in reversed(frames)] == [0, 1, 2]
+
+
+def test_frame_pairer_drops_stale_reference_frames_and_emits_later_pairs() -> None:
+    buffer = FrameBuffer(buffer_size=10)
+    pairer = FramePairer(timestamp_tolerance_us=5000, min_cameras=2, frame_index_fallback=False)
+
+    buffer.add_frame(_frame("pi-cam-01", 1, timestamp=1_000_000))
+    buffer.add_frame(_frame("pi-cam-02", 9, timestamp=1_020_000))
+
+    assert pairer.pair_frames(buffer) == []
+    assert pairer.get_stats()["stale_frames_dropped"] == 1
+
+    buffer.add_frame(_frame("pi-cam-01", 2, timestamp=1_030_000))
+    buffer.add_frame(_frame("pi-cam-02", 2, timestamp=1_030_100))
+
+    pairs = pairer.pair_frames(buffer)
+
+    assert len(pairs) == 1
+    assert {frame.frame_index for frame in pairs[0].frames.values()} == {2}
+
+
+def test_frame_pairer_drops_stale_reference_frames_once_other_cameras_advance() -> None:
+    buffer = FrameBuffer(buffer_size=10)
+    pairer = FramePairer(timestamp_tolerance_us=5000, min_cameras=2, frame_index_fallback=False)
+
+    now = time.time()
+    buffer.add_frame(_frame("pi-cam-01", 1, timestamp=1_000_000, received_at=now))
+    buffer.add_frame(_frame("pi-cam-02", 10, timestamp=1_020_000, received_at=now + 0.01))
+
+    assert pairer.pair_frames(buffer) == []
+    assert buffer.get_oldest_frame("pi-cam-01") is None
+    assert pairer.get_stats()["stale_frames_dropped"] == 1
+
+
 def test_udp_receiver_accepts_payload_without_frame_index_and_records_diagnostics() -> None:
     callback_frames = []
     probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

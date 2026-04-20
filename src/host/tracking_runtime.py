@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from collections import defaultdict, deque
 from typing import Any, Deque, Dict, List, Optional
 
@@ -72,6 +73,11 @@ class TrackingRuntime:
         self._last_stop_summary: Dict[str, Any] = {}
         self._latest_scene: Dict[str, Any] = self._empty_scene()
         self._scene_sequence = 0
+        self._latest_scene_snapshot: Dict[str, Any] = self._build_scene_snapshot(self._latest_scene)
+        self._camera_scene: List[Dict[str, Any]] = []
+        self._status_cache: Dict[str, Any] = {}
+        self._status_cache_monotonic = 0.0
+        self._status_cache_interval_s = 0.25
         self._lock = threading.Lock()
         self._scene_condition = threading.Condition(self._lock)
 
@@ -93,6 +99,7 @@ class TrackingRuntime:
         )
         pipeline.set_pose_callback(self._on_pose)
         pipeline.start(session_name="tracking_gui")
+        camera_scene = self._build_camera_scene(pipeline)
 
         with self._lock:
             self._pipeline = pipeline
@@ -101,9 +108,12 @@ class TrackingRuntime:
             self._patterns_by_name = {pattern.name: pattern for pattern in selected_patterns}
             self._trail_by_name = defaultdict(lambda: deque(maxlen=self.trail_length))
             self._last_stop_summary = {}
+            self._camera_scene = camera_scene
+            self._status_cache = {}
+            self._status_cache_monotonic = 0.0
             self._set_latest_scene_locked(
                 self._empty_scene(
-                    cameras=self._build_camera_scene(pipeline),
+                    cameras=camera_scene,
                     coordinate_frame=getattr(pipeline.geometry, "coordinate_frame", "camera_similarity"),
                     coordinate_origin=getattr(pipeline.geometry, "coordinate_origin", "reference_camera"),
                     coordinate_origin_source=getattr(
@@ -113,8 +123,12 @@ class TrackingRuntime:
                     ),
                 ),
             )
-
-        return self.status()
+        status = self._refresh_status_cache(force=True)
+        with self._lock:
+            scene = dict(self._latest_scene)
+            scene["tracking"] = self._scene_tracking_from_status(status)
+            self._set_latest_scene_locked(scene)
+        return status
 
     def stop(self) -> Dict[str, Any]:
         """Stop tracking runtime."""
@@ -126,14 +140,16 @@ class TrackingRuntime:
             return {}
 
         summary = pipeline.stop()
-        cameras = self._build_camera_scene(pipeline)
         with self._lock:
             self._patterns_by_name = {}
             self._trail_by_name = defaultdict(lambda: deque(maxlen=self.trail_length))
             self._last_stop_summary = dict(summary)
+            self._status_cache = self._stopped_status_payload_locked()
+            self._status_cache_monotonic = time.monotonic()
             self._set_latest_scene_locked(
                 self._empty_scene(
-                    cameras=cameras,
+                    cameras=[dict(camera) for camera in self._camera_scene],
+                    tracking=self._scene_tracking_from_status(self._status_cache),
                     coordinate_frame=getattr(pipeline.geometry, "coordinate_frame", "camera_similarity"),
                     coordinate_origin=getattr(pipeline.geometry, "coordinate_origin", "reference_camera"),
                     coordinate_origin_source=getattr(
@@ -152,30 +168,15 @@ class TrackingRuntime:
             calibration_path = self._active_calibration_path
             pattern_names = list(self._selected_pattern_names)
             last_stop_summary = dict(self._last_stop_summary)
+            cached_status = dict(self._status_cache)
+            cached_at = self._status_cache_monotonic
 
         if pipeline is None:
-            return {
-                "running": False,
-                "calibration_loaded": calibration_path is not None,
-                "active_calibration_path": calibration_path,
-                "calibration_path": calibration_path,
-                "patterns": pattern_names,
-                "frames_processed": 0,
-                "poses_estimated": 0,
-                "receiver": {"frames_received": 0, "cameras_discovered": 0},
-                "metrics": {},
-                "tracking": {},
-                "sync": {},
-                "uptime_seconds": 0.0,
-                "last_stop_summary": last_stop_summary,
-            }
+            _ = (cached_status, cached_at)
+            return self._stopped_status_payload()
 
-        status = pipeline.get_status()
-        status["calibration_path"] = calibration_path
-        status["active_calibration_path"] = calibration_path
-        status["patterns"] = pattern_names
-        status["last_stop_summary"] = last_stop_summary
-        return status
+        _ = (calibration_path, pattern_names, last_stop_summary)
+        return self._refresh_status_cache(force=False)
 
     def scene_snapshot(self) -> Dict[str, Any]:
         """Return latest scene snapshot for GUI polling."""
@@ -201,12 +202,13 @@ class TrackingRuntime:
             return
 
         triangulation = pipeline.get_latest_triangulation_snapshot()
-        status = pipeline.get_status()
+        status = self._refresh_status_cache(force=False)
 
         with self._lock:
             if self._pipeline is not pipeline:
                 return
 
+            camera_scene = self._camera_scene
             rigid_bodies = []
             for name, pose in poses.items():
                 pattern = self._patterns_by_name.get(name)
@@ -233,12 +235,8 @@ class TrackingRuntime:
 
             self._set_latest_scene_locked(
                 {
-                    "tracking": {
-                        "running": status.get("running", False),
-                        "frames_processed": status.get("frames_processed", 0),
-                        "poses_estimated": status.get("poses_estimated", 0),
-                    },
-                    "cameras": self._build_camera_scene(pipeline),
+                    "tracking": self._scene_tracking_from_status(status, pipeline),
+                    "cameras": [dict(camera) for camera in camera_scene],
                     "rigid_bodies": rigid_bodies,
                     "raw_points": list(triangulation.get("points_3d", [])),
                     "coordinate_frame": getattr(pipeline.geometry, "coordinate_frame", "camera_similarity"),
@@ -252,23 +250,107 @@ class TrackingRuntime:
                 }
             )
 
+    def _refresh_status_cache(self, *, force: bool) -> Dict[str, Any]:
+        with self._lock:
+            pipeline = self._pipeline
+            if pipeline is None:
+                return self._stopped_status_payload_locked()
+            cached_status = self._status_cache
+            cached_at = self._status_cache_monotonic
+            calibration_path = self._active_calibration_path
+            pattern_names = list(self._selected_pattern_names)
+            last_stop_summary = dict(self._last_stop_summary)
+
+        now = time.monotonic()
+        if not force and cached_status and (now - cached_at) <= self._status_cache_interval_s:
+            return self._copy_status_payload(cached_status)
+
+        status = pipeline.get_status()
+        status["calibration_path"] = calibration_path
+        status["active_calibration_path"] = calibration_path
+        status["patterns"] = pattern_names
+        status["last_stop_summary"] = last_stop_summary
+        with self._lock:
+            if self._pipeline is pipeline:
+                self._status_cache = self._copy_status_payload(status)
+                self._status_cache_monotonic = now
+                return self._copy_status_payload(self._status_cache)
+        return self._stopped_status_payload()
+
+    def _stopped_status_payload_locked(self) -> Dict[str, Any]:
+        calibration_path = self._active_calibration_path
+        pattern_names = list(self._selected_pattern_names)
+        last_stop_summary = dict(self._last_stop_summary)
+        return {
+            "running": False,
+            "calibration_loaded": calibration_path is not None,
+            "active_calibration_path": calibration_path,
+            "calibration_path": calibration_path,
+            "patterns": pattern_names,
+            "frames_processed": 0,
+            "poses_estimated": 0,
+            "receiver": {"frames_received": 0, "cameras_discovered": 0},
+            "metrics": {},
+            "tracking": {},
+            "sync": {},
+            "uptime_seconds": 0.0,
+            "last_stop_summary": last_stop_summary,
+        }
+
+    def _stopped_status_payload(self) -> Dict[str, Any]:
+        with self._lock:
+            return self._stopped_status_payload_locked()
+
+    @staticmethod
+    def _copy_status_payload(status: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            **status,
+            "receiver": dict(status.get("receiver", {})),
+            "metrics": dict(status.get("metrics", {})),
+            "tracking": dict(status.get("tracking", {})),
+            "sync": dict(status.get("sync", {})),
+            "patterns": list(status.get("patterns", [])),
+            "last_stop_summary": dict(status.get("last_stop_summary", {})),
+        }
+
+    @staticmethod
+    def _scene_tracking_from_status(
+        status: Dict[str, Any],
+        pipeline: Optional[TrackingPipeline] = None,
+    ) -> Dict[str, Any]:
+        pipeline_frames = int(getattr(pipeline, "frames_processed", 0)) if pipeline is not None else 0
+        pipeline_poses = int(getattr(pipeline, "poses_estimated", 0)) if pipeline is not None else 0
+        return {
+            "running": bool(status.get("running", False) or getattr(pipeline, "is_running", False)),
+            "frames_processed": max(int(status.get("frames_processed", 0)), pipeline_frames),
+            "poses_estimated": max(int(status.get("poses_estimated", 0)), pipeline_poses),
+        }
+
     def _set_latest_scene_locked(self, scene: Dict[str, Any]) -> None:
+        next_timestamp = int(scene.get("timestamp_us", 0))
+        current_timestamp = int(self._latest_scene.get("timestamp_us", -1))
+        if next_timestamp > 0 and next_timestamp == current_timestamp:
+            return
         self._scene_sequence += 1
         scene["sequence"] = self._scene_sequence
         self._latest_scene = scene
+        self._latest_scene_snapshot = self._build_scene_snapshot(scene)
         self._scene_condition.notify_all()
 
     def _scene_snapshot_locked(self) -> Dict[str, Any]:
+        return dict(self._latest_scene_snapshot)
+
+    def _build_scene_snapshot(self, scene: Dict[str, Any]) -> Dict[str, Any]:
         return {
-            "tracking": dict(self._latest_scene["tracking"]),
-            "cameras": [dict(camera) for camera in self._latest_scene["cameras"]],
-            "rigid_bodies": [dict(body) for body in self._latest_scene["rigid_bodies"]],
-            "raw_points": [list(point) for point in self._latest_scene["raw_points"]],
-            "coordinate_frame": self._latest_scene.get("coordinate_frame", "camera_similarity"),
-            "coordinate_origin": self._latest_scene.get("coordinate_origin", "reference_camera"),
-            "coordinate_origin_source": self._latest_scene.get("coordinate_origin_source", "extrinsics_pose_reference"),
-            "timestamp_us": self._latest_scene["timestamp_us"],
-            "sequence": int(self._latest_scene.get("sequence", self._scene_sequence)),
+            "tracking": dict(scene["tracking"]),
+            "cameras": list(scene["cameras"]),
+            "rigid_bodies": list(scene["rigid_bodies"]),
+            "raw_points": list(scene["raw_points"]),
+            "coordinate_frame": scene.get("coordinate_frame", "camera_similarity"),
+            "coordinate_origin": scene.get("coordinate_origin", "reference_camera"),
+            "coordinate_origin_source": scene.get("coordinate_origin_source", "extrinsics_pose_reference"),
+            "timestamp_us": scene["timestamp_us"],
+            "sequence": int(scene.get("sequence", self._scene_sequence)),
         }
 
     def _build_camera_scene(self, pipeline: TrackingPipeline) -> List[Dict[str, Any]]:
@@ -291,12 +373,13 @@ class TrackingRuntime:
     def _empty_scene(
         self,
         cameras: Optional[List[Dict[str, Any]]] = None,
+        tracking: Optional[Dict[str, Any]] = None,
         coordinate_frame: str = "camera_similarity",
         coordinate_origin: str = "reference_camera",
         coordinate_origin_source: str = "extrinsics_pose_reference",
     ) -> Dict[str, Any]:
         return {
-            "tracking": {"running": False, "frames_processed": 0, "poses_estimated": 0},
+            "tracking": tracking or {"running": False, "frames_processed": 0, "poses_estimated": 0},
             "cameras": cameras or [],
             "rigid_bodies": [],
             "raw_points": [],

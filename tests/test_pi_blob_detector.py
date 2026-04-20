@@ -487,6 +487,39 @@ def test_capture_pipeline_keeps_runtime_alive_when_preview_render_is_off() -> No
     assert float(runtime["capture_fps"]) > 0.0
     assert float(runtime["processing_fps"]) > 0.0
     assert runtime["stream_active"] is False
+    assert runtime["idle_throttled"] is True
+    assert runtime["preview_packets_built"] == 0
+    assert runtime["preview_packets_skipped"] > 0
+
+
+def test_capture_pipeline_preview_render_disables_idle_throttle() -> None:
+    pipeline = _CapturePipeline(
+        camera_id="pi-cam-test",
+        udp_host="127.0.0.1",
+        udp_port=5000,
+        backend_factory=lambda: DummyBackend(
+            DummyBackendConfig(width=96, height=72, num_dots=3, seed=9, dot_radius=2)
+        ),
+        debug_preview=None,
+        log_fn=lambda _message: None,
+    )
+
+    try:
+        pipeline.start()
+        pipeline.set_mjpeg_render_enabled(True)
+        deadline = time.monotonic() + 1.0
+        runtime: dict[str, object] = {}
+        while time.monotonic() < deadline:
+            runtime = pipeline.get_runtime_diagnostics()
+            if int(runtime.get("preview_packets_built", 0) or 0) > 0:
+                break
+            time.sleep(0.05)
+    finally:
+        pipeline.stop()
+
+    assert runtime["idle_throttled"] is False
+    assert runtime["preview_packets_built"] > 0
+    assert runtime["preview_packets_skipped"] >= 0
 
 
 def test_resolve_debug_preview_enabled_requires_display(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -639,6 +672,211 @@ def test_processing_worker_uses_raw_frame_for_detection_and_intrinsics(
 
     assert calls.get("detect_frame_id") == id(frame)
     assert calls.get("intrinsics_frame_id") == id(frame)
+
+
+def test_processing_worker_skips_preview_resize_without_consumers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frame_queue: queue.Queue[object] = queue.Queue(maxsize=2)
+    calls = {"resize": 0}
+
+    def _fake_detect_blobs(
+        frame: np.ndarray,
+        *,
+        threshold: int,
+        mask: np.ndarray | None,
+        min_diameter_px: float | None,
+        max_diameter_px: float | None,
+        circularity_min: float,
+    ):
+        _ = (frame, threshold, mask, min_diameter_px, max_diameter_px, circularity_min)
+        return [], {
+            "threshold": 200,
+            "min_diameter_px": None,
+            "max_diameter_px": None,
+            "circularity_min": 0.0,
+            "raw_contour_count": 0,
+            "accepted_blob_count": 0,
+            "rejected_by_diameter": 0,
+            "rejected_by_circularity": 0,
+            "last_blob_count": 0,
+        }
+
+    def _fake_resize_preview_payload(frame, blobs, mask):
+        _ = (frame, blobs, mask)
+        calls["resize"] += 1
+        return frame, blobs, mask
+
+    monkeypatch.setattr(capture_mod, "detect_blobs", _fake_detect_blobs)
+    monkeypatch.setattr(capture_mod, "_resize_preview_payload", _fake_resize_preview_payload)
+
+    worker = capture_mod._ProcessingWorker(
+        camera_id="pi-cam-01",
+        udp_host="127.0.0.1",
+        udp_port=5000,
+        frame_queue=frame_queue,
+        preview_worker=None,
+        log_fn=lambda _msg: None,
+    )
+    worker.start()
+    try:
+        frame_queue.put(
+            capture_mod._FramePacket(
+                captured_frame=capture_mod.CapturedFrame(
+                    image=np.zeros((24, 32, 3), dtype=np.uint8),
+                    timestamp_us=1,
+                    timestamp_source="capture_dequeue",
+                ),
+                captured_monotonic_ns=time.monotonic_ns(),
+            )
+        )
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            runtime = worker.get_runtime_diagnostics()
+            if int(runtime["preview_packets_skipped"]) > 0:
+                break
+            time.sleep(0.01)
+    finally:
+        worker.stop()
+
+    runtime = worker.get_runtime_diagnostics()
+    assert calls["resize"] == 0
+    assert runtime["preview_packets_built"] == 0
+    assert runtime["preview_packets_skipped"] > 0
+
+
+def test_processing_worker_builds_preview_packet_for_mjpeg_consumer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frame_queue: queue.Queue[object] = queue.Queue(maxsize=2)
+    calls = {"resize": 0}
+
+    def _fake_detect_blobs(
+        frame: np.ndarray,
+        *,
+        threshold: int,
+        mask: np.ndarray | None,
+        min_diameter_px: float | None,
+        max_diameter_px: float | None,
+        circularity_min: float,
+    ):
+        _ = (frame, threshold, mask, min_diameter_px, max_diameter_px, circularity_min)
+        return [{"x": 1.0, "y": 2.0, "area": 3.0}], {
+            "threshold": 200,
+            "min_diameter_px": None,
+            "max_diameter_px": None,
+            "circularity_min": 0.0,
+            "raw_contour_count": 1,
+            "accepted_blob_count": 1,
+            "rejected_by_diameter": 0,
+            "rejected_by_circularity": 0,
+            "last_blob_count": 1,
+        }
+
+    def _fake_resize_preview_payload(frame, blobs, mask):
+        calls["resize"] += 1
+        return frame.copy(), list(blobs), mask
+
+    monkeypatch.setattr(capture_mod, "detect_blobs", _fake_detect_blobs)
+    monkeypatch.setattr(capture_mod, "_resize_preview_payload", _fake_resize_preview_payload)
+
+    worker = capture_mod._ProcessingWorker(
+        camera_id="pi-cam-01",
+        udp_host="127.0.0.1",
+        udp_port=5000,
+        frame_queue=frame_queue,
+        preview_worker=None,
+        log_fn=lambda _msg: None,
+    )
+    worker.set_mjpeg_render_enabled(True)
+    worker.start()
+    try:
+        frame_queue.put(
+            capture_mod._FramePacket(
+                captured_frame=capture_mod.CapturedFrame(
+                    image=np.zeros((24, 32, 3), dtype=np.uint8),
+                    timestamp_us=2,
+                    timestamp_source="capture_dequeue",
+                ),
+                captured_monotonic_ns=time.monotonic_ns(),
+            )
+        )
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            runtime = worker.get_runtime_diagnostics()
+            if int(runtime["preview_packets_built"]) > 0 and worker.get_latest_preview_packet() is not None:
+                break
+            time.sleep(0.01)
+    finally:
+        worker.stop()
+
+    runtime = worker.get_runtime_diagnostics()
+    assert calls["resize"] > 0
+    assert runtime["preview_packets_built"] > 0
+    assert worker.get_latest_preview_packet() is not None
+
+
+def test_processing_worker_records_stream_payload_bytes_last(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frame_queue: queue.Queue[object] = queue.Queue(maxsize=2)
+
+    def _fake_detect_blobs(
+        frame: np.ndarray,
+        *,
+        threshold: int,
+        mask: np.ndarray | None,
+        min_diameter_px: float | None,
+        max_diameter_px: float | None,
+        circularity_min: float,
+    ):
+        _ = (frame, threshold, mask, min_diameter_px, max_diameter_px, circularity_min)
+        return [{"x": 4.0, "y": 5.0, "area": 6.0}], {
+            "threshold": 200,
+            "min_diameter_px": None,
+            "max_diameter_px": None,
+            "circularity_min": 0.0,
+            "raw_contour_count": 1,
+            "accepted_blob_count": 1,
+            "rejected_by_diameter": 0,
+            "rejected_by_circularity": 0,
+            "last_blob_count": 1,
+        }
+
+    monkeypatch.setattr(capture_mod, "detect_blobs", _fake_detect_blobs)
+
+    worker = capture_mod._ProcessingWorker(
+        camera_id="pi-cam-01",
+        udp_host="127.0.0.1",
+        udp_port=59999,
+        frame_queue=frame_queue,
+        preview_worker=None,
+        log_fn=lambda _msg: None,
+    )
+    worker.set_stream_mode("capture")
+    worker.start()
+    runtime = worker.get_runtime_diagnostics()
+    try:
+        frame_queue.put(
+            capture_mod._FramePacket(
+                captured_frame=capture_mod.CapturedFrame(
+                    image=np.zeros((24, 32, 3), dtype=np.uint8),
+                    timestamp_us=3,
+                    timestamp_source="capture_dequeue",
+                ),
+                captured_monotonic_ns=time.monotonic_ns(),
+            )
+        )
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            runtime = worker.get_runtime_diagnostics()
+            if int(runtime["stream_payload_bytes_last"]) > 0:
+                break
+            time.sleep(0.01)
+    finally:
+        worker.stop()
+
+    assert runtime["stream_payload_bytes_last"] > 0
 
 
 def test_charuco_overlay_draw_requires_minimum_six_corners(monkeypatch: pytest.MonkeyPatch) -> None:

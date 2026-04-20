@@ -247,6 +247,208 @@ def test_tracking_runtime_updates_scene_even_without_valid_rigid_body(monkeypatc
     assert scene["coordinate_origin_source"] == "extrinsics_pose_reference"
 
 
+def test_tracking_runtime_status_uses_short_lived_cache(monkeypatch) -> None:
+    class _FakePipeline:
+        def __init__(self, udp_port=5000, calibration_path=None, patterns=None, **kwargs):
+            self._running = True
+            self.geometry = type("_Geometry", (), {"camera_params": {}})()
+            self.get_status_calls = 0
+            self.frames_processed = 0
+            self.poses_estimated = 0
+
+        def set_pose_callback(self, callback):
+            self._pose_callback = callback
+
+        def start(self, session_name=None):
+            self._running = True
+
+        def stop(self):
+            self._running = False
+            return {"frames_processed": 0, "poses_estimated": 0}
+
+        @property
+        def is_running(self):
+            return self._running
+
+        def get_status(self):
+            self.get_status_calls += 1
+            return {
+                "running": self._running,
+                "calibration_loaded": True,
+                "frames_processed": self.frames_processed,
+                "poses_estimated": self.poses_estimated,
+                "receiver": {},
+                "metrics": {},
+                "tracking": {},
+                "sync": {},
+                "uptime_seconds": 0.1,
+            }
+
+        def get_latest_triangulation_snapshot(self):
+            return {
+                "timestamp": 0,
+                "points_3d": [],
+                "reprojection_errors": [],
+                "pair_timestamp_range_us": 0,
+            }
+
+    monkeypatch.setattr("host.tracking_runtime.TrackingPipeline", _FakePipeline)
+
+    runtime = TrackingRuntime()
+    runtime.start(calibration_path="calibration", patterns=["waist"])
+    runtime._status_cache_interval_s = 10.0
+    pipeline = runtime._pipeline
+    assert pipeline is not None
+
+    first = runtime.status()
+    second = runtime.status()
+
+    assert first["running"] is True
+    assert second["running"] is True
+    assert pipeline.get_status_calls == 1
+
+
+def test_tracking_runtime_reuses_cached_camera_scene_on_pose_updates(monkeypatch) -> None:
+    class _FakePipeline:
+        def __init__(self, udp_port=5000, calibration_path=None, patterns=None, **kwargs):
+            self._running = False
+            self.frames_processed = 0
+            self.poses_estimated = 0
+            self.geometry = type("_Geometry", (), {"camera_params": {}})()
+
+        def set_pose_callback(self, callback):
+            self._pose_callback = callback
+
+        def start(self, session_name=None):
+            self._running = True
+
+        def stop(self):
+            self._running = False
+            return {"frames_processed": 1, "poses_estimated": 1}
+
+        @property
+        def is_running(self):
+            return self._running
+
+        def get_status(self):
+            return {
+                "running": self._running,
+                "calibration_loaded": True,
+                "frames_processed": self.frames_processed,
+                "poses_estimated": self.poses_estimated,
+                "receiver": {},
+                "metrics": {},
+                "tracking": {},
+                "sync": {},
+                "uptime_seconds": 0.1,
+            }
+
+        def get_latest_triangulation_snapshot(self):
+            return {
+                "timestamp": 456,
+                "points_3d": [[1.0, 2.0, 3.0]],
+                "reprojection_errors": [],
+                "pair_timestamp_range_us": 0,
+            }
+
+    monkeypatch.setattr("host.tracking_runtime.TrackingPipeline", _FakePipeline)
+
+    runtime = TrackingRuntime()
+    build_calls = []
+
+    def _build_camera_scene(pipeline):
+        build_calls.append("called")
+        return [{"camera_id": "pi-cam-01", "position": [0.0, 0.0, 0.0], "rotation_matrix": [[1, 0, 0], [0, 1, 0], [0, 0, 1]], "frustum_near_corners": []}]
+
+    runtime._build_camera_scene = _build_camera_scene  # type: ignore[method-assign]
+    runtime.start(calibration_path="calibration", patterns=["waist"])
+
+    pose = RigidBodyPose(
+        timestamp=456,
+        position=np.array([1.0, 2.0, 3.0], dtype=np.float64),
+        rotation=np.eye(3, dtype=np.float64),
+        quaternion=np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64),
+        rms_error=0.2,
+        observed_markers=3,
+        valid=True,
+    )
+    pipeline = runtime._pipeline
+    assert pipeline is not None
+    pipeline.frames_processed = 1
+    pipeline.poses_estimated = 1
+    runtime._on_pose({"waist": pose})
+
+    scene = runtime.scene_snapshot()
+
+    assert build_calls == ["called"]
+    assert scene["cameras"] == runtime._camera_scene
+    assert scene["tracking"]["frames_processed"] == 1
+
+
+def test_tracking_runtime_ignores_duplicate_scene_timestamps(monkeypatch) -> None:
+    class _FakePipeline:
+        def __init__(self, udp_port=5000, calibration_path=None, patterns=None, **kwargs):
+            self._running = False
+            self.frames_processed = 0
+            self.poses_estimated = 0
+            self.geometry = type("_Geometry", (), {"camera_params": {}})()
+
+        def set_pose_callback(self, callback):
+            self._pose_callback = callback
+
+        def start(self, session_name=None):
+            self._running = True
+
+        def stop(self):
+            self._running = False
+            return {"frames_processed": 1, "poses_estimated": 1}
+
+        @property
+        def is_running(self):
+            return self._running
+
+        def get_status(self):
+            return {
+                "running": self._running,
+                "calibration_loaded": True,
+                "frames_processed": self.frames_processed,
+                "poses_estimated": self.poses_estimated,
+                "receiver": {},
+                "metrics": {},
+                "tracking": {},
+                "sync": {},
+                "uptime_seconds": 0.1,
+            }
+
+        def get_latest_triangulation_snapshot(self):
+            return {
+                "timestamp": 789,
+                "points_3d": [[1.0, 2.0, 3.0]],
+                "reprojection_errors": [],
+                "pair_timestamp_range_us": 0,
+            }
+
+    monkeypatch.setattr("host.tracking_runtime.TrackingPipeline", _FakePipeline)
+
+    runtime = TrackingRuntime()
+    runtime.start(calibration_path="calibration", patterns=["waist"])
+
+    pose = RigidBodyPose(
+        timestamp=789,
+        position=np.array([1.0, 2.0, 3.0], dtype=np.float64),
+        rotation=np.eye(3, dtype=np.float64),
+        quaternion=np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64),
+        rms_error=0.2,
+        observed_markers=3,
+        valid=True,
+    )
+    runtime._on_pose({"waist": pose})
+    first_sequence = runtime.scene_snapshot()["sequence"]
+    runtime._on_pose({"waist": pose})
+
+    assert runtime.scene_snapshot()["sequence"] == first_sequence
+
+
 def test_tracking_runtime_scene_reports_wand_origin_from_geometry(monkeypatch) -> None:
     class _FakePipeline:
         def __init__(self, udp_port=5000, calibration_path=None, patterns=None, **kwargs):
@@ -294,3 +496,78 @@ def test_tracking_runtime_scene_reports_wand_origin_from_geometry(monkeypatch) -
     assert scene["coordinate_frame"] == "world"
     assert scene["coordinate_origin"] == "wand"
     assert scene["coordinate_origin_source"] == "floor_metric_capture"
+
+
+def test_tracking_runtime_reuses_status_cache_and_camera_scene(monkeypatch) -> None:
+    class _FakePipeline:
+        last_instance = None
+
+        def __init__(self, udp_port=5000, calibration_path=None, patterns=None, **kwargs):
+            self._running = False
+            self.status_calls = 0
+            self.geometry = type(
+                "_Geometry",
+                (),
+                {
+                    "camera_params": {},
+                    "coordinate_frame": "camera_similarity",
+                    "coordinate_origin": "reference_camera",
+                    "coordinate_origin_source": "extrinsics_pose_reference",
+                },
+            )()
+            _FakePipeline.last_instance = self
+
+        def set_pose_callback(self, callback):
+            self._pose_callback = callback
+
+        def start(self, session_name=None):
+            self._running = True
+
+        def stop(self):
+            self._running = False
+            return {}
+
+        def get_status(self):
+            self.status_calls += 1
+            return {
+                "running": self._running,
+                "calibration_loaded": True,
+                "frames_processed": 5,
+                "poses_estimated": 4,
+                "receiver": {},
+                "metrics": {},
+                "tracking": {},
+                "sync": {},
+                "uptime_seconds": 0.1,
+            }
+
+        def get_latest_triangulation_snapshot(self):
+            return {
+                "timestamp": 456,
+                "points_3d": [[1.0, 1.0, 1.0]],
+                "reprojection_errors": [],
+                "pair_timestamp_range_us": 0,
+            }
+
+    monkeypatch.setattr("host.tracking_runtime.TrackingPipeline", _FakePipeline)
+
+    runtime = TrackingRuntime()
+    build_calls = {"count": 0}
+    original_build_camera_scene = runtime._build_camera_scene
+
+    def _count_build_camera_scene(pipeline):
+        build_calls["count"] += 1
+        return original_build_camera_scene(pipeline)
+
+    runtime._build_camera_scene = _count_build_camera_scene  # type: ignore[method-assign]
+    runtime._status_cache_interval_s = 10.0
+
+    runtime.start(calibration_path="calibration", patterns=["waist"])
+    runtime._on_pose({})
+    runtime._on_pose({})
+    status = runtime.status()
+
+    assert build_calls["count"] == 1
+    assert _FakePipeline.last_instance is not None
+    assert _FakePipeline.last_instance.status_calls == 1
+    assert status["frames_processed"] == 5

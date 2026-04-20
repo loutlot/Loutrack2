@@ -230,11 +230,12 @@ class TrackingPipeline:
                 )
             
             # Callback
+            self.frames_processed += 1
+            valid_pose_count = sum(1 for pose in poses.values() if pose.valid)
+            self.poses_estimated += valid_pose_count
+
             if self._pose_callback:
                 self._pose_callback(poses)
-            
-            self.frames_processed += 1
-            self.poses_estimated += len([p for p in poses.values() if p.valid])
             
         except Exception as e:
             if self._error_callback:

@@ -91,7 +91,7 @@ class FrameBuffer:
         self.buffer_size = buffer_size
         self.max_age_seconds = max_age_seconds
         
-        # Per-camera frame buffers (newest first)
+        # Per-camera frame buffers (oldest first).
         self._buffers: Dict[str, deque] = defaultdict(
             lambda: deque(maxlen=buffer_size)
         )
@@ -100,7 +100,21 @@ class FrameBuffer:
     def add_frame(self, frame: Frame) -> None:
         """Add a frame to the appropriate camera buffer."""
         with self._lock:
-            self._buffers[frame.camera_id].appendleft(frame)
+            buffer = self._buffers[frame.camera_id]
+            if not buffer or frame.timestamp >= buffer[-1].timestamp:
+                buffer.append(frame)
+                return
+
+            frames = list(buffer)
+            insert_at = len(frames)
+            for index, current in enumerate(frames):
+                if frame.timestamp < current.timestamp:
+                    insert_at = index
+                    break
+            frames.insert(insert_at, frame)
+            if len(frames) > self.buffer_size:
+                frames = frames[-self.buffer_size :]
+            self._buffers[frame.camera_id] = deque(frames, maxlen=self.buffer_size)
     
     def get_frames_in_window(
         self,
@@ -136,6 +150,13 @@ class FrameBuffer:
         """Get the most recent frame for a camera."""
         with self._lock:
             if camera_id in self._buffers and self._buffers[camera_id]:
+                return self._buffers[camera_id][-1]
+            return None
+
+    def get_oldest_frame(self, camera_id: str) -> Optional[Frame]:
+        """Get the oldest buffered frame for a camera."""
+        with self._lock:
+            if camera_id in self._buffers and self._buffers[camera_id]:
                 return self._buffers[camera_id][0]
             return None
     
@@ -154,7 +175,7 @@ class FrameBuffer:
         with self._lock:
             if camera_id not in self._buffers:
                 return []
-            return list(self._buffers[camera_id])
+            return list(reversed(self._buffers[camera_id]))
 
     def get_buffer_size(self, camera_id: str) -> int:
         """Return current number of buffered frames for a camera."""
@@ -174,14 +195,81 @@ class FrameBuffer:
         with self._lock:
             for camera_id in list(self._buffers.keys()):
                 buffer = self._buffers[camera_id]
-                original_len = len(buffer)
-                
-                # Remove old frames (from the end, as newest are first)
-                while buffer and buffer[-1].received_at < cutoff_time:
-                    buffer.pop()
+                while buffer and buffer[0].received_at < cutoff_time:
+                    buffer.popleft()
                     removed += 1
         
         return removed
+
+    def remove_frame(self, camera_id: str, frame: Frame) -> bool:
+        """Remove a specific frame from a camera buffer."""
+        with self._lock:
+            buffer = self._buffers.get(camera_id)
+            if not buffer:
+                return False
+            try:
+                buffer.remove(frame)
+                return True
+            except ValueError:
+                return False
+
+    def pop_oldest_frame(self, camera_id: str) -> Optional[Frame]:
+        """Pop and return the oldest buffered frame for a camera."""
+        with self._lock:
+            buffer = self._buffers.get(camera_id)
+            if not buffer:
+                return None
+            return buffer.popleft()
+
+    def find_best_match(
+        self,
+        camera_id: str,
+        center_timestamp: int,
+        window_us: int,
+        *,
+        frame_index: Optional[int] = None,
+        frame_index_fallback: bool = False,
+    ) -> tuple[Optional[Frame], bool]:
+        """
+        Find the best timestamp match for a frame, with optional frame-index fallback.
+
+        Returns:
+            (frame, matched_by_frame_index)
+        """
+        with self._lock:
+            buffer = self._buffers.get(camera_id)
+            if not buffer:
+                return None, False
+
+            best_match: Optional[Frame] = None
+            best_distance = window_us + 1
+            fallback_match: Optional[Frame] = None
+            lower = center_timestamp - window_us
+            upper = center_timestamp + window_us
+
+            for candidate in buffer:
+                if candidate.timestamp < lower:
+                    continue
+                if candidate.timestamp > upper:
+                    break
+                distance = abs(candidate.timestamp - center_timestamp)
+                if distance <= window_us and distance < best_distance:
+                    best_match = candidate
+                    best_distance = distance
+                if (
+                    frame_index_fallback
+                    and frame_index is not None
+                    and candidate.frame_index is not None
+                    and candidate.frame_index == frame_index
+                    and fallback_match is None
+                ):
+                    fallback_match = candidate
+
+            if best_match is not None:
+                return best_match, False
+            if fallback_match is not None:
+                return fallback_match, True
+            return None, False
 
 
 class FramePairer:
@@ -209,19 +297,11 @@ class FramePairer:
         self.timestamp_tolerance_us = timestamp_tolerance_us
         self.min_cameras = min_cameras
         self.frame_index_fallback = frame_index_fallback
-        self._emitted_frame_keys: set[tuple[str, int, int]] = set()
         self._timestamp_unmatched_frames = 0
         self._frame_index_fallback_pairs = 0
-
-    @staticmethod
-    def _frame_key(frame: Frame) -> tuple[str, int, int]:
-        return (frame.camera_id, int(frame.timestamp), int(frame.host_received_at_us))
-
-    def _prune_emitted_keys(self, buffer: FrameBuffer, camera_ids: List[str]) -> None:
-        live_keys: set[tuple[str, int, int]] = set()
-        for camera_id in camera_ids:
-            live_keys.update(self._frame_key(frame) for frame in buffer.get_all_frames(camera_id))
-        self._emitted_frame_keys.intersection_update(live_keys)
+        self._stale_frames_dropped = 0
+        self._pair_attempts = 0
+        self._pairs_emitted = 0
     
     def pair_frames(
         self,
@@ -241,26 +321,21 @@ class FramePairer:
         camera_ids = buffer.get_camera_ids()
         if len(camera_ids) < self.min_cameras:
             return []
-        self._prune_emitted_keys(buffer, camera_ids)
         
         # Choose reference camera (one with most frames, or specified)
         if reference_camera and reference_camera in camera_ids:
             ref_cam = reference_camera
         else:
             ref_cam = max(camera_ids, key=lambda c: buffer.get_buffer_size(c))
+        
+        paired: List[PairedFrames] = []
 
-        # Get all reference frames via the public API
-        ref_frames = buffer.get_all_frames(ref_cam)
-        if not ref_frames:
-            return []
-        
-        paired = []
-        used_frame_keys: Dict[str, set] = defaultdict(set)
-        
-        for ref_frame in reversed(ref_frames):
-            ref_key = self._frame_key(ref_frame)
-            if ref_key in self._emitted_frame_keys:
-                continue
+        while True:
+            ref_frame = buffer.get_oldest_frame(ref_cam)
+            if ref_frame is None:
+                break
+
+            self._pair_attempts += 1
             pair = PairedFrames(
                 timestamp=ref_frame.timestamp,
                 frames={ref_cam: ref_frame}
@@ -270,44 +345,21 @@ class FramePairer:
             for cam_id in camera_ids:
                 if cam_id == ref_cam:
                     continue
-                
-                # Try timestamp matching first
-                candidates = buffer.get_frames_in_window(
+                best_match, matched_by_frame_index = buffer.find_best_match(
                     cam_id,
                     ref_frame.timestamp,
-                    self.timestamp_tolerance_us
+                    self.timestamp_tolerance_us,
+                    frame_index=ref_frame.frame_index,
+                    frame_index_fallback=self.frame_index_fallback,
                 )
-                
-                # Filter out already-used frames
-                candidates = [
-                    f for f in candidates
-                    if self._frame_key(f) not in self._emitted_frame_keys
-                    and self._frame_key(f) not in used_frame_keys[cam_id]
-                ]
-                
-                matched_by_frame_index = False
-                if not candidates:
-                    self._timestamp_unmatched_frames += 1
 
-                if not candidates and self.frame_index_fallback and ref_frame.frame_index is not None:
-                    # Fallback to frame_index matching
-                    target_index = ref_frame.frame_index
-                    all_frames = buffer.get_all_frames(cam_id)
-                    candidates = [
-                        f for f in all_frames
-                        if f.frame_index is not None
-                        and f.frame_index == target_index
-                        and self._frame_key(f) not in self._emitted_frame_keys
-                        and self._frame_key(f) not in used_frame_keys[cam_id]
-                    ]
-                    matched_by_frame_index = bool(candidates)
-                
-                if candidates:
-                    best_match = candidates[0]
-                    pair.frames[cam_id] = best_match
-                    used_frame_keys[cam_id].add(self._frame_key(best_match))
-                    if matched_by_frame_index:
-                        self._frame_index_fallback_pairs += 1
+                if best_match is None:
+                    self._timestamp_unmatched_frames += 1
+                    continue
+
+                pair.frames[cam_id] = best_match
+                if matched_by_frame_index:
+                    self._frame_index_fallback_pairs += 1
             
             # Only return pairs with enough cameras
             if pair.frame_count >= self.min_cameras:
@@ -315,17 +367,53 @@ class FramePairer:
                 timestamps = [f.timestamp for f in pair.frames.values()]
                 pair.timestamp_range_us = max(timestamps) - min(timestamps)
                 paired.append(pair)
+                self._pairs_emitted += 1
+                buffer.remove_frame(ref_cam, ref_frame)
                 for camera_id, frame in pair.frames.items():
-                    frame_key = self._frame_key(frame)
-                    self._emitted_frame_keys.add(frame_key)
-                    used_frame_keys[camera_id].add(frame_key)
-        
+                    if camera_id == ref_cam:
+                        continue
+                    buffer.remove_frame(camera_id, frame)
+                continue
+
+            if self._should_drop_stale_reference(buffer, ref_cam, ref_frame, pair.frame_count, camera_ids):
+                buffer.pop_oldest_frame(ref_cam)
+                self._stale_frames_dropped += 1
+                continue
+            break
+
         return paired
+
+    def _should_drop_stale_reference(
+        self,
+        buffer: FrameBuffer,
+        ref_cam: str,
+        ref_frame: Frame,
+        matched_frame_count: int,
+        camera_ids: List[str],
+    ) -> bool:
+        """
+        Drop a reference frame once it can no longer reach the minimum camera count.
+        """
+        cutoff = ref_frame.timestamp + self.timestamp_tolerance_us
+        unresolved_cameras = 0
+        for cam_id in camera_ids:
+            if cam_id == ref_cam:
+                continue
+            latest_timestamp = buffer.get_latest_timestamp(cam_id)
+            if latest_timestamp is None:
+                unresolved_cameras += 1
+                continue
+            if latest_timestamp <= cutoff:
+                unresolved_cameras += 1
+        return matched_frame_count + unresolved_cameras < self.min_cameras
 
     def get_stats(self) -> Dict[str, int]:
         return {
             "timestamp_unmatched_frames": self._timestamp_unmatched_frames,
             "frame_index_fallback_pairs": self._frame_index_fallback_pairs,
+            "stale_frames_dropped": self._stale_frames_dropped,
+            "pair_attempts": self._pair_attempts,
+            "pairs_emitted": self._pairs_emitted,
         }
 
 
@@ -544,6 +632,7 @@ class FrameProcessor:
         self._paired_callback: Optional[Callable[[PairedFrames], None]] = None
         self._last_pair_time = 0.0
         self._pair_interval = max(0.0, float(pair_interval_s))
+        self._pair_pass_durations_ms: deque[float] = deque(maxlen=120)
     
     def set_paired_callback(self, callback: Callable[[PairedFrames], None]) -> None:
         """Set callback for paired frames."""
@@ -571,7 +660,9 @@ class FrameProcessor:
     def _process_pairs(self) -> None:
         """Process and emit paired frames."""
         self.buffer.cleanup_old_frames()
+        started = time.perf_counter()
         pairs = self.pairer.pair_frames(self.buffer)
+        self._pair_pass_durations_ms.append((time.perf_counter() - started) * 1000.0)
         
         for pair in pairs:
             if self._paired_callback:
@@ -580,6 +671,9 @@ class FrameProcessor:
     def get_stats(self) -> Dict[str, Any]:
         """Get processor statistics."""
         cam_ids = self.buffer.get_camera_ids()
+        pair_pass_values = list(self._pair_pass_durations_ms)
+        pair_pass_mean = sum(pair_pass_values) / len(pair_pass_values) if pair_pass_values else 0.0
+        pair_pass_max = max(pair_pass_values) if pair_pass_values else 0.0
         return {
             "receiver": self.receiver.stats,
             "cameras": cam_ids,
@@ -587,4 +681,9 @@ class FrameProcessor:
                 cam: self.buffer.get_buffer_size(cam) for cam in cam_ids
             },
             "pairer": self.pairer.get_stats(),
+            "pair_pass_ms": {
+                "mean": round(pair_pass_mean, 3),
+                "last": round(pair_pass_values[-1], 3) if pair_pass_values else 0.0,
+                "max": round(pair_pass_max, 3),
+            },
         }

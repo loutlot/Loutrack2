@@ -68,6 +68,7 @@ MASK_MAX_RATIO_WARNING = 0.4
 MASK_INIT_TIMEOUT_SECONDS = 10.0
 DEFAULT_CIRCULARITY_MIN = 0.0
 IDLE_PREVIEW_FPS = 15.0
+IDLE_DIAGNOSTICS_FPS = 5.0
 DEFAULT_CAPTURE_WIDTH = 2304
 DEFAULT_CAPTURE_HEIGHT = 1296
 DEFAULT_TARGET_FPS = 56
@@ -1765,6 +1766,10 @@ class _ProcessingWorker:
         self._frame_index = 0
         self._frames_processed = 0
         self._frames_sent = 0
+        self._mjpeg_render_enabled = False
+        self._preview_packets_built = 0
+        self._preview_packets_skipped = 0
+        self._stream_payload_bytes_last = 0
         self._capture_to_process_ms: deque[float] = deque(maxlen=256)
         self._capture_to_send_ms: deque[float] = deque(maxlen=256)
         self._started_monotonic = 0.0
@@ -1832,6 +1837,10 @@ class _ProcessingWorker:
         with self._lock:
             self._intrinsics_session = session
 
+    def set_mjpeg_render_enabled(self, enabled: bool) -> None:
+        with self._lock:
+            self._mjpeg_render_enabled = bool(enabled)
+
     def get_last_detection_stats(self) -> dict[str, object]:
         with self._lock:
             return dict(self._last_detection_stats)
@@ -1861,6 +1870,9 @@ class _ProcessingWorker:
             capture_to_send_ms = list(self._capture_to_send_ms)
             started_monotonic = self._started_monotonic
             stream_mode = self._stream_mode
+            preview_packets_built = self._preview_packets_built
+            preview_packets_skipped = self._preview_packets_skipped
+            stream_payload_bytes_last = self._stream_payload_bytes_last
         elapsed = max(1e-6, time.monotonic() - started_monotonic) if started_monotonic > 0.0 else 0.0
         processing_fps = float(frames_processed) / elapsed if elapsed > 0.0 else 0.0
         send_fps = float(frames_sent) / elapsed if elapsed > 0.0 else 0.0
@@ -1880,7 +1892,36 @@ class _ProcessingWorker:
             if capture_to_send_ms
             else 0.0,
             "stream_active": bool(stream_mode is not None),
+            "preview_packets_built": int(preview_packets_built),
+            "preview_packets_skipped": int(preview_packets_skipped),
+            "stream_payload_bytes_last": int(stream_payload_bytes_last),
         }
+
+    def _has_preview_consumer(self) -> bool:
+        with self._lock:
+            return self._preview_worker is not None or self._mjpeg_render_enabled
+
+    def _build_preview_packet(
+        self,
+        *,
+        frame: np.ndarray,
+        blobs: list[dict[str, float]],
+        applied_mask: np.ndarray | None,
+        state_label: str,
+        stream_mode: str | None,
+        stats: dict[str, object],
+    ) -> _PreviewPacket:
+        preview_frame, preview_blobs, preview_mask = _resize_preview_payload(frame, blobs, applied_mask)
+        extra_lines = [f"state={state_label}"]
+        if stream_mode is not None:
+            extra_lines.append(f"mode={stream_mode}")
+        return _PreviewPacket(
+            frame=preview_frame,
+            blobs=preview_blobs,
+            mask=preview_mask,
+            stats=stats,
+            extra_lines=tuple(extra_lines),
+        )
 
     def _loop(self) -> None:
         while not self._stop_event.is_set():
@@ -1945,42 +1986,24 @@ class _ProcessingWorker:
                 self._frames_processed += 1
                 self._capture_to_process_ms.append(capture_to_process_ms)
 
-            if self._preview_worker is not None:
-                preview_frame, preview_blobs, preview_mask = _resize_preview_payload(
-                    packet.captured_frame.image,
-                    cast(list[dict[str, float]], blobs),
-                    applied_mask,
-                )
-                extra_lines = [f"state={state_label}"]
-                if stream_mode is not None:
-                    extra_lines.append(f"mode={stream_mode}")
-                preview_packet = _PreviewPacket(
-                    frame=preview_frame,
-                    blobs=preview_blobs,
-                    mask=preview_mask,
+            preview_packet: _PreviewPacket | None = None
+            if self._has_preview_consumer():
+                preview_packet = self._build_preview_packet(
+                    frame=packet.captured_frame.image,
+                    blobs=cast(list[dict[str, float]], blobs),
+                    applied_mask=applied_mask,
+                    state_label=state_label,
+                    stream_mode=stream_mode,
                     stats=stats,
-                    extra_lines=tuple(extra_lines),
                 )
                 with self._lock:
                     self._latest_preview_packet = preview_packet
-                self._preview_worker.submit(preview_packet)
+                    self._preview_packets_built += 1
+                if self._preview_worker is not None:
+                    self._preview_worker.submit(preview_packet)
             else:
-                preview_frame, preview_blobs, preview_mask = _resize_preview_payload(
-                    packet.captured_frame.image,
-                    cast(list[dict[str, float]], blobs),
-                    applied_mask,
-                )
-                extra_lines = [f"state={state_label}"]
-                if stream_mode is not None:
-                    extra_lines.append(f"mode={stream_mode}")
                 with self._lock:
-                    self._latest_preview_packet = _PreviewPacket(
-                        frame=preview_frame,
-                        blobs=preview_blobs,
-                        mask=preview_mask,
-                        stats=stats,
-                        extra_lines=tuple(extra_lines),
-                    )
+                    self._preview_packets_skipped += 1
 
             if stream_mode is None or sock is None:
                 continue
@@ -2012,6 +2035,7 @@ class _ProcessingWorker:
             with self._lock:
                 self._frames_sent += 1
                 self._capture_to_send_ms.append(capture_to_send_ms)
+                self._stream_payload_bytes_last = len(payload)
 
 
 class _CapturePipeline:
@@ -2199,6 +2223,7 @@ class _CapturePipeline:
     def set_mjpeg_render_enabled(self, enabled: bool) -> None:
         with self._lock:
             self._mjpeg_render_enabled = bool(enabled)
+        self._processing_worker.set_mjpeg_render_enabled(enabled)
         self._refresh_activity()
 
     def set_mjpeg_enabled(self, enabled: bool) -> None:
@@ -2222,6 +2247,15 @@ class _CapturePipeline:
             runtime["frames_dropped_preview"] = 0
             runtime["preview_queue_depth"] = 0
         runtime["processing_queue_depth"] = self._frame_queue.qsize()
+        with self._lock:
+            runtime["idle_throttled"] = bool(
+                self._started
+                and self._stream_mode is None
+                and not self._mask_build_active
+                and not self._intrinsics_active
+                and self._preview_worker is None
+                and not self._mjpeg_render_enabled
+            )
         return runtime
 
     def debug_preview_active(self) -> bool:
@@ -2259,7 +2293,7 @@ class _CapturePipeline:
             return desired_fps
         if preview_enabled or mjpeg_render_enabled:
             return min(desired_fps, IDLE_PREVIEW_FPS)
-        return desired_fps
+        return min(desired_fps, IDLE_DIAGNOSTICS_FPS)
 
     def _refresh_activity(self) -> None:
         with self._lock:

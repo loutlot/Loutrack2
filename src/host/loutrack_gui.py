@@ -1053,7 +1053,7 @@ class LoutrackGuiHandler(BaseHTTPRequestHandler):
                     time.sleep(15.0)
                     continue
 
-                payload = json.dumps(scene, ensure_ascii=False).replace("\n", "\\n")
+                payload = json.dumps(scene, ensure_ascii=False, separators=(",", ":"))
                 message = f"id: {sequence}\nevent: scene\ndata: {payload}\n\n".encode("utf-8")
                 self.wfile.write(message)
                 self.wfile.flush()

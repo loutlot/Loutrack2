@@ -1244,6 +1244,8 @@
       let elevation = 0.45;
       let distance = 3.4;
       let dragging = false;
+      let dirty = true;
+      let renderQueued = false;
       const cursor = { x: 0, y: 0 };
 
       function updateCameraPosition() {
@@ -1256,11 +1258,36 @@
         camera.lookAt(target);
       }
 
+      function requestRender() {
+        if (renderQueued) {
+          return;
+        }
+        renderQueued = true;
+        requestAnimationFrame(() => {
+          renderQueued = false;
+          if (!dirty && !dragging) {
+            return;
+          }
+          dirty = false;
+          updateCameraPosition();
+          renderer.render(scene, camera);
+          if (dragging) {
+            requestRender();
+          }
+        });
+      }
+
+      function markDirty() {
+        dirty = true;
+        requestRender();
+      }
+
       function handlePointerDown(event) {
         dragging = true;
         cursor.x = event.clientX;
         cursor.y = event.clientY;
         canvas.setPointerCapture?.(event.pointerId);
+        markDirty();
       }
 
       function handlePointerMove(event) {
@@ -1273,11 +1300,13 @@
         cursor.y = event.clientY;
         azimuth -= deltaX * 0.005;
         elevation = Math.min(1.35, Math.max(-0.25, elevation - deltaY * 0.005));
+        markDirty();
       }
 
       function handlePointerUp(event) {
         dragging = false;
         canvas.releasePointerCapture?.(event.pointerId);
+        markDirty();
       }
 
       canvas.addEventListener("pointerdown", handlePointerDown);
@@ -1285,12 +1314,14 @@
       canvas.addEventListener("pointerup", handlePointerUp);
       canvas.addEventListener("pointerleave", () => {
         dragging = false;
+        markDirty();
       });
       canvas.addEventListener(
         "wheel",
         (event) => {
           event.preventDefault();
           distance = Math.min(8, Math.max(0.6, distance + event.deltaY * 0.01));
+          markDirty();
         },
         { passive: false }
       );
@@ -1358,6 +1389,7 @@
         new THREE.BufferGeometry(),
         new THREE.PointsMaterial({ color: 0xfb923c, size: 0.065, transparent: true, opacity: 0.95 })
       );
+      rawPoints.geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(0), 3));
       scene.add(rawPoints);
 
       const cameraHelpers = new Map();
@@ -1366,13 +1398,6 @@
       const rigidHelpers = new Map();
       const markerGeometry = new THREE.SphereGeometry(0.011, 8, 8);
       const markerMaterial = new THREE.MeshBasicMaterial({ color: 0xffc107 });
-
-      function animate() {
-        updateCameraPosition();
-        renderer.render(scene, camera);
-        requestAnimationFrame(animate);
-      }
-      requestAnimationFrame(animate);
 
       function buildFrustumSegments(cameraData) {
         const corners = Array.isArray(cameraData.frustum_near_corners)
@@ -1393,6 +1418,44 @@
         return positions;
       }
 
+      function ensureFloat32Attribute(geometry, itemSize, minFloatCount) {
+        const required = Math.max(0, Number(minFloatCount) || 0);
+        let attribute = geometry.getAttribute("position");
+        if (!attribute || attribute.itemSize !== itemSize || attribute.array.length < required) {
+          let nextLength = Math.max(required, itemSize * 3);
+          if (attribute && attribute.itemSize === itemSize && attribute.array.length > 0) {
+            nextLength = Math.max(nextLength, attribute.array.length * 2);
+          }
+          attribute = new THREE.BufferAttribute(new Float32Array(nextLength), itemSize);
+          geometry.setAttribute("position", attribute);
+        }
+        return attribute;
+      }
+
+      function updateLineGeometry(geometry, values) {
+        const attribute = ensureFloat32Attribute(geometry, 3, values.length);
+        if (values.length > 0) {
+          attribute.array.set(values, 0);
+        }
+        geometry.setDrawRange(0, values.length / 3);
+        attribute.needsUpdate = true;
+      }
+
+      function updatePointGeometry(geometry, points) {
+        const pointCount = Array.isArray(points) ? points.length : 0;
+        const attribute = ensureFloat32Attribute(geometry, 3, pointCount * 3);
+        for (let index = 0; index < pointCount; index += 1) {
+          const point = points[index] || [0, 0, 0];
+          const base = index * 3;
+          attribute.array[base + 0] = Number(point[0] || 0);
+          attribute.array[base + 1] = Number(point[1] || 0);
+          attribute.array[base + 2] = Number(point[2] || 0);
+        }
+        geometry.setDrawRange(0, pointCount);
+        attribute.needsUpdate = true;
+        return pointCount;
+      }
+
       function updateCameras(list) {
         const seen = new Set();
         (list || []).forEach((cameraData) => {
@@ -1409,6 +1472,7 @@
               new THREE.SphereGeometry(0.03, 10, 10),
               new THREE.MeshBasicMaterial({ color: 0x38bdf8 })
             );
+            frustumGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(48), 3));
             const label = createTextSprite(cameraId, "#bae6fd");
             const group = new THREE.Group();
             group.add(frustum);
@@ -1419,8 +1483,7 @@
             cameraHelpers.set(cameraId, entry);
           }
           const positions = buildFrustumSegments(cameraData);
-          entry.frustum.geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-          entry.frustum.geometry.attributes.position.needsUpdate = true;
+          updateLineGeometry(entry.frustum.geometry, positions);
           const pos = cameraData.position || [0, 0, 0];
           entry.originSphere.position.set(pos[0], pos[1], pos[2]);
           entry.label.position.set(pos[0] + 0.06, pos[1] + 0.06, pos[2] + 0.14);
@@ -1455,6 +1518,7 @@
               new THREE.BufferGeometry(),
               new THREE.LineBasicMaterial({ color: 0x1f6b70, transparent: true, opacity: 0.8 })
             );
+            trailLine.geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(0), 3));
             const markerParent = new THREE.Group();
             group.add(axis);
             rigidsContainer.add(group);
@@ -1469,22 +1533,8 @@
           const quaternion = body.quaternion || [1, 0, 0, 0];
           group.quaternion.set(quaternion[1], quaternion[2], quaternion[3], quaternion[0]);
           axis.material.color.set(body.valid ? 0x1f6b70 : 0x9e3f33);
-          const trailPoints = [];
-          (body.trail || []).forEach((point) => {
-            trailPoints.push(point[0], point[1], point[2]);
-          });
-          if (trailPoints.length) {
-            trailLine.geometry.setAttribute(
-              "position",
-              new THREE.Float32BufferAttribute(trailPoints, 3)
-            );
-            trailLine.geometry.attributes.position.needsUpdate = true;
-            trailLine.visible = true;
-          } else {
-            trailLine.geometry.setAttribute("position", new THREE.Float32BufferAttribute([], 3));
-            trailLine.geometry.attributes.position.needsUpdate = true;
-            trailLine.visible = false;
-          }
+          const trailCount = updatePointGeometry(trailLine.geometry, body.trail || []);
+          trailLine.visible = trailCount > 0;
           const markers = body.markers_world || [];
           while (markerParent.children.length < markers.length) {
             markerParent.add(new THREE.Mesh(markerGeometry, markerMaterial));
@@ -1509,21 +1559,8 @@
       }
 
       function updateRawPoints(points = []) {
-        if (!Array.isArray(points) || points.length === 0) {
-          rawPoints.geometry.setAttribute("position", new THREE.Float32BufferAttribute([], 3));
-          rawPoints.geometry.attributes.position.needsUpdate = true;
-          rawPoints.visible = false;
-          return;
-        }
-        const buffer = new Float32Array(points.length * 3);
-        points.forEach((point, index) => {
-          buffer[index * 3 + 0] = point[0];
-          buffer[index * 3 + 1] = point[1];
-          buffer[index * 3 + 2] = point[2];
-        });
-        rawPoints.geometry.setAttribute("position", new THREE.BufferAttribute(buffer, 3));
-        rawPoints.geometry.attributes.position.needsUpdate = true;
-        rawPoints.visible = true;
+        const pointCount = updatePointGeometry(rawPoints.geometry, points);
+        rawPoints.visible = pointCount > 0;
       }
 
       function showOverlay(message) {
@@ -1545,11 +1582,16 @@
           } else {
             showOverlay("");
           }
+          markDirty();
         },
         setEmpty(message) {
           showOverlay(message);
+          markDirty();
         },
-        resize: resizeViewer,
+        resize() {
+          resizeViewer();
+          markDirty();
+        },
       };
     }
     const SLIDER_DEBOUNCE_MS = 200;
@@ -1559,6 +1601,9 @@
     let trackingSceneStream = null;
     let trackingPanelLastRenderMs = 0;
     let latestTrackingStatus = {};
+    let latestTrackingScene = {};
+    let latestTrackingSceneSequence = null;
+    let trackingSceneBootstrapped = false;
     let settingsSnapshot = null;
     let persistedSelectedCameraIds = [];
     let initialUiState = { active_page: "calibration", active_view: "cameras" };
@@ -2351,11 +2396,21 @@
         const resp = await fetch("/api/tracking/scene");
         if (!resp.ok) return;
         const scene = await resp.json();
-        applyTrackingScene(scene);
+        applyTrackingScene(scene, { force: true });
       } catch (_) {}
     }
 
-    function applyTrackingScene(scene) {
+    function applyTrackingScene(scene, options = {}) {
+      const force = Boolean(options.force);
+      const sequence = Number(scene?.sequence);
+      if (!force && Number.isFinite(sequence) && latestTrackingSceneSequence != null && sequence <= latestTrackingSceneSequence) {
+        return;
+      }
+      if (Number.isFinite(sequence)) {
+        latestTrackingSceneSequence = sequence;
+      }
+      latestTrackingScene = scene || {};
+      trackingSceneBootstrapped = true;
       trackingViewer.update(scene, scene.empty_state || "");
       const nowMs = performance.now();
       if (activePage === "tracking" && nowMs - trackingPanelLastRenderMs > 250) {
@@ -2370,6 +2425,7 @@
 
     function startTrackingScenePoller() {
       if (trackingSceneIntervalId || trackingSceneStream) return;
+      loadTrackingSceneFast().catch(() => {});
       if ("EventSource" in window) {
         trackingSceneStream = new EventSource("/api/tracking/stream");
         trackingSceneStream.addEventListener("scene", (event) => {
@@ -2398,27 +2454,39 @@
       }
     }
 
-    async function loadTracking() {
-      const [statusResponse, sceneResponse] = await Promise.all([
-        fetch("/api/tracking/status"),
-        fetch("/api/tracking/scene"),
-      ]);
-      if (!statusResponse.ok || !sceneResponse.ok) {
-        throw new Error(`tracking_fetch_failed status=${statusResponse.status} scene=${sceneResponse.status}`);
+    async function loadTracking(options = {}) {
+      const includeScene = Boolean(options.includeScene);
+      const requests = [fetch("/api/tracking/status")];
+      if (includeScene) {
+        requests.push(fetch("/api/tracking/scene"));
+      }
+      const [statusResponse, sceneResponse] = await Promise.all(requests);
+      if (!statusResponse.ok || (includeScene && (!sceneResponse || !sceneResponse.ok))) {
+        throw new Error(
+          `tracking_fetch_failed status=${statusResponse.status} scene=${sceneResponse ? sceneResponse.status : "skipped"}`
+        );
       }
       const status = await statusResponse.json();
-      const scene = await sceneResponse.json();
+      const scene = includeScene && sceneResponse ? await sceneResponse.json() : latestTrackingScene;
       latestTrackingStatus = status;
       elements.trackingStart.disabled = !status.start_allowed;
       elements.trackingExtrinsicsPath.textContent = `Extrinsics: ${status.latest_extrinsics_path || "(none)"}`;
       elements.trackingStatus.textContent = JSON.stringify(status, null, 2);
-      elements.trackingScene.textContent = JSON.stringify(scene, null, 2);
+      if (includeScene) {
+        applyTrackingScene(scene, { force: true });
+      } else if (elements.trackingScene && Object.keys(latestTrackingScene || {}).length > 0) {
+        elements.trackingScene.textContent = JSON.stringify(latestTrackingScene, null, 2);
+      }
       const emptyText = status.empty_state || scene.empty_state || "";
       renderTrackingBadge(status);
-      renderTrackingFooter(status, scene);
+      renderTrackingFooter(status, latestTrackingScene);
       renderCameraHealth(status);
-      renderRigidHealth(scene);
-      trackingViewer.update(scene, emptyText);
+      renderRigidHealth(latestTrackingScene);
+      if (!trackingSceneBootstrapped && includeScene) {
+        trackingViewer.update(scene, emptyText);
+      } else if (Object.keys(latestTrackingScene || {}).length === 0) {
+        trackingViewer.setEmpty(emptyText || "Waiting for scene data");
+      }
     }
 
     async function loadState() {
@@ -2449,7 +2517,7 @@
       renderSidebar(state);
       renderExtrinsicsQuality(state.workflow || {});
       renderCamerasSummaryBar(state);
-      await loadTracking();
+      await loadTracking({ includeScene: !trackingSceneBootstrapped });
     }
 
     async function postJson(url, payload) {
