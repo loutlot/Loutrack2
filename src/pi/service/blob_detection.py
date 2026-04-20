@@ -46,20 +46,22 @@ def detect_blobs(
     else:
         gray = frame
 
+    mask_bool: np.ndarray | None = None
     if mask is not None:
         if mask.shape != gray.shape:
             raise ValueError("mask dimensions must match the grayscale frame")
         mask_bool = mask.astype(bool, copy=False)
-        if mask_bool.any():
-            gray = gray.copy()
-            gray[mask_bool] = 0
 
     threshold_value = max(0, min(255, int(threshold)))
     min_diameter = float(min_diameter_px) if min_diameter_px is not None else None
     max_diameter = float(max_diameter_px) if max_diameter_px is not None else None
     circularity_floor = max(0.0, min(1.0, float(circularity_min)))
+    diameter_filter_enabled = min_diameter is not None or max_diameter is not None
+    circularity_filter_enabled = circularity_floor > 0.0
 
     _retval, binary = cv2.threshold(gray, threshold_value, 255, cv2.THRESH_BINARY)
+    if mask_bool is not None:
+        binary[mask_bool] = 0
     contours_info = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     contours = contours_info[0] if len(contours_info) == 2 else contours_info[1]
 
@@ -72,23 +74,25 @@ def detect_blobs(
         if area <= 0.0:
             continue
 
-        diameter_px = float(math.sqrt((4.0 * area) / math.pi))
-        if min_diameter is not None and diameter_px < min_diameter:
-            rejected_by_diameter += 1
-            continue
-        if max_diameter is not None and diameter_px > max_diameter:
-            rejected_by_diameter += 1
-            continue
+        if diameter_filter_enabled:
+            diameter_px = float(math.sqrt((4.0 * area) / math.pi))
+            if min_diameter is not None and diameter_px < min_diameter:
+                rejected_by_diameter += 1
+                continue
+            if max_diameter is not None and diameter_px > max_diameter:
+                rejected_by_diameter += 1
+                continue
 
-        perimeter = float(cv2.arcLength(contour, True))
-        if perimeter <= 0.0:
-            rejected_by_circularity += 1
-            continue
+        if circularity_filter_enabled:
+            perimeter = float(cv2.arcLength(contour, True))
+            if perimeter <= 0.0:
+                rejected_by_circularity += 1
+                continue
 
-        circularity = float((4.0 * math.pi * area) / (perimeter * perimeter))
-        if circularity < circularity_floor:
-            rejected_by_circularity += 1
-            continue
+            circularity = float((4.0 * math.pi * area) / (perimeter * perimeter))
+            if circularity < circularity_floor:
+                rejected_by_circularity += 1
+                continue
 
         moments = cv2.moments(contour)
         m00 = float(moments.get("m00", 0.0))
@@ -103,7 +107,8 @@ def detect_blobs(
             }
         )
 
-    blobs.sort(key=lambda b: (b["y"], b["x"]))
+    if len(blobs) > 1:
+        blobs.sort(key=lambda b: (b["y"], b["x"]))
 
     diagnostics: dict[str, object] = {
         "threshold": threshold_value,

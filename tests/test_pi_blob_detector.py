@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import queue
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from src.pi.service.capture_runtime import (  # noqa: E402
     get_default_backend,
     resolve_debug_preview_enabled,
 )
+from src.pi.service.mjpeg_streamer import MJPEGStreamer  # noqa: E402
 import src.pi.service.capture_runtime as capture_mod  # noqa: E402
 
 
@@ -94,6 +96,51 @@ def test_detect_blobs_threshold_255_returns_zero() -> None:
     blobs, diagnostics = detect_blobs(frame, threshold=255)
     assert blobs == []
     assert diagnostics["accepted_blob_count"] == 0
+
+
+def test_detect_blobs_static_mask_suppresses_pixels_without_mutating_frame() -> None:
+    frame = np.zeros((48, 64, 3), dtype=np.uint8)
+    frame[10:15, 14:19] = (255, 255, 255)
+    frame[28:33, 38:43] = (255, 255, 255)
+    original = frame.copy()
+    mask = np.zeros(frame.shape[:2], dtype=bool)
+    mask[8:17, 12:21] = True
+
+    blobs, diagnostics = detect_blobs(frame, threshold=200, mask=mask)
+
+    assert np.array_equal(frame, original)
+    assert len(blobs) == 1
+    assert abs(blobs[0]["x"] - 40.0) <= 1.0
+    assert abs(blobs[0]["y"] - 30.0) <= 1.0
+    assert diagnostics["raw_contour_count"] == 1
+    assert diagnostics["accepted_blob_count"] == 1
+
+
+def test_detect_blobs_rejects_mask_shape_mismatch() -> None:
+    frame = np.zeros((24, 32, 3), dtype=np.uint8)
+    mask = np.zeros((12, 16), dtype=bool)
+
+    with pytest.raises(ValueError, match="mask dimensions"):
+        detect_blobs(frame, threshold=200, mask=mask)
+
+
+def test_detect_blobs_skips_filter_math_when_filters_are_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frame = np.zeros((48, 64, 3), dtype=np.uint8)
+    frame[22:27, 30:35] = (255, 255, 255)
+
+    def _unexpected_filter_math(*_args, **_kwargs):
+        raise AssertionError("filter-only math should not run without active filters")
+
+    monkeypatch.setattr(capture_mod.detect_blobs.__globals__["math"], "sqrt", _unexpected_filter_math)
+    monkeypatch.setattr(capture_mod.detect_blobs.__globals__["cv2"], "arcLength", _unexpected_filter_math)
+
+    blobs, diagnostics = detect_blobs(frame, threshold=200)
+
+    assert len(blobs) == 1
+    assert diagnostics["rejected_by_diameter"] == 0
+    assert diagnostics["rejected_by_circularity"] == 0
 
 
 def test_control_server_ping_includes_blob_diagnostics_and_runtime() -> None:
@@ -511,6 +558,37 @@ def test_capture_pipeline_preview_render_disables_idle_throttle() -> None:
         runtime: dict[str, object] = {}
         while time.monotonic() < deadline:
             runtime = pipeline.get_runtime_diagnostics()
+            if int(runtime.get("preview_packets_skipped", 0) or 0) > 0:
+                break
+            time.sleep(0.05)
+    finally:
+        pipeline.stop()
+
+    assert runtime["idle_throttled"] is False
+    assert runtime["preview_packets_built"] == 0
+    assert runtime["preview_packets_skipped"] > 0
+
+
+def test_capture_pipeline_builds_preview_when_mjpeg_client_is_connected() -> None:
+    pipeline = _CapturePipeline(
+        camera_id="pi-cam-test",
+        udp_host="127.0.0.1",
+        udp_port=5000,
+        backend_factory=lambda: DummyBackend(
+            DummyBackendConfig(width=96, height=72, num_dots=3, seed=11, dot_radius=2)
+        ),
+        debug_preview=None,
+        log_fn=lambda _message: None,
+        mjpeg_has_clients=lambda: True,
+    )
+
+    try:
+        pipeline.start()
+        pipeline.set_mjpeg_render_enabled(True)
+        deadline = time.monotonic() + 1.0
+        runtime: dict[str, object] = {}
+        while time.monotonic() < deadline:
+            runtime = pipeline.get_runtime_diagnostics()
             if int(runtime.get("preview_packets_built", 0) or 0) > 0:
                 break
             time.sleep(0.05)
@@ -519,7 +597,39 @@ def test_capture_pipeline_preview_render_disables_idle_throttle() -> None:
 
     assert runtime["idle_throttled"] is False
     assert runtime["preview_packets_built"] > 0
-    assert runtime["preview_packets_skipped"] >= 0
+
+
+def test_mjpeg_streamer_encodes_only_while_clients_are_active() -> None:
+    calls = {"count": 0}
+
+    def _get_jpeg() -> bytes:
+        calls["count"] += 1
+        return b"jpeg"
+
+    streamer = MJPEGStreamer(port=0, fps=60.0, get_jpeg_fn=_get_jpeg)
+    thread = threading.Thread(target=streamer._encode_loop, daemon=True)
+    thread.start()
+    try:
+        time.sleep(0.05)
+        assert calls["count"] == 0
+        assert streamer.active_client_count() == 0
+        assert streamer.has_clients() is False
+
+        streamer._increment_active_clients()
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            if calls["count"] > 0:
+                break
+            time.sleep(0.01)
+        assert calls["count"] > 0
+        assert streamer.active_client_count() == 1
+        assert streamer.has_clients() is True
+
+        streamer._decrement_active_clients()
+        assert streamer.active_client_count() == 0
+    finally:
+        streamer.stop()
+        thread.join(timeout=1.0)
 
 
 def test_resolve_debug_preview_enabled_requires_display(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -537,13 +647,32 @@ def test_get_default_backend_prefers_dummy_off_pi(monkeypatch: pytest.MonkeyPatc
     assert get_default_backend() == "dummy"
 
 
-def test_ping_reports_open_debug_preview_window_as_active() -> None:
+def test_ping_reports_open_debug_preview_window_as_active(monkeypatch: pytest.MonkeyPatch) -> None:
     server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=True))
     preview = server._debug_preview
     assert preview is not None
     preview._initialized = True
 
-    response = server._handle_ping("req-1", "pi-cam-01")
+    class _FakePipeline:
+        def debug_preview_active(self) -> bool:
+            return False
+
+        def get_last_detection_stats(self) -> dict[str, object]:
+            return {}
+
+        def get_last_timestamping_status(self) -> dict[str, object]:
+            return {}
+
+        def get_runtime_diagnostics(self) -> dict[str, object]:
+            return {}
+
+    monkeypatch.setattr(server, "_ensure_pipeline_started", lambda: _FakePipeline())
+
+    try:
+        response = server._handle_ping("req-1", "pi-cam-01")
+    finally:
+        preview._initialized = False
+        server.shutdown()
 
     assert response["ack"] is True
     assert response["result"]["debug_preview_active"] is True
@@ -787,6 +916,7 @@ def test_processing_worker_builds_preview_packet_for_mjpeg_consumer(
         frame_queue=frame_queue,
         preview_worker=None,
         log_fn=lambda _msg: None,
+        mjpeg_has_clients=lambda: True,
     )
     worker.set_mjpeg_render_enabled(True)
     worker.start()
@@ -816,10 +946,95 @@ def test_processing_worker_builds_preview_packet_for_mjpeg_consumer(
     assert worker.get_latest_preview_packet() is not None
 
 
+def test_processing_worker_skips_mjpeg_preview_without_connected_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frame_queue: queue.Queue[object] = queue.Queue(maxsize=2)
+    calls = {"resize": 0}
+
+    def _fake_detect_blobs(
+        frame: np.ndarray,
+        *,
+        threshold: int,
+        mask: np.ndarray | None,
+        min_diameter_px: float | None,
+        max_diameter_px: float | None,
+        circularity_min: float,
+    ):
+        _ = (frame, threshold, mask, min_diameter_px, max_diameter_px, circularity_min)
+        return [], {
+            "threshold": 200,
+            "min_diameter_px": None,
+            "max_diameter_px": None,
+            "circularity_min": 0.0,
+            "raw_contour_count": 0,
+            "accepted_blob_count": 0,
+            "rejected_by_diameter": 0,
+            "rejected_by_circularity": 0,
+            "last_blob_count": 0,
+        }
+
+    def _fake_resize_preview_payload(frame, blobs, mask):
+        _ = (frame, blobs, mask)
+        calls["resize"] += 1
+        return frame, blobs, mask
+
+    monkeypatch.setattr(capture_mod, "detect_blobs", _fake_detect_blobs)
+    monkeypatch.setattr(capture_mod, "_resize_preview_payload", _fake_resize_preview_payload)
+
+    worker = capture_mod._ProcessingWorker(
+        camera_id="pi-cam-01",
+        udp_host="127.0.0.1",
+        udp_port=5000,
+        frame_queue=frame_queue,
+        preview_worker=None,
+        log_fn=lambda _msg: None,
+        mjpeg_has_clients=lambda: False,
+    )
+    worker.set_mjpeg_render_enabled(True)
+    worker.start()
+    try:
+        frame_queue.put(
+            capture_mod._FramePacket(
+                captured_frame=capture_mod.CapturedFrame(
+                    image=np.zeros((24, 32, 3), dtype=np.uint8),
+                    timestamp_us=2,
+                    timestamp_source="capture_dequeue",
+                ),
+                captured_monotonic_ns=time.monotonic_ns(),
+            )
+        )
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            runtime = worker.get_runtime_diagnostics()
+            if int(runtime["preview_packets_skipped"]) > 0:
+                break
+            time.sleep(0.01)
+    finally:
+        worker.stop()
+
+    runtime = worker.get_runtime_diagnostics()
+    assert calls["resize"] == 0
+    assert runtime["preview_packets_built"] == 0
+    assert runtime["preview_packets_skipped"] > 0
+
+
 def test_processing_worker_records_stream_payload_bytes_last(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     frame_queue: queue.Queue[object] = queue.Queue(maxsize=2)
+    sent_payloads: list[bytes] = []
+
+    class _FakeSocket:
+        def setsockopt(self, *_args, **_kwargs) -> None:
+            return None
+
+        def sendto(self, payload: bytes, _address: tuple[str, int]) -> int:
+            sent_payloads.append(bytes(payload))
+            return len(payload)
+
+        def close(self) -> None:
+            return None
 
     def _fake_detect_blobs(
         frame: np.ndarray,
@@ -844,6 +1059,7 @@ def test_processing_worker_records_stream_payload_bytes_last(
         }
 
     monkeypatch.setattr(capture_mod, "detect_blobs", _fake_detect_blobs)
+    monkeypatch.setattr(capture_mod.socket, "socket", lambda *_args, **_kwargs: _FakeSocket())
 
     worker = capture_mod._ProcessingWorker(
         camera_id="pi-cam-01",
@@ -877,6 +1093,7 @@ def test_processing_worker_records_stream_payload_bytes_last(
         worker.stop()
 
     assert runtime["stream_payload_bytes_last"] > 0
+    assert sent_payloads
 
 
 def test_charuco_overlay_draw_requires_minimum_six_corners(monkeypatch: pytest.MonkeyPatch) -> None:

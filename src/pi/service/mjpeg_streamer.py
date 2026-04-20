@@ -32,6 +32,7 @@ class MJPEGStreamer:
         self._fps = fps
         self._get_jpeg_fn = get_jpeg_fn
         self._latest_jpeg: bytes | None = None
+        self._active_clients = 0
         self._lock = threading.Lock()
         self._stop = threading.Event()
 
@@ -48,8 +49,26 @@ class MJPEGStreamer:
         with self._lock:
             return self._latest_jpeg
 
+    def active_client_count(self) -> int:
+        with self._lock:
+            return int(self._active_clients)
+
+    def has_clients(self) -> bool:
+        return self.active_client_count() > 0
+
+    def _increment_active_clients(self) -> None:
+        with self._lock:
+            self._active_clients += 1
+
+    def _decrement_active_clients(self) -> None:
+        with self._lock:
+            self._active_clients = max(0, self._active_clients - 1)
+
     def _encode_loop(self) -> None:
         while not self._stop.is_set():
+            if not self.has_clients():
+                self._stop.wait(1.0 / max(0.1, self._fps))
+                continue
             try:
                 jpeg = self._get_jpeg_fn()
                 with self._lock:
@@ -73,6 +92,7 @@ class MJPEGStreamer:
                 )
                 self.end_headers()
                 interval = 1.0 / max(0.1, streamer._fps)
+                streamer._increment_active_clients()
                 try:
                     while not streamer._stop.is_set():
                         jpeg = streamer._get_latest_jpeg()
@@ -89,6 +109,8 @@ class MJPEGStreamer:
                         streamer._stop.wait(interval)
                 except Exception:
                     pass
+                finally:
+                    streamer._decrement_active_clients()
 
             def log_message(self, format: str, *args: object) -> None:  # noqa: A002
                 pass

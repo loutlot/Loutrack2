@@ -264,6 +264,7 @@ class ControlServer:
             backend_factory=self._make_backend,
             debug_preview=self._debug_preview,
             log_fn=self._log,
+            mjpeg_has_clients=self._mjpeg_has_clients,
         )
         pipeline.set_backend_controls(
             exposure_us=self._desired_exposure_us,
@@ -1678,6 +1679,11 @@ class ControlServer:
             "overlays": config.overlays.to_dict(),
             "charuco": config.charuco.to_dict(),
         }
+
+    def _mjpeg_has_clients(self) -> bool:
+        with self._state_lock:
+            mjpeg = self._mjpeg
+        return bool(mjpeg is not None and mjpeg.has_clients())
 
     def _get_mjpeg_jpeg(self) -> bytes | None:
         with self._state_lock:

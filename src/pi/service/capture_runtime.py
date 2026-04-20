@@ -1727,12 +1727,14 @@ class _ProcessingWorker:
         frame_queue: queue.Queue[object],
         preview_worker: _PreviewWorker | None,
         log_fn: Callable[[str], None],
+        mjpeg_has_clients: Callable[[], bool] | None = None,
     ) -> None:
         self._camera_id = camera_id
         self._udp_host = udp_host
         self._udp_port = udp_port
         self._frame_queue = frame_queue
         self._preview_worker = preview_worker
+        self._mjpeg_has_clients = mjpeg_has_clients or (lambda: False)
         self._log = log_fn
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -1899,7 +1901,12 @@ class _ProcessingWorker:
 
     def _has_preview_consumer(self) -> bool:
         with self._lock:
-            return self._preview_worker is not None or self._mjpeg_render_enabled
+            preview_worker = self._preview_worker
+            mjpeg_render_enabled = self._mjpeg_render_enabled
+        return bool(
+            (mjpeg_render_enabled and self._mjpeg_has_clients())
+            or (preview_worker is not None and preview_worker.is_active())
+        )
 
     def _build_preview_packet(
         self,
@@ -2048,6 +2055,7 @@ class _CapturePipeline:
         backend_factory: Callable[[], FrameBackend],
         debug_preview: DebugPreview | None,
         log_fn: Callable[[str], None],
+        mjpeg_has_clients: Callable[[], bool] | None = None,
     ) -> None:
         self._camera_id = camera_id
         self._backend_factory = backend_factory
@@ -2077,6 +2085,7 @@ class _CapturePipeline:
             udp_port=udp_port,
             frame_queue=self._frame_queue,
             preview_worker=self._preview_worker,
+            mjpeg_has_clients=mjpeg_has_clients,
             log_fn=log_fn,
         )
         self._camera_worker = _CameraWorker(

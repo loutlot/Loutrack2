@@ -82,6 +82,7 @@ Available now:
 - the host GUI backend now routes settings, tracking, intrinsics, capture-log, and extrinsics orchestration through dedicated internal services while keeping the existing `/api/*` surface unchanged
 - the next GUI backend split now also has extracted camera-status, workflow-summary, and `/api/state` presentation helpers staged as compatibility-preserving host modules
 - the Pi blob-detection to host tracking-viewer path now skips preview packet work when no preview consumer is active, throttles idle diagnostics, reuses paired-frame buffers incrementally, and updates the Three.js viewer without recreating hot-path geometry attributes on every scene event
+- Pi-side tracking now avoids static-mask frame copies in blob detection, skips diameter/circularity math unless those filters are active, and only builds MJPEG preview packets while a viewer is actually connected
 - tracking runtime status for the GUI is now sampled/cached separately from fast scene updates, and camera scene geometry is reused instead of being rebuilt on every pose callback
 - the calibration flow can produce intrinsics and extrinsics JSON outputs
 - synchronized multi-camera observations can be reconstructed into 3D marker positions
