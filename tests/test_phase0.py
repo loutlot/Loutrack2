@@ -52,6 +52,31 @@ def test_logger_creates_log(recorded_log_file: str) -> None:
     assert os.path.exists(recorded_log_file)
 
 
+def test_logger_reports_async_writer_diagnostics(tmp_path) -> None:
+    logger = FrameLogger(log_dir=str(tmp_path))
+    logger.start_recording(session_name="diagnostics")
+
+    logger.log_frame({"camera_id": "pi-cam-01", "timestamp": 1, "blobs": []})
+    logger.log_event("tracking_diagnostics", {"ok": True})
+
+    deadline = time.time() + 1.0
+    stats = logger.get_stats()
+    while time.time() < deadline:
+        stats = logger.get_stats()
+        if stats["writer_lag_ms"]["max"] > 0.0:
+            break
+        time.sleep(0.01)
+
+    metadata = logger.stop_recording()
+
+    assert metadata["total_frames"] == 1
+    assert stats["recording"] is True
+    assert stats["frame_count"] == 1
+    assert stats["event_count"] == 1
+    assert "queue_depth_max" in stats
+    assert stats["writer_lag_ms"]["max"] >= 0.0
+
+
 def test_replay(recorded_log_file: str) -> None:
     """Test log replay functionality."""
     print("=== Testing FrameReplay ===")

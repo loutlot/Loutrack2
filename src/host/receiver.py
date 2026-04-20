@@ -18,6 +18,19 @@ from collections import defaultdict, deque
 from datetime import datetime
 
 
+def _summary(values: List[float]) -> Dict[str, float]:
+    if not values:
+        return {"last": 0.0, "mean": 0.0, "p95": 0.0, "max": 0.0}
+    sorted_values = sorted(float(v) for v in values)
+    p95_index = min(len(sorted_values) - 1, int(round((len(sorted_values) - 1) * 0.95)))
+    return {
+        "last": float(values[-1]),
+        "mean": sum(sorted_values) / len(sorted_values),
+        "p95": sorted_values[p95_index],
+        "max": sorted_values[-1],
+    }
+
+
 @dataclass
 class Frame:
     """Received frame data with metadata."""
@@ -58,6 +71,11 @@ class PairedFrames:
     timestamp: int
     frames: Dict[str, Frame]  # camera_id -> Frame
     timestamp_range_us: int = 0  # actual timestamp spread in the pair
+    pair_emitted_at_us: int = 0
+    pair_age_ms: float = 0.0
+    pair_host_receive_span_ms: float = 0.0
+    oldest_frame_age_ms: float = 0.0
+    newest_frame_age_ms: float = 0.0
     
     @property
     def camera_ids(self) -> List[str]:
@@ -96,12 +114,15 @@ class FrameBuffer:
             lambda: deque(maxlen=buffer_size)
         )
         self._lock = threading.Lock()
+        self._capacity_evictions = 0
     
     def add_frame(self, frame: Frame) -> None:
         """Add a frame to the appropriate camera buffer."""
         with self._lock:
             buffer = self._buffers[frame.camera_id]
             if not buffer or frame.timestamp >= buffer[-1].timestamp:
+                if len(buffer) >= self.buffer_size:
+                    self._capacity_evictions += 1
                 buffer.append(frame)
                 return
 
@@ -113,6 +134,7 @@ class FrameBuffer:
                     break
             frames.insert(insert_at, frame)
             if len(frames) > self.buffer_size:
+                self._capacity_evictions += len(frames) - self.buffer_size
                 frames = frames[-self.buffer_size :]
             self._buffers[frame.camera_id] = deque(frames, maxlen=self.buffer_size)
     
@@ -181,6 +203,10 @@ class FrameBuffer:
         """Return current number of buffered frames for a camera."""
         with self._lock:
             return len(self._buffers.get(camera_id, []))
+
+    def get_capacity_evictions(self) -> int:
+        with self._lock:
+            return int(self._capacity_evictions)
 
     def cleanup_old_frames(self) -> int:
         """
@@ -366,6 +392,24 @@ class FramePairer:
                 # Calculate actual timestamp spread
                 timestamps = [f.timestamp for f in pair.frames.values()]
                 pair.timestamp_range_us = max(timestamps) - min(timestamps)
+                host_received_values = [int(f.host_received_at_us) for f in pair.frames.values()]
+                pair.pair_emitted_at_us = int(time.time() * 1_000_000)
+                if host_received_values:
+                    oldest_host_received = min(host_received_values)
+                    newest_host_received = max(host_received_values)
+                    pair.oldest_frame_age_ms = max(
+                        0.0,
+                        float(pair.pair_emitted_at_us - oldest_host_received) / 1_000.0,
+                    )
+                    pair.newest_frame_age_ms = max(
+                        0.0,
+                        float(pair.pair_emitted_at_us - newest_host_received) / 1_000.0,
+                    )
+                    pair.pair_age_ms = pair.oldest_frame_age_ms
+                    pair.pair_host_receive_span_ms = max(
+                        0.0,
+                        float(newest_host_received - oldest_host_received) / 1_000.0,
+                    )
                 paired.append(pair)
                 self._pairs_emitted += 1
                 buffer.remove_frame(ref_cam, ref_frame)
@@ -633,6 +677,10 @@ class FrameProcessor:
         self._last_pair_time = 0.0
         self._pair_interval = max(0.0, float(pair_interval_s))
         self._pair_pass_durations_ms: deque[float] = deque(maxlen=120)
+        self._pairs_per_pass: deque[float] = deque(maxlen=120)
+        self._pair_age_ms: deque[float] = deque(maxlen=120)
+        self._pair_host_receive_span_ms: deque[float] = deque(maxlen=120)
+        self._cleanup_old_frames_dropped = 0
     
     def set_paired_callback(self, callback: Callable[[PairedFrames], None]) -> None:
         """Set callback for paired frames."""
@@ -659,10 +707,14 @@ class FrameProcessor:
     
     def _process_pairs(self) -> None:
         """Process and emit paired frames."""
-        self.buffer.cleanup_old_frames()
+        self._cleanup_old_frames_dropped += self.buffer.cleanup_old_frames()
         started = time.perf_counter()
         pairs = self.pairer.pair_frames(self.buffer)
         self._pair_pass_durations_ms.append((time.perf_counter() - started) * 1000.0)
+        self._pairs_per_pass.append(float(len(pairs)))
+        for pair in pairs:
+            self._pair_age_ms.append(float(pair.pair_age_ms))
+            self._pair_host_receive_span_ms.append(float(pair.pair_host_receive_span_ms))
         
         for pair in pairs:
             if self._paired_callback:
@@ -674,6 +726,12 @@ class FrameProcessor:
         pair_pass_values = list(self._pair_pass_durations_ms)
         pair_pass_mean = sum(pair_pass_values) / len(pair_pass_values) if pair_pass_values else 0.0
         pair_pass_max = max(pair_pass_values) if pair_pass_values else 0.0
+        pairs_per_pass_values = list(self._pairs_per_pass)
+        pairs_per_pass_mean = (
+            sum(pairs_per_pass_values) / len(pairs_per_pass_values)
+            if pairs_per_pass_values
+            else 0.0
+        )
         return {
             "receiver": self.receiver.stats,
             "cameras": cam_ids,
@@ -681,6 +739,15 @@ class FrameProcessor:
                 cam: self.buffer.get_buffer_size(cam) for cam in cam_ids
             },
             "pairer": self.pairer.get_stats(),
+            "cleanup_old_frames_dropped": int(self._cleanup_old_frames_dropped),
+            "buffer_capacity_evictions": self.buffer.get_capacity_evictions(),
+            "pairs_per_pass": {
+                "last": int(pairs_per_pass_values[-1]) if pairs_per_pass_values else 0,
+                "mean": round(pairs_per_pass_mean, 3),
+                "max": int(max(pairs_per_pass_values)) if pairs_per_pass_values else 0,
+            },
+            "pair_age_ms": _summary(list(self._pair_age_ms)),
+            "pair_host_receive_span_ms": _summary(list(self._pair_host_receive_span_ms)),
             "pair_pass_ms": {
                 "mean": round(pair_pass_mean, 3),
                 "last": round(pair_pass_values[-1], 3) if pair_pass_values else 0.0,

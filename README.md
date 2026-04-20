@@ -78,6 +78,7 @@ Available now:
 - live tracking pairing now consumes each buffered Pi frame only once, emits pairs in chronological order, and calculates FPS/latency from UDP receive timestamps, preventing inflated 300+ FPS and missing-frame counts from stale or out-of-order buffer reprocessing
 - live tracking scene updates now use a push stream for the GUI viewer, emit newly completed frame pairs without a fixed 16 ms batching delay, and draw world-space trails and marker positions without double-applying rigid-body transforms
 - tracking UDP diagnostics now keep Pi-side capture timestamps separate from raw host receive time; `pose_capture` payloads omit `frame_index`, and tracking pairing uses timestamp-only matching while surfacing timestamp source and capture-to-send timing
+- tracking performance diagnostics now separate Pi queue/detection/send timing, Host pair/3D/rigid/logger timing, SSE write health, and browser receive/apply/render timing with bounded rolling summaries and low-frequency JSONL diagnostic events
 - Pi control commands are now defined from a shared runtime manifest so the Pi server, host CLI, ping diagnostics, and `schema/control.json` stay aligned as intrinsics commands evolve
 - the host GUI backend now routes settings, tracking, intrinsics, capture-log, and extrinsics orchestration through dedicated internal services while keeping the existing `/api/*` surface unchanged
 - the next GUI backend split now also has extracted camera-status, workflow-summary, and `/api/state` presentation helpers staged as compatibility-preserving host modules
@@ -125,6 +126,7 @@ Typical flow:
 The tracking page uses the bundled three.js viewer with both `three.module.min.js` and its split `three.core.min.js` dependency. Its initial loading state does not claim a canvas context before WebGL starts, and the retired 2D canvas fallback has been replaced by a clear WebGL-unavailable message if the renderer cannot start.
 When live tracking starts, the GUI temporarily pauses its passive UDP discovery receiver so the tracking pipeline can bind the same UDP port without an address-in-use failure, then resumes discovery after tracking stops or startup fails.
 Tracking start, stop, and error feedback is also mirrored into the Tracking Control status line so failures are visible without leaving the 3D Tracking page.
+Tracking status and logs now expose a lightweight performance spine for later optimization: Pi runtime summaries report queue age, blob detection, JSON encode, UDP send, payload bytes, and send errors; Host status reports pair age, cleanup/eviction counts, triangulation, rigid estimation, metrics, logger enqueue, and writer lag; the GUI stream includes scene/SSE timestamps plus browser-side SSE, parse, apply, rAF, and WebGL render summaries.
 
 ## Hardware Direction
 

@@ -23,6 +23,19 @@ from .logger import FrameLogger
 from .sync_eval import SyncEvaluator
 
 
+def _stage_summary(values: List[float]) -> Dict[str, float]:
+    if not values:
+        return {"last": 0.0, "mean": 0.0, "p95": 0.0, "max": 0.0}
+    sorted_values = sorted(float(v) for v in values)
+    p95_index = min(len(sorted_values) - 1, int(round((len(sorted_values) - 1) * 0.95)))
+    return {
+        "last": float(values[-1]),
+        "mean": sum(sorted_values) / len(sorted_values),
+        "p95": sorted_values[p95_index],
+        "max": sorted_values[-1],
+    }
+
+
 class TrackingPipeline:
     """
     Complete tracking pipeline from UDP frames to rigid body poses.
@@ -97,6 +110,17 @@ class TrackingPipeline:
         self.frames_processed = 0
         self.poses_estimated = 0
         self.start_time: Optional[float] = None
+        self._stage_lock = threading.Lock()
+        self._stage_ms: Dict[str, Deque[float]] = {
+            "log_enqueue_ms": deque(maxlen=240),
+            "triangulation_ms": deque(maxlen=240),
+            "rigid_ms": deque(maxlen=240),
+            "metrics_update_ms": deque(maxlen=240),
+            "pose_callback_ms": deque(maxlen=240),
+            "pipeline_pair_ms": deque(maxlen=240),
+        }
+        self._last_diagnostics_event_monotonic = 0.0
+        self._diagnostics_event_interval_s = 1.0
     
     def set_pose_callback(self, callback: Callable[[Dict[str, RigidBodyPose]], None]) -> None:
         """Set callback for estimated poses."""
@@ -170,22 +194,27 @@ class TrackingPipeline:
         if not self._running:
             return
         
+        pipeline_started_ns = time.perf_counter_ns()
         try:
             timestamp = paired_frames.timestamp
             self.sync_evaluator.evaluate_pair(paired_frames)
             
             # Log frames
+            stage_started_ns = time.perf_counter_ns()
             if self.logger:
                 for cam_id, frame in paired_frames.frames.items():
                     self.logger.log_frame(frame.to_dict())
+            self._record_stage("log_enqueue_ms", self._elapsed_ms(stage_started_ns))
             
             # Triangulate
             result: Dict[str, Any] = {"reprojection_errors": []}
+            stage_started_ns = time.perf_counter_ns()
             if self._calibration_loaded:
                 result = self.geometry.process_paired_frames(paired_frames)
                 points_3d = result.get("points_3d", [])
             else:
                 points_3d = []
+            self._record_stage("triangulation_ms", self._elapsed_ms(stage_started_ns))
 
             points_3d_list = list(points_3d) if points_3d is not None else []
             point_count = len(points_3d_list)
@@ -208,9 +237,12 @@ class TrackingPipeline:
                 else np.empty((0, 3), dtype=np.float64)
             )
             
+            stage_started_ns = time.perf_counter_ns()
             poses = self.rigid_estimator.process_points(points_array, timestamp)
+            self._record_stage("rigid_ms", self._elapsed_ms(stage_started_ns))
             
             # Update metrics
+            stage_started_ns = time.perf_counter_ns()
             for cam_id, frame in paired_frames.frames.items():
                 self.metrics.record_frame(
                     camera_id=cam_id,
@@ -228,18 +260,67 @@ class TrackingPipeline:
                     point_count,
                     result.get("reprojection_errors", [])
                 )
+            self._record_stage("metrics_update_ms", self._elapsed_ms(stage_started_ns))
             
             # Callback
             self.frames_processed += 1
             valid_pose_count = sum(1 for pose in poses.values() if pose.valid)
             self.poses_estimated += valid_pose_count
 
+            stage_started_ns = time.perf_counter_ns()
             if self._pose_callback:
                 self._pose_callback(poses)
+            self._record_stage("pose_callback_ms", self._elapsed_ms(stage_started_ns))
+            self._record_stage("pipeline_pair_ms", self._elapsed_ms(pipeline_started_ns))
+            self._maybe_log_diagnostics_event()
             
         except Exception as e:
             if self._error_callback:
                 self._error_callback(e)
+
+    @staticmethod
+    def _elapsed_ms(started_ns: int) -> float:
+        return float(time.perf_counter_ns() - started_ns) / 1_000_000.0
+
+    def _record_stage(self, name: str, value_ms: float) -> None:
+        with self._stage_lock:
+            bucket = self._stage_ms.setdefault(name, deque(maxlen=240))
+            bucket.append(float(value_ms))
+
+    def _stage_diagnostics(self) -> Dict[str, Dict[str, float]]:
+        with self._stage_lock:
+            return {
+                name: _stage_summary(list(values))
+                for name, values in self._stage_ms.items()
+            }
+
+    def _logger_diagnostics(self) -> Dict[str, Any]:
+        if self.logger is None:
+            return {"recording": False}
+        get_stats = getattr(self.logger, "get_stats", None)
+        if callable(get_stats):
+            return get_stats()
+        return {"recording": bool(getattr(self.logger, "is_recording", False))}
+
+    def _diagnostics_snapshot(self) -> Dict[str, Any]:
+        return {
+            "receiver": self.frame_processor.get_stats(),
+            "pipeline_stage_ms": self._stage_diagnostics(),
+            "logger": self._logger_diagnostics(),
+            "metrics": self.metrics.get_summary(),
+            "sync": self.sync_evaluator.get_status(),
+            "frames_processed": self.frames_processed,
+            "poses_estimated": self.poses_estimated,
+        }
+
+    def _maybe_log_diagnostics_event(self) -> None:
+        if self.logger is None or not self.logger.is_recording:
+            return
+        now = time.monotonic()
+        if now - self._last_diagnostics_event_monotonic < self._diagnostics_event_interval_s:
+            return
+        self._last_diagnostics_event_monotonic = now
+        self.logger.log_event("tracking_diagnostics", self._diagnostics_snapshot())
     
     def get_status(self) -> Dict[str, Any]:
         """Get current pipeline status."""
@@ -253,6 +334,10 @@ class TrackingPipeline:
             "metrics": self.metrics.get_summary(),
             "tracking": self.rigid_estimator.get_tracking_status(),
             "sync": self.sync_evaluator.get_status(),
+            "diagnostics": {
+                "pipeline_stage_ms": self._stage_diagnostics(),
+                "logger": self._logger_diagnostics(),
+            },
         }
     
     @property

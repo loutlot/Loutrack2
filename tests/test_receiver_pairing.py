@@ -60,6 +60,14 @@ def test_frame_processor_emits_completed_pairs_without_frame_batch_delay() -> No
 
     assert len(emitted) == 1
     assert {frame.frame_index for frame in emitted[0].frames.values()} == {1}
+    assert emitted[0].pair_emitted_at_us > 0
+    assert emitted[0].pair_age_ms >= 0.0
+    assert emitted[0].pair_host_receive_span_ms >= 1.0
+
+    stats = processor.get_stats()
+    assert stats["pairs_per_pass"]["last"] == 1
+    assert stats["pair_age_ms"]["max"] >= 0.0
+    assert stats["pair_host_receive_span_ms"]["max"] >= 1.0
 
 
 def test_frame_pairer_can_disable_frame_index_fallback_for_tracking() -> None:
@@ -116,6 +124,25 @@ def test_frame_pairer_drops_stale_reference_frames_once_other_cameras_advance() 
     assert pairer.pair_frames(buffer) == []
     assert buffer.get_oldest_frame("pi-cam-01") is None
     assert pairer.get_stats()["stale_frames_dropped"] == 1
+
+
+def test_frame_processor_reports_cleanup_and_capacity_evictions() -> None:
+    processor = FrameProcessor(udp_port=0, buffer_size=1)
+    now = time.time()
+
+    processor._on_frame_received(_frame("pi-cam-01", 1, timestamp=1_000_000, received_at=now))
+    processor._on_frame_received(_frame("pi-cam-01", 2, timestamp=1_001_000, received_at=now))
+
+    stats = processor.get_stats()
+    assert stats["buffer_capacity_evictions"] == 1
+
+    old_received_at = time.time() - 5.0
+    processor = FrameProcessor(udp_port=0, buffer_size=2)
+    processor._on_frame_received(_frame("pi-cam-01", 1, timestamp=1_000_000, received_at=old_received_at))
+    processor.buffer.max_age_seconds = 0.01
+    processor._process_pairs()
+    stats = processor.get_stats()
+    assert stats["cleanup_old_frames_dropped"] >= 1
 
 
 def test_udp_receiver_accepts_payload_without_frame_index_and_records_diagnostics() -> None:

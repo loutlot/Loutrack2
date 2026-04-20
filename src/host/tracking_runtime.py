@@ -173,10 +173,10 @@ class TrackingRuntime:
 
         if pipeline is None:
             _ = (cached_status, cached_at)
-            return self._stopped_status_payload()
+            return self._with_scene_diagnostics(self._stopped_status_payload())
 
         _ = (calibration_path, pattern_names, last_stop_summary)
-        return self._refresh_status_cache(force=False)
+        return self._with_scene_diagnostics(self._refresh_status_cache(force=False))
 
     def scene_snapshot(self) -> Dict[str, Any]:
         """Return latest scene snapshot for GUI polling."""
@@ -332,6 +332,9 @@ class TrackingRuntime:
         if next_timestamp > 0 and next_timestamp == current_timestamp:
             return
         self._scene_sequence += 1
+        scene["host_scene_updated_realtime_us"] = int(time.time() * 1_000_000)
+        scene["host_scene_updated_monotonic_ms"] = time.monotonic() * 1000.0
+        scene["scene_update_count"] = self._scene_sequence
         scene["sequence"] = self._scene_sequence
         self._latest_scene = scene
         self._latest_scene_snapshot = self._build_scene_snapshot(scene)
@@ -351,7 +354,30 @@ class TrackingRuntime:
             "coordinate_origin_source": scene.get("coordinate_origin_source", "extrinsics_pose_reference"),
             "timestamp_us": scene["timestamp_us"],
             "sequence": int(scene.get("sequence", self._scene_sequence)),
+            "host_scene_updated_realtime_us": int(scene.get("host_scene_updated_realtime_us", 0)),
+            "host_scene_updated_monotonic_ms": float(scene.get("host_scene_updated_monotonic_ms", 0.0)),
+            "scene_update_count": int(scene.get("scene_update_count", self._scene_sequence)),
         }
+
+    def _scene_diagnostics_locked(self) -> Dict[str, Any]:
+        snapshot = self._latest_scene_snapshot
+        updated_realtime_us = int(snapshot.get("host_scene_updated_realtime_us", 0) or 0)
+        age_ms = 0.0
+        if updated_realtime_us > 0:
+            age_ms = max(0.0, float(int(time.time() * 1_000_000) - updated_realtime_us) / 1_000.0)
+        return {
+            "scene_update_count": int(snapshot.get("scene_update_count", self._scene_sequence)),
+            "host_scene_updated_realtime_us": updated_realtime_us,
+            "host_scene_updated_monotonic_ms": float(snapshot.get("host_scene_updated_monotonic_ms", 0.0)),
+            "scene_update_age_ms": age_ms,
+        }
+
+    def _with_scene_diagnostics(self, status: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            diagnostics = self._scene_diagnostics_locked()
+        result = dict(status)
+        result["scene"] = diagnostics
+        return result
 
     def _build_camera_scene(self, pipeline: TrackingPipeline) -> List[Dict[str, Any]]:
         cameras: List[Dict[str, Any]] = []

@@ -931,6 +931,10 @@
               </div>
               <div id="trackingRigidList"></div>
             </div>
+            <div class="panel">
+              <div class="panel-title">Stream Diagnostics</div>
+              <div id="trackingClientDiagnostics" class="tracking-card-metrics">Waiting for stream data</div>
+            </div>
           </div>
         </div>
       </div>
@@ -1181,11 +1185,39 @@
       trackingCameraHealth: document.getElementById("trackingCameraHealth"),
       trackingRigidList: document.getElementById("trackingRigidList"),
       trackingRigidCount: document.getElementById("trackingRigidCount"),
+      trackingClientDiagnostics: document.getElementById("trackingClientDiagnostics"),
       trackingStart: document.getElementById("trackingStart"),
       trackingStop: document.getElementById("trackingStop"),
       trackingStatus: document.getElementById("trackingStatus"),
       trackingScene: document.getElementById("trackingScene"),
       trackingExtrinsicsPath: document.getElementById("trackingExtrinsicsPath"),
+    };
+    const trackingClientDiagnostics = {
+      sseInterArrivalMs: [],
+      jsonParseMs: [],
+      sceneApplyMs: [],
+      rafWaitMs: [],
+      renderMs: [],
+      eventToRenderMs: [],
+      sequenceGaps: 0,
+      staleScenes: 0,
+      longFrames: 0,
+      lastEventAtMs: 0,
+      lastSequence: null,
+      pendingRenderReceivedAtMs: null,
+      lastPanelUpdateMs: 0,
+      push(key, value, limit = 120) {
+        const bucket = this[key];
+        if (!Array.isArray(bucket)) return;
+        bucket.push(Number(value) || 0);
+        if (bucket.length > limit) bucket.splice(0, bucket.length - limit);
+      },
+      summary(key) {
+        const values = this[key] || [];
+        if (!values.length) return { last: 0, mean: 0, max: 0 };
+        const total = values.reduce((acc, value) => acc + value, 0);
+        return { last: values[values.length - 1], mean: total / values.length, max: Math.max(...values) };
+      },
     };
     let trackingViewer = createTrackingViewer();
     function createTrackingPlaceholderViewer(message = "3D viewer loading...") {
@@ -1263,14 +1295,34 @@
           return;
         }
         renderQueued = true;
+        const requestedAtMs = performance.now();
         requestAnimationFrame(() => {
+          const rafStartedAtMs = performance.now();
+          if (typeof trackingClientDiagnostics !== "undefined") {
+            trackingClientDiagnostics.push("rafWaitMs", rafStartedAtMs - requestedAtMs);
+          }
           renderQueued = false;
           if (!dirty && !dragging) {
             return;
           }
           dirty = false;
           updateCameraPosition();
+          const renderStartedAtMs = performance.now();
           renderer.render(scene, camera);
+          const renderMs = performance.now() - renderStartedAtMs;
+          if (typeof trackingClientDiagnostics !== "undefined") {
+            trackingClientDiagnostics.push("renderMs", renderMs);
+            if (renderMs > 50) {
+              trackingClientDiagnostics.longFrames += 1;
+            }
+            if (trackingClientDiagnostics.pendingRenderReceivedAtMs != null) {
+              trackingClientDiagnostics.push(
+                "eventToRenderMs",
+                performance.now() - trackingClientDiagnostics.pendingRenderReceivedAtMs,
+              );
+              trackingClientDiagnostics.pendingRenderReceivedAtMs = null;
+            }
+          }
           if (dragging) {
             requestRender();
           }
@@ -2108,6 +2160,30 @@
         .join("");
     }
 
+    function renderTrackingClientDiagnostics() {
+      if (!elements.trackingClientDiagnostics) return;
+      const nowMs = performance.now();
+      if (nowMs - trackingClientDiagnostics.lastPanelUpdateMs < 1000) return;
+      trackingClientDiagnostics.lastPanelUpdateMs = nowMs;
+      const sse = trackingClientDiagnostics.summary("sseInterArrivalMs");
+      const parse = trackingClientDiagnostics.summary("jsonParseMs");
+      const apply = trackingClientDiagnostics.summary("sceneApplyMs");
+      const render = trackingClientDiagnostics.summary("renderMs");
+      const eventRender = trackingClientDiagnostics.summary("eventToRenderMs");
+      const lastEventAge = trackingClientDiagnostics.lastEventAtMs > 0 ? nowMs - trackingClientDiagnostics.lastEventAtMs : 0;
+      elements.trackingClientDiagnostics.innerHTML = `
+        <span>SSE ${sse.last.toFixed(1)}ms</span>
+        <span>Parse ${parse.last.toFixed(2)}ms</span>
+        <span>Apply ${apply.last.toFixed(2)}ms</span>
+        <span>Render ${render.last.toFixed(2)}ms</span>
+        <span>Event-draw ${eventRender.last.toFixed(1)}ms</span>
+        <span>Last ${lastEventAge.toFixed(0)}ms</span>
+        <span>Gaps ${trackingClientDiagnostics.sequenceGaps}</span>
+        <span>Stale ${trackingClientDiagnostics.staleScenes}</span>
+        <span>Long ${trackingClientDiagnostics.longFrames}</span>
+      `;
+    }
+
     let activeView = "cameras";
 
     // Views that require Pi preview to be ON
@@ -2402,16 +2478,27 @@
 
     function applyTrackingScene(scene, options = {}) {
       const force = Boolean(options.force);
+      const receivedAtMs = Number(options.receivedAtMs || 0);
+      const applyStartedAtMs = performance.now();
       const sequence = Number(scene?.sequence);
       if (!force && Number.isFinite(sequence) && latestTrackingSceneSequence != null && sequence <= latestTrackingSceneSequence) {
+        trackingClientDiagnostics.staleScenes += 1;
         return;
+      }
+      if (!force && Number.isFinite(sequence) && trackingClientDiagnostics.lastSequence != null && sequence > trackingClientDiagnostics.lastSequence + 1) {
+        trackingClientDiagnostics.sequenceGaps += sequence - trackingClientDiagnostics.lastSequence - 1;
       }
       if (Number.isFinite(sequence)) {
         latestTrackingSceneSequence = sequence;
+        trackingClientDiagnostics.lastSequence = sequence;
       }
       latestTrackingScene = scene || {};
       trackingSceneBootstrapped = true;
+      if (receivedAtMs > 0) {
+        trackingClientDiagnostics.pendingRenderReceivedAtMs = receivedAtMs;
+      }
       trackingViewer.update(scene, scene.empty_state || "");
+      trackingClientDiagnostics.push("sceneApplyMs", performance.now() - applyStartedAtMs);
       const nowMs = performance.now();
       if (activePage === "tracking" && nowMs - trackingPanelLastRenderMs > 250) {
         trackingPanelLastRenderMs = nowMs;
@@ -2420,7 +2507,20 @@
         }
         renderTrackingFooter(latestTrackingStatus, scene);
         renderRigidHealth(scene);
+        renderTrackingClientDiagnostics();
       }
+    }
+
+    function handleTrackingScenePayload(rawData) {
+      const receivedAtMs = performance.now();
+      if (trackingClientDiagnostics.lastEventAtMs > 0) {
+        trackingClientDiagnostics.push("sseInterArrivalMs", receivedAtMs - trackingClientDiagnostics.lastEventAtMs);
+      }
+      trackingClientDiagnostics.lastEventAtMs = receivedAtMs;
+      const parseStartedAtMs = performance.now();
+      const scene = JSON.parse(rawData);
+      trackingClientDiagnostics.push("jsonParseMs", performance.now() - parseStartedAtMs);
+      applyTrackingScene(scene, { receivedAtMs });
     }
 
     function startTrackingScenePoller() {
@@ -2430,7 +2530,7 @@
         trackingSceneStream = new EventSource("/api/tracking/stream");
         trackingSceneStream.addEventListener("scene", (event) => {
           try {
-            applyTrackingScene(JSON.parse(event.data));
+            handleTrackingScenePayload(event.data);
           } catch (_) {}
         });
         trackingSceneStream.onerror = () => {
@@ -2482,6 +2582,7 @@
       renderTrackingFooter(status, latestTrackingScene);
       renderCameraHealth(status);
       renderRigidHealth(latestTrackingScene);
+      renderTrackingClientDiagnostics();
       if (!trackingSceneBootstrapped && includeScene) {
         trackingViewer.update(scene, emptyText);
       } else if (Object.keys(latestTrackingScene || {}).length === 0) {

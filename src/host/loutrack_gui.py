@@ -68,6 +68,19 @@ STATIC_DIR_CANDIDATES = (
 )
 
 
+def _summary_values(values: List[float]) -> Dict[str, float]:
+    if not values:
+        return {"last": 0.0, "mean": 0.0, "p95": 0.0, "max": 0.0}
+    sorted_values = sorted(float(v) for v in values)
+    p95_index = min(len(sorted_values) - 1, int(round((len(sorted_values) - 1) * 0.95)))
+    return {
+        "last": float(values[-1]),
+        "mean": sum(sorted_values) / len(sorted_values),
+        "p95": sorted_values[p95_index],
+        "max": sorted_values[-1],
+    }
+
+
 def _load_html_page() -> str:
     """Load index.html from static/ directory; fall back to an error page."""
     for static_dir in STATIC_DIR_CANDIDATES:
@@ -140,6 +153,12 @@ class LoutrackGuiState:
         self.tracking_runtime = tracking_runtime or TrackingRuntime()
         self._receiver_paused_for_tracking = False
         self._tracking_camera_ids: List[str] = []
+        self._tracking_sse_clients = 0
+        self._tracking_sse_events_sent = 0
+        self._tracking_sse_keepalives = 0
+        self._tracking_sse_broken_pipes = 0
+        self._tracking_sse_write_ms: List[float] = []
+        self._tracking_sse_payload_bytes: List[float] = []
         self.latest_extrinsics_path: Path | None = None
         self.latest_extrinsics_quality: Dict[str, Any] | None = None
         self._restore_latest_extrinsics(self._default_extrinsics_output_path())
@@ -550,6 +569,43 @@ class LoutrackGuiState:
 
     def wait_tracking_scene(self, last_sequence: int | None, timeout: float = 15.0) -> Dict[str, Any]:
         return self._tracking_service.wait_tracking_scene(last_sequence, timeout=timeout)
+
+    def tracking_sse_client_opened(self) -> None:
+        with self.lock:
+            self._tracking_sse_clients += 1
+
+    def tracking_sse_client_closed(self, *, broken_pipe: bool = False) -> None:
+        with self.lock:
+            self._tracking_sse_clients = max(0, self._tracking_sse_clients - 1)
+            if broken_pipe:
+                self._tracking_sse_broken_pipes += 1
+
+    def record_tracking_sse_event(self, *, write_ms: float, payload_bytes: int) -> None:
+        with self.lock:
+            self._tracking_sse_events_sent += 1
+            self._tracking_sse_write_ms.append(float(write_ms))
+            self._tracking_sse_payload_bytes.append(float(payload_bytes))
+            if len(self._tracking_sse_write_ms) > 240:
+                self._tracking_sse_write_ms = self._tracking_sse_write_ms[-240:]
+            if len(self._tracking_sse_payload_bytes) > 240:
+                self._tracking_sse_payload_bytes = self._tracking_sse_payload_bytes[-240:]
+
+    def record_tracking_sse_keepalive(self) -> None:
+        with self.lock:
+            self._tracking_sse_keepalives += 1
+
+    def get_tracking_sse_diagnostics(self) -> Dict[str, Any]:
+        with self.lock:
+            write_ms = list(self._tracking_sse_write_ms)
+            payload_bytes = list(self._tracking_sse_payload_bytes)
+            return {
+                "clients": int(self._tracking_sse_clients),
+                "events_sent": int(self._tracking_sse_events_sent),
+                "keepalives": int(self._tracking_sse_keepalives),
+                "broken_pipes": int(self._tracking_sse_broken_pipes),
+                "write_ms": _summary_values(write_ms),
+                "payload_bytes": _summary_values(payload_bytes),
+            }
 
     def start_tracking(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self._tracking_service.start_tracking(payload)
@@ -1043,23 +1099,51 @@ class LoutrackGuiHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
         last_sequence: int | None = None
+        self.state.tracking_sse_client_opened()
+        broken_pipe = False
         try:
             while True:
                 scene = self.state.wait_tracking_scene(last_sequence, timeout=15.0)
                 sequence = int(scene.get("sequence", 0))
                 if last_sequence is not None and sequence <= last_sequence:
+                    keepalive_started = time.perf_counter()
                     self.wfile.write(b": keepalive\n\n")
                     self.wfile.flush()
+                    self.state.record_tracking_sse_keepalive()
+                    self.state.record_tracking_sse_event(
+                        write_ms=(time.perf_counter() - keepalive_started) * 1000.0,
+                        payload_bytes=len(b": keepalive\n\n"),
+                    )
                     time.sleep(15.0)
                     continue
 
-                payload = json.dumps(scene, ensure_ascii=False, separators=(",", ":"))
+                scene_payload = dict(scene)
+                scene_payload["sse_emit_realtime_us"] = int(time.time() * 1_000_000)
+                scene_payload["sse_emit_monotonic_ms"] = time.monotonic() * 1000.0
+                scene_payload["sse_payload_bytes"] = 0
+                payload = json.dumps(scene_payload, ensure_ascii=False, separators=(",", ":"))
+                base_payload_bytes = len(payload.encode("utf-8"))
+                payload_bytes = base_payload_bytes
+                while True:
+                    next_payload_bytes = base_payload_bytes - 1 + len(str(payload_bytes))
+                    if next_payload_bytes == payload_bytes:
+                        break
+                    payload_bytes = next_payload_bytes
+                payload = payload.replace('"sse_payload_bytes":0', f'"sse_payload_bytes":{payload_bytes}', 1)
                 message = f"id: {sequence}\nevent: scene\ndata: {payload}\n\n".encode("utf-8")
+                write_started = time.perf_counter()
                 self.wfile.write(message)
                 self.wfile.flush()
+                self.state.record_tracking_sse_event(
+                    write_ms=(time.perf_counter() - write_started) * 1000.0,
+                    payload_bytes=len(message),
+                )
                 last_sequence = sequence
         except (BrokenPipeError, ConnectionResetError, TimeoutError):
+            broken_pipe = True
             return
+        finally:
+            self.state.tracking_sse_client_closed(broken_pipe=broken_pipe)
 
     def _serve_static(self, rel_path: str) -> None:
         target = _resolve_static_asset(rel_path)

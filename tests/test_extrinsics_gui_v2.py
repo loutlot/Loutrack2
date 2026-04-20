@@ -1647,6 +1647,9 @@ def test_tracking_viewer_uses_webgl_without_canvas_fallback() -> None:
 def test_tracking_page_surfaces_start_stop_status_messages() -> None:
     assert 'activePage === "tracking" && elements.trackingLastUpdate' in HTML_PAGE
     assert "elements.trackingLastUpdate.textContent = msg" in HTML_PAGE
+    assert "trackingClientDiagnostics" in HTML_PAGE
+    assert "sseInterArrivalMs" in HTML_PAGE
+    assert "eventToRenderMs" in HTML_PAGE
 
 
 def test_bundled_three_split_dependency_is_available() -> None:

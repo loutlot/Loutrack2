@@ -204,6 +204,19 @@ def _pose_capture_quality(blobs: list[dict[str, object]]) -> float:
     return float(max(0.0, min(1.0, quality)))
 
 
+def _rolling_summary(values: list[float]) -> dict[str, float]:
+    if not values:
+        return {"last": 0.0, "mean": 0.0, "p50": 0.0, "p90": 0.0, "p95": 0.0, "max": 0.0}
+    return {
+        "last": float(values[-1]),
+        "mean": float(np.mean(values)),
+        "p50": float(np.percentile(values, 50)),
+        "p90": float(np.percentile(values, 90)),
+        "p95": float(np.percentile(values, 95)),
+        "max": float(max(values)),
+    }
+
+
 def _resize_preview_payload(
     frame: np.ndarray,
     blobs: list[dict[str, float]],
@@ -1671,6 +1684,7 @@ class _CameraWorker:
         capture_fps = float(frames_captured) / elapsed if elapsed > 0.0 else 0.0
         return {
             "capture_fps": capture_fps,
+            "frames_captured": int(frames_captured),
             "frames_dropped_processing": int(dropped),
             "backend_active": bool(backend is not None),
         }
@@ -1774,6 +1788,13 @@ class _ProcessingWorker:
         self._stream_payload_bytes_last = 0
         self._capture_to_process_ms: deque[float] = deque(maxlen=256)
         self._capture_to_send_ms: deque[float] = deque(maxlen=256)
+        self._queue_age_ms: deque[float] = deque(maxlen=256)
+        self._blob_detect_ms: deque[float] = deque(maxlen=256)
+        self._preview_build_ms: deque[float] = deque(maxlen=256)
+        self._json_encode_ms: deque[float] = deque(maxlen=256)
+        self._udp_send_ms: deque[float] = deque(maxlen=256)
+        self._stream_payload_bytes: deque[float] = deque(maxlen=256)
+        self._udp_send_errors = 0
         self._started_monotonic = 0.0
 
     def start(self) -> None:
@@ -1870,6 +1891,13 @@ class _ProcessingWorker:
             frames_sent = self._frames_sent
             capture_to_process_ms = list(self._capture_to_process_ms)
             capture_to_send_ms = list(self._capture_to_send_ms)
+            queue_age_ms = list(self._queue_age_ms)
+            blob_detect_ms = list(self._blob_detect_ms)
+            preview_build_ms = list(self._preview_build_ms)
+            json_encode_ms = list(self._json_encode_ms)
+            udp_send_ms = list(self._udp_send_ms)
+            stream_payload_bytes = list(self._stream_payload_bytes)
+            udp_send_errors = self._udp_send_errors
             started_monotonic = self._started_monotonic
             stream_mode = self._stream_mode
             preview_packets_built = self._preview_packets_built
@@ -1881,6 +1909,8 @@ class _ProcessingWorker:
         return {
             "processing_fps": processing_fps,
             "send_fps": send_fps,
+            "frames_processed": int(frames_processed),
+            "frames_sent": int(frames_sent),
             "capture_to_process_ms_p50": float(np.percentile(capture_to_process_ms, 50))
             if capture_to_process_ms
             else 0.0,
@@ -1897,6 +1927,13 @@ class _ProcessingWorker:
             "preview_packets_built": int(preview_packets_built),
             "preview_packets_skipped": int(preview_packets_skipped),
             "stream_payload_bytes_last": int(stream_payload_bytes_last),
+            "queue_age_ms": _rolling_summary(queue_age_ms),
+            "blob_detect_ms": _rolling_summary(blob_detect_ms),
+            "preview_build_ms": _rolling_summary(preview_build_ms),
+            "json_encode_ms": _rolling_summary(json_encode_ms),
+            "udp_send_ms": _rolling_summary(udp_send_ms),
+            "stream_payload_bytes": _rolling_summary(stream_payload_bytes),
+            "udp_send_errors": int(udp_send_errors),
         }
 
     def _has_preview_consumer(self) -> bool:
@@ -1967,7 +2004,10 @@ class _ProcessingWorker:
                     self._log(f"intrinsics frame consume failed: {exc}")
 
             applied_mask = None if state_label == STATE_MASK_INIT else mask
+            processing_started_monotonic_ns = time.monotonic_ns()
+            queue_age_ms = float(processing_started_monotonic_ns - packet.captured_monotonic_ns) / 1_000_000.0
             # Invariant: blob detection always consumes the raw frame (not preview overlays).
+            detect_started_monotonic_ns = time.monotonic_ns()
             blobs, stats = detect_blobs(
                 packet.captured_frame.image,
                 threshold=threshold,
@@ -1976,6 +2016,7 @@ class _ProcessingWorker:
                 max_diameter_px=max_diameter_px,
                 circularity_min=circularity_min,
             )
+            blob_detect_ms = float(time.monotonic_ns() - detect_started_monotonic_ns) / 1_000_000.0
 
             processed_monotonic_ns = time.monotonic_ns()
             capture_to_process_ms = (
@@ -1992,9 +2033,12 @@ class _ProcessingWorker:
                 self._last_timestamping_status = dict(timestamping_status)
                 self._frames_processed += 1
                 self._capture_to_process_ms.append(capture_to_process_ms)
+                self._queue_age_ms.append(queue_age_ms)
+                self._blob_detect_ms.append(blob_detect_ms)
 
             preview_packet: _PreviewPacket | None = None
             if self._has_preview_consumer():
+                preview_started_monotonic_ns = time.monotonic_ns()
                 preview_packet = self._build_preview_packet(
                     frame=packet.captured_frame.image,
                     blobs=cast(list[dict[str, float]], blobs),
@@ -2003,9 +2047,11 @@ class _ProcessingWorker:
                     stream_mode=stream_mode,
                     stats=stats,
                 )
+                preview_build_ms = float(time.monotonic_ns() - preview_started_monotonic_ns) / 1_000_000.0
                 with self._lock:
                     self._latest_preview_packet = preview_packet
                     self._preview_packets_built += 1
+                    self._preview_build_ms.append(preview_build_ms)
                 if self._preview_worker is not None:
                     self._preview_worker.submit(preview_packet)
             else:
@@ -2034,15 +2080,24 @@ class _ProcessingWorker:
                 msg["quality"] = _pose_capture_quality(cast(list[dict[str, object]], blobs))
             self._frame_index = (self._frame_index + 1) & 0xFFFFFFFF
 
+            json_started_monotonic_ns = time.monotonic_ns()
             payload = json.dumps(msg, separators=(",", ":")).encode("utf-8")
+            json_encode_ms = float(time.monotonic_ns() - json_started_monotonic_ns) / 1_000_000.0
             try:
+                send_started_monotonic_ns = time.monotonic_ns()
                 _ = sock.sendto(payload, (self._udp_host, self._udp_port))
+                udp_send_ms = float(time.monotonic_ns() - send_started_monotonic_ns) / 1_000_000.0
             except OSError:
+                with self._lock:
+                    self._udp_send_errors += 1
                 continue
             with self._lock:
                 self._frames_sent += 1
                 self._capture_to_send_ms.append(capture_to_send_ms)
                 self._stream_payload_bytes_last = len(payload)
+                self._json_encode_ms.append(json_encode_ms)
+                self._udp_send_ms.append(udp_send_ms)
+                self._stream_payload_bytes.append(float(len(payload)))
 
 
 class _CapturePipeline:

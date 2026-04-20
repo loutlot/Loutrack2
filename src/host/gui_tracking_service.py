@@ -20,6 +20,9 @@ class GuiTrackingService:
             "empty_state": None if start_allowed else "Generate extrinsics first",
             "latest_extrinsics_path": str(owner.latest_extrinsics_path) if owner.latest_extrinsics_path else None,
             "latest_extrinsics_quality": owner.latest_extrinsics_quality,
+            "sse": owner.get_tracking_sse_diagnostics()
+            if hasattr(owner, "get_tracking_sse_diagnostics")
+            else {},
         }
 
     def get_tracking_scene(self) -> Dict[str, Any]:

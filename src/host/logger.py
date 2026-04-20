@@ -9,11 +9,25 @@ Provides functionality to:
 
 import json
 import os
+import time
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 from pathlib import Path
 import threading
 import queue
+
+
+def _summary(values: List[float]) -> Dict[str, float]:
+    if not values:
+        return {"last": 0.0, "mean": 0.0, "p95": 0.0, "max": 0.0}
+    sorted_values = sorted(float(v) for v in values)
+    p95_index = min(len(sorted_values) - 1, int(round((len(sorted_values) - 1) * 0.95)))
+    return {
+        "last": float(values[-1]),
+        "mean": sum(sorted_values) / len(sorted_values),
+        "p95": sorted_values[p95_index],
+        "max": sorted_values[-1],
+    }
 
 
 class FrameLogger:
@@ -47,6 +61,13 @@ class FrameLogger:
         self._writer_thread: Optional[threading.Thread] = None
         self._start_time: Optional[str] = None
         self._frame_count = 0
+        self._event_count = 0
+        self._stats_lock = threading.Lock()
+        self._queue_depth_last = 0
+        self._queue_depth_max = 0
+        self._writer_lag_ms: List[float] = []
+        self._flush_count = 0
+        self._write_errors = 0
     
     def start_recording(self, session_name: Optional[str] = None) -> str:
         """
@@ -73,6 +94,13 @@ class FrameLogger:
             self._file_handle = open(self._log_file, 'w', encoding='utf-8')
             self._recording = True
             self._frame_count = 0
+            self._event_count = 0
+            with self._stats_lock:
+                self._queue_depth_last = 0
+                self._queue_depth_max = 0
+                self._writer_lag_ms = []
+                self._flush_count = 0
+                self._write_errors = 0
             
             # Write header/metadata as first line
             header = {
@@ -149,7 +177,7 @@ class FrameLogger:
             "data": frame_data
         }
         
-        self._write_queue.put(frame_entry)
+        self._enqueue_entry(frame_entry)
         self._frame_count += 1
     
     def log_event(self, event_type: str, event_data: Dict[str, Any]) -> None:
@@ -170,7 +198,16 @@ class FrameLogger:
             "data": event_data
         }
         
-        self._write_queue.put(event_entry)
+        self._enqueue_entry(event_entry)
+        self._event_count += 1
+
+    def _enqueue_entry(self, entry: Dict[str, Any]) -> None:
+        entry["_enqueued_perf_ns"] = time.perf_counter_ns()
+        self._write_queue.put(entry)
+        depth = self._write_queue.qsize()
+        with self._stats_lock:
+            self._queue_depth_last = depth
+            self._queue_depth_max = max(self._queue_depth_max, depth)
     
     # Flush to disk after this many queued writes (trades latency for throughput)
     _FLUSH_INTERVAL: int = 30
@@ -184,6 +221,8 @@ class FrameLogger:
         pending = 0
         while True:
             entry = self._write_queue.get()
+            with self._stats_lock:
+                self._queue_depth_last = self._write_queue.qsize()
             if entry is None:
                 # Flush remaining buffered data before exit
                 if self._file_handle:
@@ -191,11 +230,24 @@ class FrameLogger:
                 break
 
             if self._file_handle:
-                self._file_handle.write(json.dumps(entry) + "\n")
-                pending += 1
-                if pending >= self._FLUSH_INTERVAL:
-                    self._file_handle.flush()
-                    pending = 0
+                enqueued_perf_ns = entry.pop("_enqueued_perf_ns", None)
+                if enqueued_perf_ns is not None:
+                    lag_ms = float(time.perf_counter_ns() - int(enqueued_perf_ns)) / 1_000_000.0
+                    with self._stats_lock:
+                        self._writer_lag_ms.append(lag_ms)
+                        if len(self._writer_lag_ms) > 240:
+                            self._writer_lag_ms = self._writer_lag_ms[-240:]
+                try:
+                    self._file_handle.write(json.dumps(entry) + "\n")
+                    pending += 1
+                    if pending >= self._FLUSH_INTERVAL:
+                        self._file_handle.flush()
+                        pending = 0
+                        with self._stats_lock:
+                            self._flush_count += 1
+                except Exception:
+                    with self._stats_lock:
+                        self._write_errors += 1
     
     @property
     def is_recording(self) -> bool:
@@ -206,6 +258,25 @@ class FrameLogger:
     def current_log_file(self) -> Optional[str]:
         """Get the current log file path if recording."""
         return str(self._log_file) if self._log_file else None
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Return lightweight async writer diagnostics."""
+        with self._stats_lock:
+            writer_lag = list(self._writer_lag_ms)
+            queue_depth_last = self._write_queue.qsize()
+            queue_depth_max = self._queue_depth_max
+            flush_count = self._flush_count
+            write_errors = self._write_errors
+        return {
+            "recording": bool(self._recording),
+            "frame_count": int(self._frame_count),
+            "event_count": int(self._event_count),
+            "queue_depth": int(queue_depth_last),
+            "queue_depth_max": int(queue_depth_max),
+            "writer_lag_ms": _summary(writer_lag),
+            "flush_count": int(flush_count),
+            "write_errors": int(write_errors),
+        }
 
 
 def list_log_files(log_dir: str = "./logs") -> List[Dict[str, Any]]:

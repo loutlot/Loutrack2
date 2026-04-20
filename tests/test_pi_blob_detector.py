@@ -1093,6 +1093,14 @@ def test_processing_worker_records_stream_payload_bytes_last(
         worker.stop()
 
     assert runtime["stream_payload_bytes_last"] > 0
+    assert runtime["frames_processed"] > 0
+    assert runtime["frames_sent"] > 0
+    assert runtime["queue_age_ms"]["max"] >= 0.0
+    assert runtime["blob_detect_ms"]["max"] >= 0.0
+    assert runtime["json_encode_ms"]["max"] >= 0.0
+    assert runtime["udp_send_ms"]["max"] >= 0.0
+    assert runtime["stream_payload_bytes"]["last"] == runtime["stream_payload_bytes_last"]
+    assert runtime["udp_send_errors"] == 0
     assert sent_payloads
 
 

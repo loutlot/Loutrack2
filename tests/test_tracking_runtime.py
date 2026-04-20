@@ -245,6 +245,10 @@ def test_tracking_runtime_updates_scene_even_without_valid_rigid_body(monkeypatc
     assert waited_scene["sequence"] == scene["sequence"]
     assert scene["coordinate_origin"] == "reference_camera"
     assert scene["coordinate_origin_source"] == "extrinsics_pose_reference"
+    assert scene["host_scene_updated_realtime_us"] > 0
+    assert scene["host_scene_updated_monotonic_ms"] > 0.0
+    assert scene["scene_update_count"] == scene["sequence"]
+    assert runtime.status()["scene"]["scene_update_count"] == scene["scene_update_count"]
 
 
 def test_tracking_runtime_status_uses_short_lived_cache(monkeypatch) -> None:
