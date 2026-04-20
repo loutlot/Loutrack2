@@ -80,6 +80,7 @@ Available now:
 - tracking UDP diagnostics now keep Pi-side capture timestamps separate from raw host receive time; `pose_capture` payloads omit `frame_index`, and tracking pairing uses timestamp-only matching while surfacing timestamp source and capture-to-send timing
 - Pi control commands are now defined from a shared runtime manifest so the Pi server, host CLI, ping diagnostics, and `schema/control.json` stay aligned as intrinsics commands evolve
 - the host GUI backend now routes settings, tracking, intrinsics, capture-log, and extrinsics orchestration through dedicated internal services while keeping the existing `/api/*` surface unchanged
+- the next GUI backend split now also has extracted camera-status, workflow-summary, and `/api/state` presentation helpers staged as compatibility-preserving host modules
 - the calibration flow can produce intrinsics and extrinsics JSON outputs
 - synchronized multi-camera observations can be reconstructed into 3D marker positions
 - the host can inspect tracking state, scene snapshots, and calibration-related metrics

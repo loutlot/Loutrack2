@@ -31,6 +31,11 @@ if __package__ in (None, ""):
     from host.gui_intrinsics_service import GuiIntrinsicsService
     from host.gui_capture_log_service import GuiCaptureLogService
     from host.gui_extrinsics_service import GuiExtrinsicsService
+    from host.gui_camera_status_store import GuiCameraStatusStore
+    from host.gui_workflow_presenter import GuiWorkflowPresenter
+    from host.gui_state_presenter import GuiStatePresenter
+    from host.gui_calibration_config_service import GuiCalibrationConfigService
+    from host.gui_command_service import GuiCommandService
 else:
     from .receiver import UDPReceiver
     from .logger import FrameLogger
@@ -43,6 +48,11 @@ else:
     from .gui_intrinsics_service import GuiIntrinsicsService
     from .gui_capture_log_service import GuiCaptureLogService
     from .gui_extrinsics_service import GuiExtrinsicsService
+    from .gui_camera_status_store import GuiCameraStatusStore
+    from .gui_workflow_presenter import GuiWorkflowPresenter
+    from .gui_state_presenter import GuiStatePresenter
+    from .gui_calibration_config_service import GuiCalibrationConfigService
+    from .gui_command_service import GuiCommandService
 
 
 DEFAULT_SETTINGS_PATH = Path("logs") / "loutrack_gui_settings.json"
@@ -138,6 +148,11 @@ class LoutrackGuiState:
         self._intrinsics_service = GuiIntrinsicsService(self)
         self._capture_log_service = GuiCaptureLogService(self)
         self._extrinsics_service = GuiExtrinsicsService(self)
+        self._camera_status_store = GuiCameraStatusStore(self)
+        self._workflow_presenter = GuiWorkflowPresenter(self)
+        self._state_presenter = GuiStatePresenter(self)
+        self._calibration_config_service = GuiCalibrationConfigService(self)
+        self._command_service = GuiCommandService(self)
         self._ensure_settings_file_exists()
         settings_bundle = self._load_settings_bundle()
         ui_payload = settings_bundle.get("ui", {})
@@ -429,104 +444,10 @@ class LoutrackGuiState:
         }
 
     def refresh_targets(self) -> List[Dict[str, Any]]:
-        discovered = self._discover_workflow_targets()
-        status_rows: List[Dict[str, Any]] = []
-        ping_results = self.session._broadcast(discovered, "ping") if discovered else {}
-        with self.lock:
-            for target in discovered:
-                ping_result = ping_results.get(target.camera_id, {})
-                healthy = bool(ping_result.get("ack"))
-                diagnostics = ping_result.get("result", {}) if isinstance(ping_result.get("result"), dict) else {}
-                previous = self.camera_status.get(target.camera_id, {})
-                self.camera_status[target.camera_id] = {
-                    **previous,
-                    "camera_id": target.camera_id,
-                    "ip": target.ip,
-                    "healthy": healthy,
-                    "selected": not self.selected_camera_ids or target.camera_id in self.selected_camera_ids,
-                    "diagnostics": diagnostics,
-                    "last_ack": bool(ping_result.get("ack")) if ping_result else previous.get("last_ack"),
-                    "last_error": ping_result.get("error") or ping_result.get("error_message"),
-                }
-            status_rows = sorted(self.camera_status.values(), key=lambda item: item["camera_id"])
-        return status_rows
+        return self._camera_status_store.refresh_targets()
 
     def _workflow_summary(self, cameras: List[Dict[str, Any]]) -> Dict[str, Any]:
-        selected = [camera for camera in cameras if bool(camera.get("selected"))]
-        active_cameras = selected if selected else cameras
-        with self.lock:
-            active_capture_kind = self._active_capture_kind
-
-        def diagnostics(camera: Dict[str, Any]) -> Dict[str, Any]:
-            value = camera.get("diagnostics")
-            return value if isinstance(value, dict) else {}
-
-        def blob_diagnostics(camera: Dict[str, Any]) -> Dict[str, Any]:
-            value = diagnostics(camera).get("blob_diagnostics")
-            return value if isinstance(value, dict) else {}
-
-        total_count = len(cameras)
-        selected_count = len(selected)
-        healthy_count = sum(1 for camera in active_cameras if bool(camera.get("healthy")))
-        blob_ready_count = sum(
-            1
-            for camera in active_cameras
-            if int(blob_diagnostics(camera).get("last_blob_count", 0) or 0) > 0
-        )
-        mask_ready_count = sum(
-            1
-            for camera in active_cameras
-            if diagnostics(camera).get("state") in ("READY", "RUNNING")
-            and float(diagnostics(camera).get("mask_pixels", 0) or 0) > 0.0
-        )
-        running_count = sum(
-            1 for camera in active_cameras if diagnostics(camera).get("state") == "RUNNING"
-        )
-        preview_enabled_count = sum(
-            1 for camera in active_cameras if bool(diagnostics(camera).get("debug_preview_enabled"))
-        )
-        preview_active_count = sum(
-            1 for camera in active_cameras if bool(diagnostics(camera).get("debug_preview_active"))
-        )
-        pose_capture_exists = self.pose_capture_log_path.exists() and self.pose_capture_log_path.is_file()
-        pose_capture_complete = pose_capture_exists or bool(self._capture_completed.get("pose_capture"))
-        wand_metric_exists = self.wand_metric_log_path.exists() and self.wand_metric_log_path.is_file()
-        wand_metric_complete = wand_metric_exists or bool(self._capture_completed.get("wand_metric_capture"))
-        extrinsics_ready = self.latest_extrinsics_path is not None and self.latest_extrinsics_path.exists() and self.latest_extrinsics_path.is_file()
-
-        active_segment = "blob"
-        if running_count > 0:
-            active_segment = "wand"
-        elif pose_capture_complete and not wand_metric_complete:
-            active_segment = "floor"
-        elif pose_capture_complete:
-            active_segment = "extrinsics"
-        elif selected_count > 0 and mask_ready_count >= selected_count:
-            active_segment = "wand"
-        elif blob_ready_count > 0:
-            active_segment = "mask"
-
-        return {
-            "total_count": total_count,
-            "selected_count": selected_count,
-            "healthy_count": healthy_count,
-            "blob_ready_count": blob_ready_count,
-            "mask_ready_count": mask_ready_count,
-            "running_count": running_count,
-            "preview_enabled_count": preview_enabled_count,
-            "preview_active_count": preview_active_count,
-            "pose_capture_complete": pose_capture_complete,
-            "pose_capture_exists": pose_capture_exists,
-            "pose_capture_log_path": str(self.pose_capture_log_path),
-            "wand_metric_complete": wand_metric_complete,
-            "wand_metric_exists": wand_metric_exists,
-            "wand_metric_log_path": str(self.wand_metric_log_path),
-            "extrinsics_ready": extrinsics_ready,
-            "latest_extrinsics_path": str(self.latest_extrinsics_path) if self.latest_extrinsics_path else None,
-            "latest_extrinsics_quality": self.latest_extrinsics_quality,
-            "active_segment": active_segment,
-            "active_capture_kind": active_capture_kind,
-        }
+        return self._workflow_presenter.build(cameras)
 
     def _tracking_extrinsics_ready(self) -> bool:
         path = self.latest_extrinsics_path
@@ -866,104 +787,14 @@ class LoutrackGuiState:
     def get_state(self) -> Dict[str, Any]:
         cameras = self.refresh_targets()
         bundle = self._load_settings_bundle()
-        return {
-            "config": self._config_payload(),
-            "cameras": cameras,
-            "workflow": self._workflow_summary(cameras),
-            "extrinsics_methods": self._generate_extrinsics_registry.to_payload(),
-            "last_result": self.last_result,
-            "receiver": self.receiver.stats,
-            "tracking": self.get_tracking_status(),
-            "intrinsics_settings": self._load_intrinsics_settings(),
-            "settings_meta": {
-                "validation": bundle.get("validation", {}),
-                "runtime_hints": bundle.get("runtime_hints", {}),
-            },
-        }
+        tracking_status = self.get_tracking_status()
+        return self._state_presenter.build(cameras=cameras, bundle=bundle, tracking_status=tracking_status)
 
     def apply_config(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        targets = self._resolve_requested_targets(payload)
-        bundle = self._load_settings_bundle()
-        calibration = bundle.get("calibration", {})
-        committed = calibration.get("committed", {}) if isinstance(calibration, dict) else {}
-        draft = dict(calibration.get("draft", {})) if isinstance(calibration, dict) else {}
-        calibration_patch = {
-            key: payload[key]
-            for key in (
-                "exposure_us",
-                "gain",
-                "fps",
-                "focus",
-                "threshold",
-                "circularity_min",
-                "blob_min_diameter_px",
-                "blob_max_diameter_px",
-                "mask_threshold",
-                "mask_seconds",
-                "wand_metric_seconds",
-            )
-            if key in payload
-        }
-        draft.update(calibration_patch)
-        next_committed, errors = self._validate_calibration(
-            draft,
-            committed if isinstance(committed, dict) else {},
-        )
-        if errors:
-            raise ValueError(f"calibration settings invalid: {errors}")
-        self.config = self._build_session_config(next_committed)
-        self._persist_config()
-
-        result = self._apply_capture_settings(targets)
-        self._update_camera_status(result)
-        self.last_result = result
-        return result
+        return self._calibration_config_service.apply_config(payload)
 
     def run_command(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        command = str(payload.get("command", "")).strip()
-
-        if command == "refresh":
-            result = {"cameras": self.refresh_targets()}
-            self.last_result = result
-            return result
-
-        targets = self._resolve_requested_targets(payload)
-        if command in {"mask_start", "start", "start_pose_capture", "start_wand_metric_capture"}:
-            self._ensure_calibration_settings_valid()
-        command_handlers = {
-            "ping": lambda: self.session._broadcast(targets, "ping"),
-            "mask_start": lambda: self.session._broadcast(targets, "mask_start", **self._mask_params()),
-            "mask_stop": lambda: self.session._broadcast(targets, "mask_stop"),
-        }
-        handler = command_handlers.get(command)
-        if command == "set_preview":
-            kwargs: Dict[str, Any] = {}
-            render_enabled = payload.get("render_enabled")
-            if render_enabled is not None:
-                kwargs["render_enabled"] = bool(render_enabled)
-            overlays = payload.get("overlays")
-            if isinstance(overlays, dict):
-                kwargs["overlays"] = overlays
-            charuco = payload.get("charuco")
-            if isinstance(charuco, dict):
-                kwargs["charuco"] = charuco
-            result = self.session._broadcast(targets, "set_preview", **kwargs)
-            self._update_camera_status({command: result})
-            self.last_result = {command: result}
-            return self.last_result
-        if command in ("start", "start_pose_capture"):
-            return self._capture_log_service.start_capture(command, payload, targets)
-        if command == "start_wand_metric_capture":
-            return self._capture_log_service.start_capture(command, payload, targets)
-        if command in ("stop", "stop_pose_capture", "stop_wand_metric_capture"):
-            return self._capture_log_service.stop_capture(command, targets)
-        if handler is None:
-            raise ValueError(f"Unsupported command: {command}")
-        result = handler()
-
-        self._update_camera_status({command: result})
-        self.last_result = {command: result}
-        return self.last_result
+        return self._command_service.run_command(payload)
 
     def generate_extrinsics(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self._extrinsics_service.generate_extrinsics(payload)
@@ -1052,12 +883,7 @@ class LoutrackGuiState:
         }
 
     def _update_camera_status(self, result: Dict[str, Dict[str, Dict[str, Any]]]) -> None:
-        with self.lock:
-            for responses in result.values():
-                for camera_id, response in responses.items():
-                    entry = self.camera_status.setdefault(camera_id, {"camera_id": camera_id, "ip": "unknown"})
-                    entry["last_ack"] = bool(response.get("ack"))
-                    entry["last_error"] = response.get("error") or response.get("error_message")
+        self._camera_status_store.update_camera_status(result)
 
     def _on_frame_received(self, frame: Any) -> None:
         self._capture_log_service.on_frame_received(frame)
