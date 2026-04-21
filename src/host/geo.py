@@ -14,6 +14,7 @@ import cv2 as cv
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 from dataclasses import dataclass, field
+from scipy.optimize import linear_sum_assignment
 
 
 @dataclass
@@ -267,6 +268,21 @@ class CalibrationLoader:
 # sub-pixel calibration error while rejecting true mismatches.
 # --------------------------------------------------------------------------- #
 _EPIPOLAR_THRESHOLD_PX: float = 12.0
+_MAX_REPROJECTION_ERROR_PX: float = 3.0
+_INVALID_ASSIGNMENT_COST: float = 1e9
+
+
+def _empty_assignment_diagnostics() -> Dict[str, float]:
+    return {
+        "assignment_candidates": 0,
+        "assignment_matches": 0,
+        "assignment_rejected_epipolar": 0,
+        "assignment_rejected_triangulation": 0,
+        "assignment_rejected_reprojection": 0,
+        "duplicate_blob_matches": 0,
+        "assignment_cost_ms": 0.0,
+        "triangulated_pairs": 0,
+    }
 
 
 class Triangulator:
@@ -286,7 +302,13 @@ class Triangulator:
         # whenever camera_params R/t are updated.
         self._proj_matrices: Dict[str, np.ndarray] = {}
         self._rvecs: Dict[str, np.ndarray] = {}
+        self._last_assignment_diagnostics: Dict[str, float] = _empty_assignment_diagnostics()
         self._refresh_cached_matrices()
+
+    @property
+    def last_assignment_diagnostics(self) -> Dict[str, float]:
+        """Return diagnostics from the most recent blob assignment pass."""
+        return dict(self._last_assignment_diagnostics)
 
     # ---------------------------------------------------------------------- #
     # Cache management
@@ -487,29 +509,108 @@ class Triangulator:
         threshold_px: float = _EPIPOLAR_THRESHOLD_PX,
     ) -> Dict[int, int]:
         """
-        Greedy nearest-epipolar-line matching.
+        One-to-one nearest-epipolar-line matching.
 
-        For each blob in the reference camera find the closest (by epipolar
-        distance) unmatched blob in the other camera within threshold_px.
+        Builds a dense cost matrix and solves a global assignment so an
+        observation in the other camera cannot be reused for multiple
+        reference blobs. This keeps the legacy helper name/API while replacing
+        its previous greedy behavior.
 
         Returns:
             Dict mapping ref_blob_index → other_blob_index.
         """
-        used: set = set()
-        matches: Dict[int, int] = {}
+        if not ref_blobs or not other_blobs:
+            return {}
+
+        cost = np.full((len(ref_blobs), len(other_blobs)), _INVALID_ASSIGNMENT_COST, dtype=np.float64)
         for i, ref_pt in enumerate(ref_blobs):
-            best_j, best_d = -1, threshold_px
             for j, other_pt in enumerate(other_blobs):
-                if j in used:
-                    continue
-                d = self._epipolar_distance(F, ref_pt, other_pt)
-                if d < best_d:
-                    best_d = d
-                    best_j = j
-            if best_j >= 0:
-                matches[i] = best_j
-                used.add(best_j)
+                distance = self._epipolar_distance(F, ref_pt, other_pt)
+                if distance <= threshold_px:
+                    cost[i, j] = distance
+
+        row_ind, col_ind = linear_sum_assignment(cost)
+        matches: Dict[int, int] = {}
+        for row, col in zip(row_ind, col_ind):
+            if cost[row, col] < _INVALID_ASSIGNMENT_COST:
+                matches[int(row)] = int(col)
         return matches
+
+    def _match_blobs_symmetric_epipolar(
+        self,
+        ref_cam: str,
+        other_cam: str,
+        ref_blobs: List[Tuple[float, float]],
+        other_blobs: List[Tuple[float, float]],
+        diagnostics: Dict[str, float],
+        threshold_px: float = _EPIPOLAR_THRESHOLD_PX,
+    ) -> Dict[int, int]:
+        """Solve one-to-one assignment using symmetric epipolar distance."""
+        if not ref_blobs or not other_blobs:
+            return {}
+
+        import time
+
+        started_ns = time.perf_counter_ns()
+        diagnostics["assignment_candidates"] += len(ref_blobs) * len(other_blobs)
+
+        F_ref_to_other = self._compute_fundamental_matrix(ref_cam, other_cam)
+        F_other_to_ref = self._compute_fundamental_matrix(other_cam, ref_cam)
+        if F_ref_to_other is None or F_other_to_ref is None:
+            diagnostics["assignment_rejected_epipolar"] += len(ref_blobs) * len(other_blobs)
+            diagnostics["assignment_cost_ms"] += float(time.perf_counter_ns() - started_ns) / 1_000_000.0
+            return {}
+
+        cost = np.full((len(ref_blobs), len(other_blobs)), _INVALID_ASSIGNMENT_COST, dtype=np.float64)
+        for i, ref_pt in enumerate(ref_blobs):
+            for j, other_pt in enumerate(other_blobs):
+                forward = self._epipolar_distance(F_ref_to_other, ref_pt, other_pt)
+                backward = self._epipolar_distance(F_other_to_ref, other_pt, ref_pt)
+                if max(forward, backward) > threshold_px:
+                    diagnostics["assignment_rejected_epipolar"] += 1
+                    continue
+                cost[i, j] = forward + backward
+
+        row_ind, col_ind = linear_sum_assignment(cost)
+        matches: Dict[int, int] = {}
+        selected_cols: set[int] = set()
+        for row, col in zip(row_ind, col_ind):
+            if cost[row, col] >= _INVALID_ASSIGNMENT_COST:
+                continue
+            if int(col) in selected_cols:
+                diagnostics["duplicate_blob_matches"] += 1
+                continue
+            selected_cols.add(int(col))
+            matches[int(row)] = int(col)
+
+        diagnostics["assignment_cost_ms"] += float(time.perf_counter_ns() - started_ns) / 1_000_000.0
+        return matches
+
+    def _append_triangulated_observation(
+        self,
+        image_pts: List[Tuple[float, float]],
+        cam_ids_for_pt: List[str],
+        points_3d: List[np.ndarray],
+        errors: List[float],
+        diagnostics: Dict[str, float],
+        max_reprojection_error_px: float = _MAX_REPROJECTION_ERROR_PX,
+    ) -> None:
+        """Triangulate one candidate and append it if it passes geometry checks."""
+        pt3d = self.triangulate_point(image_pts, cam_ids_for_pt)
+        if pt3d is None:
+            diagnostics["assignment_rejected_triangulation"] += 1
+            return
+
+        err = self.compute_reprojection_error(image_pts, pt3d, cam_ids_for_pt)
+        err_value = float(err if err is not None else 0.0)
+        if err is None or err_value > max_reprojection_error_px:
+            diagnostics["assignment_rejected_reprojection"] += 1
+            return
+
+        points_3d.append(pt3d)
+        errors.append(err_value)
+        diagnostics["assignment_matches"] += 1
+        diagnostics["triangulated_pairs"] += 1
 
     # ---------------------------------------------------------------------- #
     # Paired-frame triangulation (epipolar correspondence)
@@ -536,6 +637,8 @@ class Triangulator:
         """
         points_3d: List[np.ndarray] = []
         errors: List[float] = []
+        diagnostics = _empty_assignment_diagnostics()
+        self._last_assignment_diagnostics = dict(diagnostics)
 
         camera_ids = [
             cid
@@ -543,6 +646,7 @@ class Triangulator:
             if cid in self.camera_params
         ]
         if len(camera_ids) < 2:
+            self._last_assignment_diagnostics = dict(diagnostics)
             return points_3d, errors
 
         # Collect blobs per camera
@@ -554,61 +658,68 @@ class Triangulator:
 
         active_cams = [c for c in camera_ids if blobs.get(c)]
         if len(active_cams) < 2:
+            self._last_assignment_diagnostics = dict(diagnostics)
             return points_3d, errors
 
         # Use the camera with the most blobs as the reference
         ref_cam = max(active_cams, key=lambda c: len(blobs[c]))
+        ref_blobs = blobs[ref_cam]
 
-        # Build fundamental matrices from ref_cam to every other camera
-        F_matrices: Dict[str, Optional[np.ndarray]] = {}
+        if len(active_cams) == 2:
+            other_cam = next(cam_id for cam_id in active_cams if cam_id != ref_cam)
+            matches = self._match_blobs_symmetric_epipolar(
+                ref_cam,
+                other_cam,
+                ref_blobs,
+                blobs[other_cam],
+                diagnostics,
+            )
+            for ref_idx, other_idx in matches.items():
+                self._append_triangulated_observation(
+                    [ref_blobs[ref_idx], blobs[other_cam][other_idx]],
+                    [ref_cam, other_cam],
+                    points_3d,
+                    errors,
+                    diagnostics,
+                )
+            self._last_assignment_diagnostics = dict(diagnostics)
+            return points_3d, errors
+
+        # For 3+ cameras, keep the reference-camera flow but solve each
+        # reference→camera edge with one-to-one assignment. Observations that
+        # share a reference blob are triangulated together.
+        matches_by_camera: Dict[str, Dict[int, int]] = {}
         for cam_id in active_cams:
             if cam_id == ref_cam:
                 continue
-            F_matrices[cam_id] = self._compute_fundamental_matrix(
-                ref_cam, cam_id
+            matches_by_camera[cam_id] = self._match_blobs_symmetric_epipolar(
+                ref_cam,
+                cam_id,
+                ref_blobs,
+                blobs[cam_id],
+                diagnostics,
             )
 
-        ref_blobs = blobs[ref_cam]
-
-        # For each reference blob, collect epipolar-matched observations
         for ref_idx, ref_pt in enumerate(ref_blobs):
-            image_pts: List[Tuple[float, float]] = [ref_pt]
-            cam_ids_for_pt: List[str] = [ref_cam]
-
-            for cam_id in active_cams:
-                if cam_id == ref_cam:
+            image_pts = [ref_pt]
+            cam_ids_for_pt = [ref_cam]
+            for cam_id, matches in matches_by_camera.items():
+                other_idx = matches.get(ref_idx)
+                if other_idx is None:
                     continue
-                F = F_matrices.get(cam_id)
-                other = blobs[cam_id]
-                if not other:
-                    continue
-
-                if F is not None:
-                    # Find the epipolar-closest blob
-                    best_j, best_d = -1, _EPIPOLAR_THRESHOLD_PX
-                    for j, pt in enumerate(other):
-                        d = self._epipolar_distance(F, ref_pt, pt)
-                        if d < best_d:
-                            best_d = d
-                            best_j = j
-                    if best_j >= 0:
-                        image_pts.append(other[best_j])
-                        cam_ids_for_pt.append(cam_id)
-                else:
-                    # Fundamental matrix unavailable — skip this camera
-                    continue
-
+                image_pts.append(blobs[cam_id][other_idx])
+                cam_ids_for_pt.append(cam_id)
             if len(image_pts) < 2:
                 continue
+            self._append_triangulated_observation(
+                image_pts,
+                cam_ids_for_pt,
+                points_3d,
+                errors,
+                diagnostics,
+            )
 
-            pt3d = self.triangulate_point(image_pts, cam_ids_for_pt)
-            if pt3d is not None:
-                points_3d.append(pt3d)
-                err = self.compute_reprojection_error(
-                    image_pts, pt3d, cam_ids_for_pt
-                )
-                errors.append(err if err is not None else 0.0)
-
+        self._last_assignment_diagnostics = dict(diagnostics)
         return points_3d, errors
 
     def triangulate_points(
@@ -702,15 +813,23 @@ class GeometryPipeline:
         points_3d, errors = self.triangulator.triangulate_paired_frames(
             paired_frames
         )
+        assignment_diagnostics = self.triangulator.last_assignment_diagnostics
 
         return {
             "timestamp": paired_frames.timestamp,
             "camera_ids": paired_frames.camera_ids,
             "points_3d": points_3d,
             "reprojection_errors": errors,
+            "assignment_diagnostics": assignment_diagnostics,
             "mean_error": float(np.mean(errors)) if errors else 0.0,
             "point_count": len(points_3d),
         }
+
+    def get_diagnostics(self) -> Dict[str, Any]:
+        """Return geometry diagnostics for status/log snapshots."""
+        if self.triangulator is None:
+            return {"assignment": _empty_assignment_diagnostics()}
+        return {"assignment": self.triangulator.last_assignment_diagnostics}
 
     def get_camera_ids(self) -> List[str]:
         return list(self.camera_params.keys())

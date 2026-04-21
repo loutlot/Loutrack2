@@ -128,6 +128,7 @@ class PointClusterer:
         self,
         marker_diameter: float = 0.014,
         eps_scale: float = 0.8,
+        cluster_radius_m: float = 0.08,
         min_samples: int = 3
     ):
         """
@@ -135,11 +136,14 @@ class PointClusterer:
         
         Args:
             marker_diameter: Marker diameter in meters (default 14mm)
-            eps_scale: Multiplier for eps = marker_diameter * eps_scale
+            eps_scale: Legacy multiplier for marker-diameter clustering
+            cluster_radius_m: Rigid-body clustering radius in meters
             min_samples: Minimum points for a cluster
         """
         self.marker_diameter = marker_diameter
-        self.eps = marker_diameter * eps_scale
+        self.eps_scale = eps_scale
+        self.cluster_radius_m = float(cluster_radius_m)
+        self.eps = self.cluster_radius_m
         self.min_samples = min_samples
     
     def cluster(self, points: np.ndarray) -> List[np.ndarray]:
@@ -505,7 +509,8 @@ class RigidBodyEstimator:
     def __init__(
         self,
         patterns: Optional[List[MarkerPattern]] = None,
-        marker_diameter: float = 0.014
+        marker_diameter: float = 0.014,
+        cluster_radius_m: float = 0.08,
     ):
         """
         Initialize estimator.
@@ -513,11 +518,16 @@ class RigidBodyEstimator:
         Args:
             patterns: List of MarkerPatterns to track
             marker_diameter: Default marker diameter
+            cluster_radius_m: Radius for grouping markers into rigid-body candidates
         """
         self.patterns = patterns or [WAIST_PATTERN]
         self.marker_diameter = marker_diameter
+        self.cluster_radius_m = float(cluster_radius_m)
         
-        self.clusterer = PointClusterer(marker_diameter=marker_diameter)
+        self.clusterer = PointClusterer(
+            marker_diameter=marker_diameter,
+            cluster_radius_m=self.cluster_radius_m,
+        )
         
         # Create trackers for each pattern
         self.trackers: Dict[str, RigidBodyTracker] = {
@@ -614,6 +624,10 @@ class RigidBodyEstimator:
         
         # Cluster points
         clusters = self.clusterer.cluster(points_3d)
+        if len(self.patterns) == 1 and len(points_3d) >= 3:
+            min_points = max(3, self.patterns[0].num_markers - 1)
+            if not any(len(cluster) >= min_points for cluster in clusters):
+                clusters.append(points_3d)
         
         # Estimate pose for each pattern
         poses = {}

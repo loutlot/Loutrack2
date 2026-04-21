@@ -1650,6 +1650,18 @@ def test_tracking_page_surfaces_start_stop_status_messages() -> None:
     assert "trackingClientDiagnostics" in HTML_PAGE
     assert "sseInterArrivalMs" in HTML_PAGE
     assert "eventToRenderMs" in HTML_PAGE
+    assert 'activePage === "tracking" || activeView === "tracking" || dragging' in HTML_PAGE
+    assert "renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5))" in HTML_PAGE
+    assert "pendingSceneSnapshot" in HTML_PAGE
+    assert "pendingSceneDrops" in HTML_PAGE
+    assert "geometryUpdateMs" in HTML_PAGE
+    assert "webglRenderMs" in HTML_PAGE
+    assert "rafFps" in HTML_PAGE
+    assert "droppedRafFrames" in HTML_PAGE
+    assert "sceneToRenderMs" in HTML_PAGE
+    assert "previousRawPoints" not in HTML_PAGE
+    assert "targetRawPoints" not in HTML_PAGE
+    assert "interpolateRawPoints" not in HTML_PAGE
 
 
 def test_bundled_three_split_dependency_is_available() -> None:

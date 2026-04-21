@@ -98,3 +98,10 @@ def test_tracking_pipeline_reports_stage_and_logger_diagnostics(tmp_path: Path) 
         entry.get("_type") == "event" and entry.get("event_type") == "tracking_diagnostics"
         for entry in events
     )
+
+
+def test_tracking_pipeline_uses_ten_ms_timestamp_pairing_window() -> None:
+    pipeline = TrackingPipeline(enable_logging=False)
+
+    assert pipeline.frame_processor.pairer.timestamp_tolerance_us == 10_000
+    assert pipeline.frame_processor.pairer.frame_index_fallback is False

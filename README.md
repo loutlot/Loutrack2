@@ -68,6 +68,7 @@ Available now:
 - the host GUI now keeps selected-camera targeting strict for camera commands and settings application
 - runtime-generated capture paths are surfaced as latest observed values and can be adopted explicitly without silently overwriting draft form inputs
 - stopped intrinsics captures can now be synced back from the Pi for host-side calibration without relying on stale in-memory frame state
+- the tracking GUI queues SSE scene updates for the next browser animation frame, drawing raw points without interpolation while surfacing geometry and WebGL timing diagnostics
 - the intrinsics result panel now refreshes immediately when entering the view or launching host-side calibration, reducing stale "Calibrating on host..." displays
 - the Matplotlib extrinsics viewer can now overlay triangulated wand metric samples in similarity, metric, or world space
 - wand-based world alignment now chooses the floor-normal sign so ceiling cameras appear at positive height above the floor plane
@@ -76,9 +77,12 @@ Available now:
 - tracking start now configures selected Pis for low-overhead preview and explicitly starts their `pose_capture` UDP streams before expecting 3D blob points
 - tracking start tolerates Pis that are already streaming so the host receiver can recover cleanly after a GUI restart or partial start failure
 - live tracking pairing now consumes each buffered Pi frame only once, emits pairs in chronological order, and calculates FPS/latency from UDP receive timestamps, preventing inflated 300+ FPS and missing-frame counts from stale or out-of-order buffer reprocessing
+- live tracking uses a 10 ms timestamp-only pairing window, matching the nearest capture-time frames at 56 fps without re-enabling `frame_index` fallback
 - live tracking scene updates now use a push stream for the GUI viewer, emit newly completed frame pairs without a fixed 16 ms batching delay, and draw world-space trails and marker positions without double-applying rigid-body transforms
 - tracking UDP diagnostics now keep Pi-side capture timestamps separate from raw host receive time; `pose_capture` payloads omit `frame_index`, and tracking pairing uses timestamp-only matching while surfacing timestamp source and capture-to-send timing
 - tracking performance diagnostics now separate Pi queue/detection/send timing, Host pair/3D/rigid/logger timing, SSE write health, and browser receive/apply/render timing with bounded rolling summaries and low-frequency JSONL diagnostic events
+- raw 3D blob reconstruction now uses one-to-one epipolar assignment before triangulation, preventing the same 2D blob from generating multiple 3D points while keeping rigid-body geometry out of the raw matcher
+- rigid-body candidate clustering now uses an 80 mm radius instead of marker-diameter spacing, with a single-pattern fallback that tests the full point set only when clustering produces no large-enough candidate
 - Pi control commands are now defined from a shared runtime manifest so the Pi server, host CLI, ping diagnostics, and `schema/control.json` stay aligned as intrinsics commands evolve
 - the host GUI backend now routes settings, tracking, intrinsics, capture-log, and extrinsics orchestration through dedicated internal services while keeping the existing `/api/*` surface unchanged
 - the next GUI backend split now also has extracted camera-status, workflow-summary, and `/api/state` presentation helpers staged as compatibility-preserving host modules

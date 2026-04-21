@@ -54,7 +54,8 @@ class TrackingPipeline:
         calibration_path: Optional[str] = None,
         patterns: Optional[List[MarkerPattern]] = None,
         enable_logging: bool = True,
-        log_dir: str = "./logs"
+        log_dir: str = "./logs",
+        timestamp_tolerance_us: int = 10_000,
     ):
         """
         Initialize tracking pipeline.
@@ -71,7 +72,11 @@ class TrackingPipeline:
         self.log_dir = log_dir
         
         # Initialize components
-        self.frame_processor = FrameProcessor(udp_port=udp_port, frame_index_fallback=False)
+        self.frame_processor = FrameProcessor(
+            udp_port=udp_port,
+            timestamp_tolerance_us=timestamp_tolerance_us,
+            frame_index_fallback=False,
+        )
         self.geometry = GeometryPipeline()
         self.rigid_estimator = RigidBodyEstimator(patterns=patterns or [WAIST_PATTERN])
         self.metrics = MetricsCollector()
@@ -103,6 +108,7 @@ class TrackingPipeline:
             "timestamp": 0,
             "points_3d": [],
             "reprojection_errors": [],
+            "assignment_diagnostics": {},
             "pair_timestamp_range_us": 0,
         }
         
@@ -227,6 +233,7 @@ class TrackingPipeline:
                         for point in points_3d_list
                     ],
                     "reprojection_errors": list(result.get("reprojection_errors", [])),
+                    "assignment_diagnostics": dict(result.get("assignment_diagnostics", {})),
                     "pair_timestamp_range_us": paired_frames.timestamp_range_us,
                 }
             
@@ -302,9 +309,16 @@ class TrackingPipeline:
             return get_stats()
         return {"recording": bool(getattr(self.logger, "is_recording", False))}
 
+    def _geometry_diagnostics(self) -> Dict[str, Any]:
+        get_diagnostics = getattr(self.geometry, "get_diagnostics", None)
+        if callable(get_diagnostics):
+            return get_diagnostics()
+        return {}
+
     def _diagnostics_snapshot(self) -> Dict[str, Any]:
         return {
             "receiver": self.frame_processor.get_stats(),
+            "geometry": self._geometry_diagnostics(),
             "pipeline_stage_ms": self._stage_diagnostics(),
             "logger": self._logger_diagnostics(),
             "metrics": self.metrics.get_summary(),
@@ -335,6 +349,7 @@ class TrackingPipeline:
             "tracking": self.rigid_estimator.get_tracking_status(),
             "sync": self.sync_evaluator.get_status(),
             "diagnostics": {
+                "geometry": self._geometry_diagnostics(),
                 "pipeline_stage_ms": self._stage_diagnostics(),
                 "logger": self._logger_diagnostics(),
             },
@@ -351,6 +366,7 @@ class TrackingPipeline:
                 "timestamp": self._latest_triangulation_snapshot["timestamp"],
                 "points_3d": [list(point) for point in self._latest_triangulation_snapshot["points_3d"]],
                 "reprojection_errors": list(self._latest_triangulation_snapshot["reprojection_errors"]),
+                "assignment_diagnostics": dict(self._latest_triangulation_snapshot.get("assignment_diagnostics", {})),
                 "pair_timestamp_range_us": self._latest_triangulation_snapshot["pair_timestamp_range_us"],
             }
 

@@ -1198,11 +1198,18 @@
       sceneApplyMs: [],
       rafWaitMs: [],
       renderMs: [],
+      rafFps: [],
+      geometryUpdateMs: [],
+      webglRenderMs: [],
       eventToRenderMs: [],
+      sceneToRenderMs: [],
       sequenceGaps: 0,
       staleScenes: 0,
       longFrames: 0,
+      droppedRafFrames: 0,
+      pendingSceneDrops: 0,
       lastEventAtMs: 0,
+      lastRafAtMs: 0,
       lastSequence: null,
       pendingRenderReceivedAtMs: null,
       lastPanelUpdateMs: 0,
@@ -1253,7 +1260,7 @@
         console.error("WebGL tracking viewer unavailable:", error);
         return createTrackingPlaceholderViewer("3D viewer unavailable: WebGL renderer could not start.");
       }
-      renderer.setPixelRatio(window.devicePixelRatio || 1);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
       const scene = new THREE.Scene();
       scene.background = new THREE.Color(0x020617);
       const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 25);
@@ -1276,8 +1283,11 @@
       let elevation = 0.45;
       let distance = 3.4;
       let dragging = false;
-      let dirty = true;
       let renderQueued = false;
+      let needsRender = true;
+      let pendingSceneSnapshot = null;
+      let pendingSceneEmptyMessage = "";
+      let pendingSceneReceivedAtMs = 0;
       const cursor = { x: 0, y: 0 };
 
       function updateCameraPosition() {
@@ -1290,28 +1300,48 @@
         camera.lookAt(target);
       }
 
+      function shouldRenderNow() {
+        return activePage === "tracking" || activeView === "tracking" || dragging;
+      }
+
       function requestRender() {
+        if (!shouldRenderNow()) {
+          return;
+        }
         if (renderQueued) {
           return;
         }
         renderQueued = true;
         const requestedAtMs = performance.now();
-        requestAnimationFrame(() => {
+        requestAnimationFrame((frameAtMs) => {
           const rafStartedAtMs = performance.now();
           if (typeof trackingClientDiagnostics !== "undefined") {
             trackingClientDiagnostics.push("rafWaitMs", rafStartedAtMs - requestedAtMs);
+            const lastRafAtMs = trackingClientDiagnostics.lastRafAtMs;
+            if (lastRafAtMs > 0) {
+              const deltaMs = Math.max(0, frameAtMs - lastRafAtMs);
+              if (deltaMs > 0) {
+                trackingClientDiagnostics.push("rafFps", 1000 / deltaMs);
+              }
+              if (deltaMs > 34) {
+                trackingClientDiagnostics.droppedRafFrames += 1;
+              }
+            }
+            trackingClientDiagnostics.lastRafAtMs = frameAtMs;
           }
           renderQueued = false;
-          if (!dirty && !dragging) {
+          const sceneApplied = applyPendingScene();
+          if (!needsRender && !sceneApplied && !dragging) {
             return;
           }
-          dirty = false;
+          needsRender = false;
           updateCameraPosition();
           const renderStartedAtMs = performance.now();
           renderer.render(scene, camera);
           const renderMs = performance.now() - renderStartedAtMs;
           if (typeof trackingClientDiagnostics !== "undefined") {
             trackingClientDiagnostics.push("renderMs", renderMs);
+            trackingClientDiagnostics.push("webglRenderMs", renderMs);
             if (renderMs > 50) {
               trackingClientDiagnostics.longFrames += 1;
             }
@@ -1323,14 +1353,27 @@
               trackingClientDiagnostics.pendingRenderReceivedAtMs = null;
             }
           }
-          if (dragging) {
+          if (dragging || pendingSceneSnapshot) {
             requestRender();
           }
         });
       }
 
       function markDirty() {
-        dirty = true;
+        needsRender = true;
+        requestRender();
+      }
+
+      function queueScene(sceneSnapshot = {}, emptyMessage = "", receivedAtMs = 0) {
+        if (pendingSceneSnapshot && typeof trackingClientDiagnostics !== "undefined") {
+          trackingClientDiagnostics.pendingSceneDrops += 1;
+        }
+        pendingSceneSnapshot = sceneSnapshot || {};
+        pendingSceneEmptyMessage = emptyMessage || "";
+        pendingSceneReceivedAtMs = Number(receivedAtMs || 0);
+        if (pendingSceneReceivedAtMs > 0 && typeof trackingClientDiagnostics !== "undefined") {
+          trackingClientDiagnostics.pendingRenderReceivedAtMs = pendingSceneReceivedAtMs;
+        }
         requestRender();
       }
 
@@ -1615,26 +1658,47 @@
         rawPoints.visible = pointCount > 0;
       }
 
+      function applyPendingScene() {
+        if (!pendingSceneSnapshot) {
+          return false;
+        }
+        const sceneSnapshot = pendingSceneSnapshot;
+        const emptyMessage = pendingSceneEmptyMessage;
+        const receivedAtMs = pendingSceneReceivedAtMs;
+        pendingSceneSnapshot = null;
+        pendingSceneEmptyMessage = "";
+        pendingSceneReceivedAtMs = 0;
+        const geometryStartedAtMs = performance.now();
+        updateCameras(sceneSnapshot.cameras || []);
+        updateRigids(sceneSnapshot.rigid_bodies || []);
+        updateRawPoints(sceneSnapshot.raw_points || []);
+        const hasGeometry =
+          (Array.isArray(sceneSnapshot.cameras) && sceneSnapshot.cameras.length > 0) ||
+          (Array.isArray(sceneSnapshot.raw_points) && sceneSnapshot.raw_points.length > 0) ||
+          (Array.isArray(sceneSnapshot.rigid_bodies) && sceneSnapshot.rigid_bodies.length > 0);
+        if (!hasGeometry) {
+          showOverlay(emptyMessage || "Waiting for scene data");
+        } else {
+          showOverlay("");
+        }
+        if (typeof trackingClientDiagnostics !== "undefined") {
+          trackingClientDiagnostics.push("geometryUpdateMs", performance.now() - geometryStartedAtMs);
+          if (receivedAtMs > 0) {
+            trackingClientDiagnostics.push("sceneToRenderMs", performance.now() - receivedAtMs);
+          }
+        }
+        needsRender = true;
+        return true;
+      }
+
       function showOverlay(message) {
         overlay.textContent = message || "";
         overlay.style.display = message ? "flex" : "none";
       }
 
       return {
-        update(sceneSnapshot = {}, emptyMessage = "") {
-          updateCameras(sceneSnapshot.cameras || []);
-          updateRigids(sceneSnapshot.rigid_bodies || []);
-          updateRawPoints(sceneSnapshot.raw_points || []);
-          const hasGeometry =
-            (Array.isArray(sceneSnapshot.cameras) && sceneSnapshot.cameras.length > 0) ||
-            (Array.isArray(sceneSnapshot.raw_points) && sceneSnapshot.raw_points.length > 0) ||
-            (Array.isArray(sceneSnapshot.rigid_bodies) && sceneSnapshot.rigid_bodies.length > 0);
-          if (!hasGeometry) {
-            showOverlay(emptyMessage || "Waiting for scene data");
-          } else {
-            showOverlay("");
-          }
-          markDirty();
+        update(sceneSnapshot = {}, emptyMessage = "", receivedAtMs = 0) {
+          queueScene(sceneSnapshot, emptyMessage, receivedAtMs);
         },
         setEmpty(message) {
           showOverlay(message);
@@ -2168,19 +2232,27 @@
       const sse = trackingClientDiagnostics.summary("sseInterArrivalMs");
       const parse = trackingClientDiagnostics.summary("jsonParseMs");
       const apply = trackingClientDiagnostics.summary("sceneApplyMs");
-      const render = trackingClientDiagnostics.summary("renderMs");
+      const rafFps = trackingClientDiagnostics.summary("rafFps");
+      const geometry = trackingClientDiagnostics.summary("geometryUpdateMs");
+      const render = trackingClientDiagnostics.summary("webglRenderMs");
       const eventRender = trackingClientDiagnostics.summary("eventToRenderMs");
+      const sceneRender = trackingClientDiagnostics.summary("sceneToRenderMs");
       const lastEventAge = trackingClientDiagnostics.lastEventAtMs > 0 ? nowMs - trackingClientDiagnostics.lastEventAtMs : 0;
       elements.trackingClientDiagnostics.innerHTML = `
         <span>SSE ${sse.last.toFixed(1)}ms</span>
+        <span>RAF ${rafFps.last.toFixed(1)}fps</span>
         <span>Parse ${parse.last.toFixed(2)}ms</span>
         <span>Apply ${apply.last.toFixed(2)}ms</span>
-        <span>Render ${render.last.toFixed(2)}ms</span>
+        <span>Geometry ${geometry.last.toFixed(2)}ms</span>
+        <span>WebGL ${render.last.toFixed(2)}ms</span>
         <span>Event-draw ${eventRender.last.toFixed(1)}ms</span>
+        <span>Scene-draw ${sceneRender.last.toFixed(1)}ms</span>
         <span>Last ${lastEventAge.toFixed(0)}ms</span>
         <span>Gaps ${trackingClientDiagnostics.sequenceGaps}</span>
         <span>Stale ${trackingClientDiagnostics.staleScenes}</span>
         <span>Long ${trackingClientDiagnostics.longFrames}</span>
+        <span>Dropped RAF ${trackingClientDiagnostics.droppedRafFrames}</span>
+        <span>Pending drops ${trackingClientDiagnostics.pendingSceneDrops}</span>
       `;
     }
 
@@ -2497,10 +2569,10 @@
       if (receivedAtMs > 0) {
         trackingClientDiagnostics.pendingRenderReceivedAtMs = receivedAtMs;
       }
-      trackingViewer.update(scene, scene.empty_state || "");
+      trackingViewer.update(scene, scene.empty_state || "", receivedAtMs);
       trackingClientDiagnostics.push("sceneApplyMs", performance.now() - applyStartedAtMs);
       const nowMs = performance.now();
-      if (activePage === "tracking" && nowMs - trackingPanelLastRenderMs > 250) {
+      if ((activePage === "tracking" || activeView === "tracking") && nowMs - trackingPanelLastRenderMs > 250) {
         trackingPanelLastRenderMs = nowMs;
         if (elements.trackingScene) {
           elements.trackingScene.textContent = JSON.stringify(scene, null, 2);
