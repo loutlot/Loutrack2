@@ -79,6 +79,7 @@ def test_settings_migration_prefers_new_and_deletes_old(
     )
     assert state.config.exposure_us == 12000
     assert state.config.fps == 56
+    assert state.config.focus == 0.317
     assert not old_settings.exists()
 
 
@@ -97,8 +98,9 @@ def test_settings_migration_invalid_old_creates_backup_and_defaults(
         session=_FakeSession(),
         receiver=_FakeReceiver(),
     )
-    assert state.config.exposure_us == 12000
+    assert state.config.exposure_us == 5000
     assert state.config.fps == 56
+    assert state.config.focus == 0.317
     assert new_settings.exists()
     assert backup.exists()
     assert not old_settings.exists()

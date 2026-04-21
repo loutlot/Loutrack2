@@ -695,7 +695,7 @@
               <div class="slider-grid">
                 <div class="slider-label">
                   <span>Exposure <span class="slider-value" id="exposureValue"></span> us</span>
-                  <input id="exposure" type="range" min="100" max="30000" step="100" value="12000">
+                  <input id="exposure" type="range" min="100" max="30000" step="100" value="5000">
                 </div>
                 <div class="slider-label">
                   <span>Gain <span class="slider-value" id="gainValue"></span></span>
@@ -707,7 +707,7 @@
                 </div>
                 <div class="slider-label">
                   <span>Focus <span class="slider-value" id="focusValue"></span></span>
-                  <input id="focus" type="range" min="0.0" max="10.0" step="0.001" value="5.215">
+                  <input id="focus" type="range" min="0.0" max="10.0" step="0.001" value="0.317">
                 </div>
                 <div class="slider-label">
                   <span>Threshold <span class="slider-value" id="thresholdValue"></span></span>
@@ -1029,10 +1029,10 @@
     const mainControlInputIds = [...sliders, "wandMetricSeconds"];
     const intrinsicsControlInputIds = ["intFocus", "intExposure", "intGain", "intFps"];
     const CONTROL_DEFAULTS = {
-      exposure_us: 12000,
+      exposure_us: 5000,
       gain: 8.0,
       fps: 56,
-      focus: 5.215,
+      focus: 0.317,
       threshold: 200,
       circularity_min: 0.0,
       blob_min_diameter_px: 0,

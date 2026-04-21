@@ -234,7 +234,7 @@ def test_gui_settings_store_migrates_invalid_legacy_payload_to_backup(tmp_path: 
 
     assert settings_path.exists()
     assert (tmp_path / "wand_gui_settings.json.invalid.bak").exists()
-    assert bundle["calibration"]["committed"]["exposure_us"] == 12000
+    assert bundle["calibration"]["committed"]["exposure_us"] == 5000
 
 
 def test_gui_calibration_config_service_applies_config_and_dispatches_capture_settings(tmp_path: Path) -> None:

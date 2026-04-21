@@ -230,7 +230,17 @@ class LoutrackGuiState:
         self._settings_store.migrate_once()
 
     def _default_config(self) -> CalibrationSessionConfig:
-        return CalibrationSessionConfig(exposure_us=12000, gain=8.0, fps=56, duration_s=DEFAULT_WAND_METRIC_DURATION_S)
+        return CalibrationSessionConfig(
+            exposure_us=5000,
+            gain=8.0,
+            fps=56,
+            focus=0.317,
+            threshold=200,
+            blob_min_diameter_px=None,
+            blob_max_diameter_px=None,
+            circularity_min=0.0,
+            duration_s=DEFAULT_WAND_METRIC_DURATION_S,
+        )
 
     @staticmethod
     def _default_pose_log_path() -> Path:

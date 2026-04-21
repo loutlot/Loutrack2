@@ -83,6 +83,7 @@ Available now:
 - tracking performance diagnostics now separate Pi queue/detection/send timing, Host pair/3D/rigid/logger timing, SSE write health, and browser receive/apply/render timing with bounded rolling summaries and low-frequency JSONL diagnostic events
 - raw 3D blob reconstruction now uses one-to-one epipolar assignment before triangulation, preventing the same 2D blob from generating multiple 3D points while keeping rigid-body geometry out of the raw matcher
 - rigid-body candidate clustering now uses an 80 mm radius instead of marker-diameter spacing, with a single-pattern fallback that tests the full point set only when clustering produces no large-enough candidate
+- GUI detection defaults now start at exposure `5000 us`, gain `8`, fps `56`, focus `0.317`, threshold `200`, circularity `0`, and no blob diameter limits
 - Pi control commands are now defined from a shared runtime manifest so the Pi server, host CLI, ping diagnostics, and `schema/control.json` stay aligned as intrinsics commands evolve
 - the host GUI backend now routes settings, tracking, intrinsics, capture-log, and extrinsics orchestration through dedicated internal services while keeping the existing `/api/*` surface unchanged
 - the next GUI backend split now also has extracted camera-status, workflow-summary, and `/api/state` presentation helpers staged as compatibility-preserving host modules

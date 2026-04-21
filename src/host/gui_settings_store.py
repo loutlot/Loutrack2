@@ -589,10 +589,10 @@ class GuiSettingsStore:
 
     def default_calibration_payload(self) -> Dict[str, Any]:
         return {
-            "exposure_us": 12000,
+            "exposure_us": 5000,
             "gain": 8.0,
             "fps": 56,
-            "focus": 5.215,
+            "focus": 0.317,
             "threshold": 200,
             "blob_min_diameter_px": None,
             "blob_max_diameter_px": None,
