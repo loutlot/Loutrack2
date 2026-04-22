@@ -8,6 +8,7 @@ Provides functionality to:
 - Integrate with logger and metrics collectors
 """
 
+import queue
 import socket
 import json
 import threading
@@ -493,10 +494,10 @@ class UDPReceiver:
 
     # Maximum single UDP datagram we'll accept (64 KiB covers any JSON blob payload)
     _RECV_BYTES: int = 65536
-    # Kernel socket receive buffer (2 MiB).
-    # With 3 cameras at 60 fps and ~500-byte frames the steady-state throughput is
-    # ~90 KB/s; the enlarged kernel buffer absorbs bursts without dropping packets.
-    _KERNEL_RECV_BUF: int = 2 * 1024 * 1024
+    # Kernel socket receive buffer (8 MiB).
+    # At 120 fps × 6 cameras × ~600 B/frame ≈ 430 KB/s steady-state; the enlarged
+    # kernel buffer absorbs multi-second bursts while the processing thread catches up.
+    _KERNEL_RECV_BUF: int = 8 * 1024 * 1024
 
     def __init__(
         self,
@@ -686,7 +687,7 @@ class FrameProcessor:
             frame_index_fallback=frame_index_fallback,
         )
         self.receiver = UDPReceiver(port=udp_port)
-        
+
         self._paired_callback: Optional[Callable[[PairedFrames], None]] = None
         self._last_pair_time = 0.0
         self._pair_interval = max(0.0, float(pair_interval_s))
@@ -695,24 +696,60 @@ class FrameProcessor:
         self._pair_age_ms: deque[float] = deque(maxlen=120)
         self._pair_host_receive_span_ms: deque[float] = deque(maxlen=120)
         self._cleanup_old_frames_dropped = 0
+
+        # Raw frame queue: UDP receive thread only enqueues; a dedicated processing
+        # thread drains it.  This keeps recvfrom() latency-free regardless of how
+        # long triangulation takes.  None is used as a stop sentinel.
+        self._raw_queue: queue.Queue = queue.Queue()
+        self._processing_thread: Optional[threading.Thread] = None
     
     def set_paired_callback(self, callback: Callable[[PairedFrames], None]) -> None:
         """Set callback for paired frames."""
         self._paired_callback = callback
-    
+
     def start(self) -> None:
         """Start the frame processor."""
-        self.receiver.set_frame_callback(self._on_frame_received)
+        # Processing thread must be running before the receiver so the queue is
+        # drained from the moment the first frame arrives.
+        self._processing_thread = threading.Thread(
+            target=self._processing_loop,
+            daemon=True,
+            name="FrameProcessor-processing",
+        )
+        self._processing_thread.start()
+        # UDP receive thread only enqueues frames; it never blocks on processing.
+        self.receiver.set_frame_callback(self._enqueue_frame)
         self.receiver.start()
-    
+
     def stop(self) -> None:
         """Stop the frame processor."""
         self.receiver.stop()
-    
+        # Sentinel wakes the processing thread so it can exit cleanly.
+        self._raw_queue.put(None)
+        if self._processing_thread is not None:
+            self._processing_thread.join(timeout=2.0)
+        self._processing_thread = None
+
+    def _enqueue_frame(self, frame: Frame) -> None:
+        """Enqueue a frame from the UDP receive thread — O(1), never blocks."""
+        self._raw_queue.put(frame)
+
+    def _processing_loop(self) -> None:
+        """Drain the raw-frame queue on a dedicated thread."""
+        while True:
+            frame = self._raw_queue.get()
+            if frame is None:  # stop sentinel
+                break
+            self._on_frame_received(frame)
+
     def _on_frame_received(self, frame: Frame) -> None:
-        """Handle received frame."""
+        """Handle a frame: buffer it and attempt pairing.
+
+        Called from the processing thread during normal operation, or directly
+        from tests that bypass the queue for synchronous injection.
+        """
         self.buffer.add_frame(frame)
-        
+
         # Periodically try to pair frames
         now = time.time()
         if self._pair_interval == 0.0 or now - self._last_pair_time >= self._pair_interval:
@@ -755,6 +792,7 @@ class FrameProcessor:
             "pairer": self.pairer.get_stats(),
             "cleanup_old_frames_dropped": int(self._cleanup_old_frames_dropped),
             "buffer_capacity_evictions": self.buffer.get_capacity_evictions(),
+            "raw_queue_depth": self._raw_queue.qsize(),
             "pairs_per_pass": {
                 "last": int(pairs_per_pass_values[-1]) if pairs_per_pass_values else 0,
                 "mean": round(pairs_per_pass_mean, 3),
