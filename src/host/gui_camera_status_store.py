@@ -19,6 +19,13 @@ class GuiCameraStatusStore:
                 ping_result = ping_results.get(target.camera_id, {})
                 healthy = bool(ping_result.get("ack"))
                 diagnostics = ping_result.get("result", {}) if isinstance(ping_result.get("result"), dict) else {}
+                diagnostics = dict(diagnostics)
+                preview_error = owner.get_preview_proxy_error(target.camera_id)
+                diagnostics["preview_render_requested"] = bool(diagnostics.get("mjpeg_render_enabled", False))
+                diagnostics["preview_transport"] = "proxy"
+                diagnostics["preview_path"] = owner.get_preview_proxy_path(target.camera_id)
+                diagnostics["preview_error"] = preview_error
+                diagnostics["preview_unreachable"] = bool(preview_error)
                 previous = owner.camera_status.get(target.camera_id, {})
                 owner.camera_status[target.camera_id] = {
                     **previous,

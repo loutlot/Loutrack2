@@ -3,7 +3,12 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import time
+import http.client
+import urllib.error
+import urllib.request
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict
 
@@ -17,7 +22,12 @@ from host.gui_camera_status_store import GuiCameraStatusStore
 from host.gui_command_service import GuiCommandService
 from host.gui_state_presenter import GuiStatePresenter
 from host.gui_workflow_presenter import GuiWorkflowPresenter
-from host.loutrack_gui import DEFAULT_EXTRINSICS_OUTPUT_PATH, LoutrackGuiState, PROJECT_ROOT
+from host.loutrack_gui import (
+    DEFAULT_EXTRINSICS_OUTPUT_PATH,
+    LoutrackGuiHandler,
+    LoutrackGuiState,
+    PROJECT_ROOT,
+)
 from host.wand_session import CameraTarget, FIXED_FPS
 
 
@@ -103,6 +113,7 @@ class _FakeSession:
                         "state": "IDLE",
                         "supported_commands": list(self.supported_commands),
                         "blob_diagnostics": {"last_blob_count": 1},
+                        "mjpeg_render_enabled": True,
                     },
                 }
                 for target in targets
@@ -166,6 +177,40 @@ class _AlreadyRunningSession(_FakeSession):
         return super()._broadcast(targets, fn_name, **kwargs)
 
 
+class _ConfigurablePingSession(_FakeSession):
+    def __init__(
+        self,
+        *,
+        ack_by_camera: Dict[str, bool] | None = None,
+        state_by_camera: Dict[str, str] | None = None,
+        mask_pixels_by_camera: Dict[str, float] | None = None,
+    ) -> None:
+        super().__init__()
+        self.ack_by_camera = ack_by_camera or {}
+        self.state_by_camera = state_by_camera or {}
+        self.mask_pixels_by_camera = mask_pixels_by_camera or {}
+
+    def _broadcast(self, targets, fn_name, **kwargs):  # noqa: ANN001
+        if fn_name != "ping":
+            return super()._broadcast(targets, fn_name, **kwargs)
+        result = {}
+        for target in targets:
+            ack = self.ack_by_camera.get(target.camera_id, True)
+            payload = {
+                "state": self.state_by_camera.get(target.camera_id, "READY"),
+                "supported_commands": list(self.supported_commands),
+                "blob_diagnostics": {"last_blob_count": 1},
+                "mask_pixels": self.mask_pixels_by_camera.get(target.camera_id, 12),
+                "mjpeg_render_enabled": True,
+            }
+            result[target.camera_id] = {
+                "ack": ack,
+                "result": payload,
+                "error_message": None if ack else "offline",
+            }
+        return result
+
+
 class _TrackingRuntime:
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
@@ -196,6 +241,31 @@ class _TrackingRuntime:
         }
 
 
+class _FakeMjpegResponse:
+    def __init__(self, chunks: list[bytes], *, content_type: str = "multipart/x-mixed-replace; boundary=frame") -> None:
+        self._chunks = list(chunks)
+        self.headers = {"Content-Type": content_type}
+
+    def read(self, size: int = -1) -> bytes:
+        if not self._chunks:
+            return b""
+        if size < 0:
+            data = b"".join(self._chunks)
+            self._chunks.clear()
+            return data
+        data = self._chunks[0][:size]
+        self._chunks[0] = self._chunks[0][size:]
+        if not self._chunks[0]:
+            self._chunks.pop(0)
+        return data
+
+    def __enter__(self) -> "_FakeMjpegResponse":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:  # noqa: ANN001
+        return None
+
+
 def _build_state(
     tmp_path: Path,
     *,
@@ -223,7 +293,7 @@ def test_gui_settings_store_migrates_invalid_legacy_payload_to_backup(tmp_path: 
         default_pose_log_path=Path("logs/extrinsics_pose_capture.jsonl"),
         default_wand_metric_log_path=Path("logs/extrinsics_wand_metric.jsonl"),
         default_extrinsics_output_path=Path("calibration/extrinsics_pose_v2.json"),
-        default_wand_metric_duration_s=3.0,
+        default_wand_metric_duration_s=1.0,
     )
 
     store.migrate_once()
@@ -259,12 +329,12 @@ def test_gui_calibration_config_service_applies_config_and_dispatches_capture_se
     assert state.config.exposure_us == 8000
     assert state.config.gain == 10.5
     assert state.config.fps == FIXED_FPS
-    assert state.config.duration_s == 4.5
+    assert state.config.duration_s == 1.0
     assert state._mask_params()["threshold"] == 175
     assert state._mask_params()["seconds"] == 0.9
     assert settings["calibration"]["committed"]["exposure_us"] == 8000
     assert settings["calibration"]["committed"]["gain"] == 10.5
-    assert settings["calibration"]["committed"]["wand_metric_seconds"] == 4.5
+    assert settings["calibration"]["committed"]["wand_metric_seconds"] == 1.0
     assert "fps" not in settings["calibration"]["draft"]
     assert "fps" not in settings["calibration"]["committed"]
     assert [item["fn_name"] for item in state.session.broadcast_history] == [
@@ -332,6 +402,7 @@ def test_gui_command_service_dispatches_mask_commands_with_expected_validation(t
 def test_gui_command_service_dispatches_pose_capture_through_capture_log_service(tmp_path: Path) -> None:
     state = _build_state(tmp_path)
     state.capture_log_dir = tmp_path / "logs"
+    state._settings_store.default_wand_metric_duration_s = 0.02
     service = GuiCommandService(state)
     validation_calls: list[str] = []
 
@@ -350,7 +421,8 @@ def test_gui_command_service_dispatches_pose_capture_through_capture_log_service
     assert started["start_pose_capture"]["pi-cam-01"]["ack"] is True
     assert stopped["stop_pose_capture"]["pi-cam-01"]["ack"] is True
     assert state.session.broadcast_history[-2]["fn_name"] == "start"
-    assert state.session.broadcast_history[-2]["kwargs"] == {"mode": "pose_capture"}
+    assert state.session.broadcast_history[-2]["kwargs"]["mode"] == "pose_capture"
+    assert isinstance(state.session.broadcast_history[-2]["kwargs"]["start_at_us"], int)
     assert state.session.broadcast_history[-1]["fn_name"] == "stop"
     assert settings["runtime_hints"]["pose_log_path"].endswith(".jsonl")
 
@@ -358,6 +430,7 @@ def test_gui_command_service_dispatches_pose_capture_through_capture_log_service
 def test_gui_command_service_dispatches_wand_metric_capture_and_auto_stop(tmp_path: Path) -> None:
     state = _build_state(tmp_path)
     state.capture_log_dir = tmp_path / "logs"
+    state._settings_store.default_wand_metric_duration_s = 0.02
     service = GuiCommandService(state)
     validation_calls: list[str] = []
 
@@ -371,7 +444,7 @@ def test_gui_command_service_dispatches_wand_metric_capture_and_auto_stop(tmp_pa
         {
             "command": "start_wand_metric_capture",
             "camera_ids": ["pi-cam-01"],
-            "duration_s": 0.02,
+            "duration_s": 3.0,
         }
     )
 
@@ -379,7 +452,8 @@ def test_gui_command_service_dispatches_wand_metric_capture_and_auto_stop(tmp_pa
     assert started["duration_s"] == 0.02
     assert started["start_wand_metric_capture"]["pi-cam-01"]["ack"] is True
     assert state.session.broadcast_history[-1]["fn_name"] == "start"
-    assert state.session.broadcast_history[-1]["kwargs"] == {"mode": "wand_metric_capture"}
+    assert state.session.broadcast_history[-1]["kwargs"]["mode"] == "wand_metric_capture"
+    assert isinstance(state.session.broadcast_history[-1]["kwargs"]["start_at_us"], int)
 
     deadline = time.time() + 1.0
     while time.time() < deadline:
@@ -424,6 +498,92 @@ def test_gui_tracking_service_rolls_back_receiver_when_runtime_start_fails(tmp_p
     assert receiver.is_running is True
     assert receiver.stop_count == 1
     assert receiver.start_count == 2
+
+
+def test_gui_tracking_status_reports_extrinsics_missing(tmp_path: Path) -> None:
+    state = _build_state(tmp_path, session=_ConfigurablePingSession())
+    state.latest_extrinsics_path = tmp_path / "missing_extrinsics.json"
+
+    status = state.get_tracking_status(cameras=state.refresh_targets())
+
+    assert status["start_allowed"] is False
+    assert status["start_blockers"] == ["extrinsics_missing"]
+    assert status["empty_state"] == "Generate extrinsics first"
+
+
+def test_gui_tracking_status_reports_no_selected_cameras(tmp_path: Path) -> None:
+    state = _build_state(tmp_path, session=_ConfigurablePingSession())
+    calibration_dir = tmp_path / "calibration"
+    calibration_dir.mkdir()
+    extrinsics_path = calibration_dir / "extrinsics_pose_v2.json"
+    extrinsics_path.write_text("{}", encoding="utf-8")
+    state.latest_extrinsics_path = extrinsics_path
+    cameras = state.refresh_targets()
+    for camera in cameras:
+        camera["selected"] = False
+
+    status = state.get_tracking_status(cameras=[])
+
+    assert status["start_allowed"] is False
+    assert status["start_blockers"] == ["no_cameras_selected"]
+
+
+def test_gui_tracking_status_reports_unhealthy_camera_blocker(tmp_path: Path) -> None:
+    session = _ConfigurablePingSession(ack_by_camera={"pi-cam-02": False})
+    state = _build_state(tmp_path, session=session)
+    calibration_dir = tmp_path / "calibration"
+    calibration_dir.mkdir()
+    extrinsics_path = calibration_dir / "extrinsics_pose_v2.json"
+    extrinsics_path.write_text("{}", encoding="utf-8")
+    state.latest_extrinsics_path = extrinsics_path
+    state.selected_camera_ids = ["pi-cam-01", "pi-cam-02"]
+
+    status = state.get_tracking_status(cameras=state.refresh_targets())
+
+    assert status["start_allowed"] is False
+    assert status["start_blockers"] == ["camera_unhealthy"]
+
+
+def test_gui_tracking_status_reports_mask_missing_blocker(tmp_path: Path) -> None:
+    session = _ConfigurablePingSession(mask_pixels_by_camera={"pi-cam-02": 0})
+    state = _build_state(tmp_path, session=session)
+    calibration_dir = tmp_path / "calibration"
+    calibration_dir.mkdir()
+    extrinsics_path = calibration_dir / "extrinsics_pose_v2.json"
+    extrinsics_path.write_text("{}", encoding="utf-8")
+    state.latest_extrinsics_path = extrinsics_path
+    state.selected_camera_ids = ["pi-cam-01", "pi-cam-02"]
+
+    status = state.get_tracking_status(cameras=state.refresh_targets())
+
+    assert status["start_allowed"] is False
+    assert status["start_blockers"] == ["mask_missing"]
+
+
+def test_gui_tracking_status_allows_start_when_preconditions_are_met(tmp_path: Path) -> None:
+    state = _build_state(tmp_path, session=_ConfigurablePingSession())
+    calibration_dir = tmp_path / "calibration"
+    calibration_dir.mkdir()
+    extrinsics_path = calibration_dir / "extrinsics_pose_v2.json"
+    extrinsics_path.write_text("{}", encoding="utf-8")
+    state.latest_extrinsics_path = extrinsics_path
+    state.selected_camera_ids = ["pi-cam-01"]
+
+    status = state.get_tracking_status(cameras=state.refresh_targets())
+
+    assert status["start_allowed"] is True
+    assert status["start_blockers"] == []
+    assert status["stop_allowed"] is False
+
+
+def test_tracking_stop_is_idempotent_when_idle(tmp_path: Path) -> None:
+    state = _build_state(tmp_path)
+
+    response = state.stop_tracking()
+
+    assert response["ok"] is True
+    assert response["running"] is False
+    assert response["pi_stream_stop"] == {}
 
 
 def test_gui_intrinsics_service_rejects_missing_capability(tmp_path: Path) -> None:
@@ -484,17 +644,19 @@ def test_gui_capture_log_service_pose_capture_start_and_stop_updates_runtime_hin
 
     assert "capture_log" in started
     assert "capture_log" in stopped
+    assert isinstance(started["scheduled_start_at_us"], int)
     assert settings["runtime_hints"]["pose_log_path"].endswith(".jsonl")
 
 
 def test_gui_capture_log_service_auto_stops_wand_metric_capture(tmp_path: Path) -> None:
     state = _build_state(tmp_path)
     state.capture_log_dir = tmp_path / "logs"
+    state._settings_store.default_wand_metric_duration_s = 0.02
     targets = state.session.discover_targets(["pi-cam-01"])
 
     result = state._capture_log_service.start_capture(
         "start_wand_metric_capture",
-        {"duration_s": 0.02},
+        {"duration_s": 3.0},
         targets,
     )
     assert result["duration_s"] == 0.02
@@ -550,7 +712,13 @@ def test_gui_extrinsics_service_returns_quality_summary_on_success(tmp_path: Pat
                 },
             },
             "metric": {"status": "resolved"},
-            "world": {"status": "resolved"},
+            "world": {
+                "status": "resolved",
+                "frame": "world",
+                "floor_plane": {"axis": "Z", "normal": [0.0, 0.0, 1.0]},
+                "floor_normal_sign_source": "wand_face",
+                "validation": {"floor_residual_mm": 1.2},
+            },
         }
         Path(str(kwargs["output_path"])).write_text(json.dumps(payload), encoding="utf-8")
         return payload
@@ -565,6 +733,11 @@ def test_gui_extrinsics_service_returns_quality_summary_on_success(tmp_path: Pat
 
     assert result["generate_extrinsics"]["ok"] is True
     assert result["generate_extrinsics"]["quality"]["median_reproj_error_px"] == 0.8
+    assert result["generate_extrinsics"]["status"] == "success"
+    assert result["generate_extrinsics"]["pose_log_path"] == str(pose_log)
+    assert result["generate_extrinsics"]["world"]["frame"] == "world"
+    assert result["generate_extrinsics"]["world"]["up_axis"] == "Z"
+    assert result["generate_extrinsics"]["world"]["floor_normal_sign_source"] == "wand_face"
     assert state.latest_extrinsics_path == output_path
     assert PROJECT_ROOT is not None
     assert DEFAULT_EXTRINSICS_OUTPUT_PATH is not None
@@ -596,6 +769,12 @@ def test_gui_camera_status_store_refresh_targets_matches_loutrack_gui_behavior(t
                 "state": "IDLE",
                 "supported_commands": list(state.session.supported_commands),
                 "blob_diagnostics": {"last_blob_count": 1},
+                "mjpeg_render_enabled": True,
+                "preview_render_requested": True,
+                "preview_transport": "proxy",
+                "preview_path": "/api/cameras/pi-cam-01/mjpeg",
+                "preview_error": None,
+                "preview_unreachable": False,
             },
             "last_ack": True,
             "last_error": None,
@@ -609,6 +788,12 @@ def test_gui_camera_status_store_refresh_targets_matches_loutrack_gui_behavior(t
                 "state": "IDLE",
                 "supported_commands": list(state.session.supported_commands),
                 "blob_diagnostics": {"last_blob_count": 1},
+                "mjpeg_render_enabled": True,
+                "preview_render_requested": True,
+                "preview_transport": "proxy",
+                "preview_path": "/api/cameras/pi-cam-02/mjpeg",
+                "preview_error": None,
+                "preview_unreachable": False,
             },
             "last_ack": True,
             "last_error": None,
@@ -664,6 +849,76 @@ def test_gui_camera_status_store_update_camera_status_matches_loutrack_gui_behav
             "last_error": "network_error",
         },
     }
+
+
+def test_camera_status_includes_proxy_preview_diagnostics(tmp_path: Path) -> None:
+    state = _build_state(tmp_path, session=_ConfigurablePingSession())
+    state.record_preview_proxy_result("pi-cam-02", "upstream_unreachable: timed out")
+
+    cameras = state.refresh_targets()
+    diagnostics_by_camera = {camera["camera_id"]: camera["diagnostics"] for camera in cameras}
+
+    assert diagnostics_by_camera["pi-cam-01"]["preview_render_requested"] is True
+    assert diagnostics_by_camera["pi-cam-01"]["preview_path"] == "/api/cameras/pi-cam-01/mjpeg"
+    assert diagnostics_by_camera["pi-cam-01"]["preview_unreachable"] is False
+    assert diagnostics_by_camera["pi-cam-02"]["preview_error"] == "upstream_unreachable: timed out"
+    assert diagnostics_by_camera["pi-cam-02"]["preview_unreachable"] is True
+
+
+def test_camera_mjpeg_proxy_relays_upstream_stream(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    state = _build_state(tmp_path)
+    LoutrackGuiHandler.state = state
+
+    def _fake_urlopen(request, timeout=0):  # noqa: ANN001
+        assert getattr(request, "full_url", request) == "http://192.168.1.101:8555/mjpeg"
+        assert timeout == LoutrackGuiHandler._MJPEG_PROXY_TIMEOUT_S
+        return _FakeMjpegResponse([b"--frame\r\n", b"Content-Type: image/jpeg\r\n\r\n", b"jpeg-bytes"])
+
+    monkeypatch.setattr("host.loutrack_gui.urllib.request.urlopen", _fake_urlopen)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), LoutrackGuiHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=2.0)
+        connection.request("GET", "/api/cameras/pi-cam-01/mjpeg")
+        response = connection.getresponse()
+        assert response.status == 200
+        assert response.getheader("Content-Type") == "multipart/x-mixed-replace; boundary=frame"
+        assert response.read() == b"--frame\r\nContent-Type: image/jpeg\r\n\r\njpeg-bytes"
+        connection.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=2.0)
+        server.server_close()
+
+    assert state.get_preview_proxy_error("pi-cam-01") is None
+
+
+def test_camera_mjpeg_proxy_returns_502_and_records_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    state = _build_state(tmp_path)
+    LoutrackGuiHandler.state = state
+
+    def _fake_urlopen(request, timeout=0):  # noqa: ANN001
+        raise urllib.error.URLError("timed out")
+
+    monkeypatch.setattr("host.loutrack_gui.urllib.request.urlopen", _fake_urlopen)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), LoutrackGuiHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=2.0)
+        connection.request("GET", "/api/cameras/pi-cam-01/mjpeg")
+        response = connection.getresponse()
+        assert response.status == 502
+        connection.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=2.0)
+        server.server_close()
+
+    assert state.get_preview_proxy_error("pi-cam-01") == "upstream_unreachable: timed out"
 
 
 @pytest.mark.parametrize(
@@ -741,6 +996,7 @@ def test_gui_workflow_presenter_matches_loutrack_gui_summary(
     extrinsics_path.write_text("{}", encoding="utf-8")
     state.latest_extrinsics_path = extrinsics_path
     state.latest_extrinsics_quality = {"median_reproj_error_px": 0.8}
+    state.latest_extrinsics_result = None
 
     actual = GuiWorkflowPresenter(state).summarize(camera_overrides)
 
@@ -762,6 +1018,7 @@ def test_gui_workflow_presenter_matches_loutrack_gui_summary(
         "extrinsics_ready": True,
         "latest_extrinsics_path": str(extrinsics_path),
         "latest_extrinsics_quality": {"median_reproj_error_px": 0.8},
+        "latest_extrinsics_result": None,
         "active_segment": scenario,
         "active_capture_kind": "pose_capture",
     }

@@ -273,6 +273,36 @@ def test_process_paired_frames_matches_on_undistorted_coordinates_for_distorted_
     assert np.linalg.norm(reconstructed[0] - point) < 1e-3
 
 
+def test_process_paired_frames_requires_ba_focal_scale_for_epipolar_match() -> None:
+    point = np.array([0.08, 0.24, 2.5], dtype=np.float64)
+    scaled_params = create_dummy_calibration(["cam0", "cam1"], focal_length=900.0)
+    scaled_params["cam0"].focal_scale = 1.2
+    scaled_params["cam1"].focal_scale = 0.85
+    for camera in scaled_params.values():
+        camera.intrinsic_matrix[0, 0] *= camera.focal_scale
+        camera.intrinsic_matrix[1, 1] *= camera.focal_scale
+
+    blobs = {
+        "cam0": [_blob(_project(scaled_params["cam0"], point))],
+        "cam1": [_blob(_project(scaled_params["cam1"], point))],
+    }
+
+    unscaled_pipeline = _geometry_pipeline_with_params(
+        create_dummy_calibration(["cam0", "cam1"], focal_length=900.0)
+    )
+    rejected = unscaled_pipeline.process_paired_frames(_paired_multi(blobs))
+    assert rejected["points_3d"] == []
+    assert rejected["assignment_diagnostics"]["assignment_rejected_epipolar"] == 1
+
+    scaled_pipeline = _geometry_pipeline_with_params(scaled_params)
+    accepted = scaled_pipeline.process_paired_frames(_paired_multi(blobs))
+    reconstructed = np.asarray(accepted["points_3d"], dtype=np.float64)
+
+    assert accepted["assignment_diagnostics"]["assignment_matches"] == 1
+    assert reconstructed.shape == (1, 3)
+    assert np.linalg.norm(reconstructed[0] - point) < 1e-6
+
+
 def test_process_paired_frames_drops_worst_view_and_keeps_inlier_fit() -> None:
     params = create_dummy_calibration(["cam0", "cam1", "cam2", "cam3"], focal_length=800.0)
     pipeline = _geometry_pipeline_with_params(params)

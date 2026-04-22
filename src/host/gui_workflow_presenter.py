@@ -88,6 +88,15 @@ class GuiWorkflowPresenter:
             "extrinsics_ready": extrinsics_ready,
             "latest_extrinsics_path": str(owner.latest_extrinsics_path) if owner.latest_extrinsics_path else None,
             "latest_extrinsics_quality": owner.latest_extrinsics_quality,
+            "latest_extrinsics_result": (
+                owner.latest_extrinsics_result
+                if isinstance(getattr(owner, "latest_extrinsics_result", None), dict)
+                else
+                owner.last_result.get("generate_extrinsics")
+                if isinstance(owner.last_result, dict)
+                and isinstance(owner.last_result.get("generate_extrinsics"), dict)
+                else None
+            ),
             "active_segment": active_segment,
             "active_capture_kind": active_capture_kind,
         }

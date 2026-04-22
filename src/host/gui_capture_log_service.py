@@ -5,6 +5,7 @@ import threading
 from typing import Any, Dict, List
 
 from .logger import FrameLogger
+from .scheduled_start import scheduled_start_kwargs
 
 
 class GuiCaptureLogService:
@@ -35,8 +36,13 @@ class GuiCaptureLogService:
         if command in ("start", "start_pose_capture"):
             log_path = owner._start_capture_log("pose_capture")
             owner._update_runtime_hints(pose_log_path=str(log_path))
-            result = owner.session._broadcast(targets, "start", mode="pose_capture")
-            payload_out: Dict[str, Any] = {command: result, "capture_log": {"path": str(log_path)}}
+            start_kwargs = scheduled_start_kwargs("pose_capture")
+            result = owner.session._broadcast(targets, "start", **start_kwargs)
+            payload_out: Dict[str, Any] = {
+                command: result,
+                "capture_log": {"path": str(log_path)},
+                "scheduled_start_at_us": start_kwargs["start_at_us"],
+            }
             if not self.all_acked(result):
                 stop_meta = owner._stop_capture_log()
                 if stop_meta is not None:
@@ -45,25 +51,19 @@ class GuiCaptureLogService:
             owner.last_result = payload_out
             return payload_out
 
-        bundle = owner._load_settings_bundle()
-        committed_calibration = bundle.get("calibration", {}).get("committed", {})
-        committed_extrinsics = bundle.get("extrinsics", {}).get("committed", {})
-        default_duration = committed_calibration.get("wand_metric_seconds", owner.config.duration_s)
-        duration_s = float(payload.get("duration_s", default_duration))
+        duration_s = float(owner._settings_store.default_wand_metric_duration_s)
         if duration_s <= 0.0:
             raise ValueError("duration_s must be > 0")
-        wand_log_raw = str(
-            payload.get("wand_metric_log_path", committed_extrinsics.get("wand_metric_log_path", ""))
-        ).strip()
-        if wand_log_raw:
-            owner.wand_metric_log_path = owner._resolve_project_path(wand_log_raw, owner._default_wand_metric_log_path())
+        owner.wand_metric_log_path = owner._default_wand_metric_log_path()
         log_path = owner._start_capture_log("wand_metric_capture")
         owner._update_runtime_hints(wand_metric_log_path=str(log_path))
-        result = owner.session._broadcast(targets, "start", mode="wand_metric_capture")
+        start_kwargs = scheduled_start_kwargs("wand_metric_capture")
+        result = owner.session._broadcast(targets, "start", **start_kwargs)
         payload_out = {
             command: result,
             "capture_log": {"path": str(log_path)},
             "duration_s": duration_s,
+            "scheduled_start_at_us": start_kwargs["start_at_us"],
         }
         if not self.all_acked(result):
             stop_meta = owner._stop_capture_log()

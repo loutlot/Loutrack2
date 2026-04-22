@@ -368,6 +368,35 @@
     .quality-badge.ok { background: rgba(34,197,94,0.15); color: var(--accent); }
     .quality-badge.warn { background: rgba(249,115,22,0.15); color: var(--warm); }
     .quality-badge.error { background: rgba(239,68,68,0.15); color: var(--danger); }
+    .quality-badge.info { background: rgba(59,130,246,0.16); color: #93c5fd; }
+    .quality-badge.running { background: rgba(20,184,166,0.16); color: #5eead4; }
+    .quality-badge.muted { background: rgba(148,163,184,0.1); color: var(--ink-muted); }
+    .extrinsics-status-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .extrinsics-status-cell {
+      border: 1px solid rgba(148,163,184,0.12);
+      border-radius: 8px;
+      padding: 8px;
+      background: rgba(15,23,42,0.38);
+      min-width: 0;
+    }
+    .extrinsics-status-label {
+      font-size: 10px;
+      color: var(--ink-muted);
+      text-transform: uppercase;
+      letter-spacing: .07em;
+      margin-bottom: 4px;
+    }
+    .extrinsics-status-value {
+      font-size: 12px;
+      color: var(--ink);
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
 
     /* ── Tracking viewer ──────────────────────────────── */
     .tracking-viewer-inner {
@@ -531,6 +560,7 @@
       flex-shrink: 0;
     }
     .mjpeg-cell {
+      position: relative;
       background: #0d1117;
       border: 1px solid var(--border);
       border-radius: 8px;
@@ -548,6 +578,28 @@
       text-align: center;
       padding: 2px 4px;
       background: rgba(15,23,42,0.7);
+    }
+    .mjpeg-overlay {
+      position: absolute;
+      inset: 0 auto auto 0;
+      width: 100%;
+      min-height: calc(100% - 18px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 10px;
+      font-size: 11px;
+      color: #cbd5e1;
+      background: rgba(2, 6, 23, 0.68);
+      pointer-events: none;
+    }
+    .mjpeg-overlay.ok {
+      display: none;
+    }
+    .mjpeg-overlay.warn {
+      background: rgba(15, 23, 42, 0.82);
+      color: #f8fafc;
     }
 
     /* ── Op-status badge ──────────────────────────────── */
@@ -811,20 +863,6 @@
             Place the wand flat on the floor, then start capture. It will auto-stop.
           </p>
           <div class="floor-countdown" id="floorCountdown"></div>
-          <div style="margin-bottom:10px">
-            <label>Capture Seconds
-              <input id="wandMetricSeconds" type="number" min="0.5" max="10" step="0.5" value="3.0">
-            </label>
-          </div>
-          <div style="margin-bottom:10px">
-            <label>Wand Metric Log Path
-              <input id="wandMetricLogPath" type="text" value="logs/extrinsics_wand_metric.jsonl">
-            </label>
-            <div id="latestWandLogHint" class="runtime-hint">Latest metric capture: none yet</div>
-            <div style="margin-top:6px">
-              <button id="resetWandLogPath" class="btn-ghost btn-sm" type="button">Use Latest Metric Capture</button>
-            </div>
-          </div>
           <div class="btn-row" style="justify-content:center">
             <button id="captureWandMetric" class="btn-teal">Capture Floor / Metric</button>
             <button class="btn-ghost" data-command="stop_wand_metric_capture">Stop</button>
@@ -841,17 +879,6 @@
             <div class="panel">
               <div class="panel-title">Generation Parameters</div>
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 14px">
-                <label>Intrinsics Dir<input id="intrinsicsPath" type="text" value="calibration"></label>
-                <label>Pose Log Path
-                  <input id="logPath" type="text" value="logs/extrinsics_pose_capture.jsonl">
-                  <div id="latestPoseLogHint" class="runtime-hint">Latest pose capture: none yet</div>
-                  <button id="resetPoseLogPath" class="btn-ghost btn-sm" type="button" style="margin-top:6px">Use Latest Pose Capture</button>
-                </label>
-                <label>Wand Metric Log
-                  <input id="generateWandMetricLogPath" type="text" value="logs/extrinsics_wand_metric.jsonl">
-                  <div id="latestGenerateWandLogHint" class="runtime-hint">Latest metric capture: none yet</div>
-                </label>
-                <label>Output Path<input id="outputPath" type="text" value="calibration/extrinsics_pose_v2.json"></label>
                 <label>Pair Window (us)<input id="pairWindowUs" type="number" min="1" max="4166" step="1" value="4166"></label>
                 <label>Min Pairs<input id="minPairs" type="number" min="1" step="1" value="8"></label>
                 <label>Wand Pair Window (us)<input id="wandPairWindowUs" type="number" min="1" max="4166" step="1" value="4166"></label>
@@ -872,6 +899,32 @@
             <div class="panel" style="margin-bottom:10px">
               <div class="panel-title">Quality</div>
               <div id="extrinsicsQualityBadges"><span class="quality-badge">No extrinsics yet</span></div>
+              <div class="extrinsics-status-grid">
+                <div class="extrinsics-status-cell">
+                  <div class="extrinsics-status-label">API</div>
+                  <div class="extrinsics-status-value" id="extrinsicsApiStatus">Idle</div>
+                </div>
+                <div class="extrinsics-status-cell">
+                  <div class="extrinsics-status-label">Result</div>
+                  <div class="extrinsics-status-value" id="extrinsicsResultStatus">No run yet</div>
+                </div>
+                <div class="extrinsics-status-cell">
+                  <div class="extrinsics-status-label">World Frame</div>
+                  <div class="extrinsics-status-value" id="extrinsicsWorldStatus">Not resolved</div>
+                </div>
+                <div class="extrinsics-status-cell">
+                  <div class="extrinsics-status-label">Metric</div>
+                  <div class="extrinsics-status-value" id="extrinsicsMetricStatus">Not resolved</div>
+                </div>
+                <div class="extrinsics-status-cell">
+                  <div class="extrinsics-status-label">Input Log</div>
+                  <div class="extrinsics-status-value" id="extrinsicsInputStatus">No run yet</div>
+                </div>
+                <div class="extrinsics-status-cell">
+                  <div class="extrinsics-status-label">Output</div>
+                  <div class="extrinsics-status-value" id="extrinsicsOutputStatus">No output yet</div>
+                </div>
+              </div>
               <div id="extrinsicsDetailSummary" style="font-size:11px;color:var(--ink-muted);margin-top:6px"></div>
             </div>
           </div>
@@ -903,6 +956,8 @@
                 <button id="trackingStart" class="btn-teal btn-sm" type="button">Start</button>
                 <button id="trackingStop" class="btn-ghost btn-sm" type="button">Stop</button>
               </div>
+              <div style="font-size:11px;color:var(--ink);margin-top:8px" id="trackingControlStatus">Checking readiness…</div>
+              <div style="font-size:11px;color:var(--ink-muted);margin-top:4px" id="trackingControlDetail"></div>
               <div style="font-size:11px;color:var(--ink-muted);margin-top:8px" id="trackingLastUpdate">waiting for data</div>
             </div>
             <div class="panel">
@@ -936,7 +991,7 @@
               <div class="panel-title">Camera &amp; Board Setup <span class="badge" id="intPhaseStatus">Idle</span></div>
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 14px">
                 <label>Camera ID<input id="intCameraId" type="text" value="pi-cam-01"></label>
-                <label>MJPEG URL<input id="intMjpegUrl" type="text" value="http://192.168.1.10:8555/mjpeg" placeholder="http://PI_IP:8555/mjpeg"></label>
+                <label>MJPEG URL<input id="intMjpegUrl" type="text" value="/api/cameras/pi-cam-01/mjpeg" placeholder="/api/cameras/pi-cam-01/mjpeg"></label>
                 <label>Square Length (mm)<input id="intSquareMm" type="number" min="1" max="500" step="1" value="30"></label>
                 <label>Marker Length (mm)<input id="intMarkerMm" type="number" min="1" max="500" step="0.5" placeholder="auto"></label>
                 <label>Squares X<input id="intSquaresX" type="number" min="2" max="20" step="1" value="6"></label>
@@ -1010,7 +1065,7 @@
     const MAX_EXPOSURE_US = 8000;
     const FIXED_PAIR_WINDOW_US = 4166;
     const sliders = ["exposure", "gain", "threshold", "blobMin", "blobMax", "maskThreshold", "maskSeconds"];
-    const mainControlInputIds = [...sliders, "wandMetricSeconds"];
+    const mainControlInputIds = [...sliders];
     const intrinsicsControlInputIds = ["intExposure", "intGain"];
     const CONTROL_DEFAULTS = {
       exposure_us: 5000,
@@ -1022,7 +1077,7 @@
       blob_max_diameter_px: 0,
       mask_threshold: 200,
       mask_seconds: 0.5,
-      wand_metric_seconds: 3.0,
+      wand_metric_seconds: 1.0,
     };
     const INPUT_TO_CONTROL_KEY = {
       exposure: "exposure_us",
@@ -1032,7 +1087,6 @@
       blobMax: "blob_max_diameter_px",
       maskThreshold: "mask_threshold",
       maskSeconds: "mask_seconds",
-      wandMetricSeconds: "wand_metric_seconds",
       intExposure: "exposure_us",
       intGain: "gain",
     };
@@ -1068,21 +1122,10 @@
       cameraSummary: document.getElementById("cameraSummary"),
       workflowRail: document.getElementById("workflowRail"),
       status: document.getElementById("status"),
-      intrinsicsPath: document.getElementById("intrinsicsPath"),
-      logPath: document.getElementById("logPath"),
-      resetPoseLogPath: document.getElementById("resetPoseLogPath"),
-      latestPoseLogHint: document.getElementById("latestPoseLogHint"),
-      wandMetricLogPath: document.getElementById("wandMetricLogPath"),
-      resetWandLogPath: document.getElementById("resetWandLogPath"),
-      latestWandLogHint: document.getElementById("latestWandLogHint"),
-      generateWandMetricLogPath: document.getElementById("generateWandMetricLogPath"),
-      latestGenerateWandLogHint: document.getElementById("latestGenerateWandLogHint"),
-      outputPath: document.getElementById("outputPath"),
       pairWindowUs: document.getElementById("pairWindowUs"),
       wandPairWindowUs: document.getElementById("wandPairWindowUs"),
       wandFace: document.getElementById("wandFace"),
       minPairs: document.getElementById("minPairs"),
-      wandMetricSeconds: document.getElementById("wandMetricSeconds"),
       selectionMetric: document.getElementById("selectionMetric"),
       selectionSummary: document.getElementById("selectionSummary"),
       blobMetric: document.getElementById("blobMetric"),
@@ -1132,6 +1175,12 @@
       calibrationValidation: document.getElementById("calibrationValidation"),
       intrinsicsValidation: document.getElementById("intrinsicsValidation"),
       extrinsicsValidation: document.getElementById("extrinsicsValidation"),
+      extrinsicsApiStatus: document.getElementById("extrinsicsApiStatus"),
+      extrinsicsResultStatus: document.getElementById("extrinsicsResultStatus"),
+      extrinsicsWorldStatus: document.getElementById("extrinsicsWorldStatus"),
+      extrinsicsMetricStatus: document.getElementById("extrinsicsMetricStatus"),
+      extrinsicsInputStatus: document.getElementById("extrinsicsInputStatus"),
+      extrinsicsOutputStatus: document.getElementById("extrinsicsOutputStatus"),
       intPhaseStatus: document.getElementById("intPhaseStatus"),
       intCaptured: document.getElementById("intCaptured"),
       intNeeded: document.getElementById("intNeeded"),
@@ -1156,6 +1205,8 @@
       trackingClientDiagnostics: document.getElementById("trackingClientDiagnostics"),
       trackingStart: document.getElementById("trackingStart"),
       trackingStop: document.getElementById("trackingStop"),
+      trackingControlStatus: document.getElementById("trackingControlStatus"),
+      trackingControlDetail: document.getElementById("trackingControlDetail"),
       trackingStatus: document.getElementById("trackingStatus"),
       trackingScene: document.getElementById("trackingScene"),
       trackingExtrinsicsPath: document.getElementById("trackingExtrinsicsPath"),
@@ -1686,11 +1737,17 @@
     let trackingPanelLastRenderMs = 0;
     let latestTrackingStatus = {};
     let latestTrackingScene = {};
+    let trackingUiState = { phase: "idle", error: "" };
     let latestTrackingSceneSequence = null;
     let trackingSceneBootstrapped = false;
+    let pendingTrackingSceneRaw = null;
+    let pendingTrackingSceneReceivedAtMs = 0;
+    let trackingScenePayloadQueued = false;
+    let latestAppState = null;
     let settingsSnapshot = null;
     let persistedSelectedCameraIds = [];
     let initialUiState = { active_page: "calibration", active_view: "cameras" };
+    let extrinsicsRunState = { phase: "idle", result: null, error: null, startedAt: null, finishedAt: null };
     const draftPatchTimers = {};
     let controlsUpdateTimer = null;
     let controlsUpdateContext = "controls";
@@ -1705,7 +1762,6 @@
         blob_max_diameter_px: ["blobMax"],
         mask_threshold: ["maskThreshold"],
         mask_seconds: ["maskSeconds"],
-        wand_metric_seconds: ["wandMetricSeconds"],
       },
       intrinsics: {
         camera_id: ["intCameraId"],
@@ -1718,10 +1774,6 @@
         cooldown_s: ["intCooldown"],
       },
       extrinsics: {
-        intrinsics_path: ["intrinsicsPath"],
-        pose_log_path: ["logPath"],
-        wand_metric_log_path: ["wandMetricLogPath", "generateWandMetricLogPath"],
-        output_path: ["outputPath"],
         pair_window_us: ["pairWindowUs"],
         wand_pair_window_us: ["wandPairWindowUs"],
         min_pairs: ["minPairs"],
@@ -1789,10 +1841,7 @@
       );
       controlState.mask_threshold = toFiniteNumber(calibrationDraft.mask_threshold, CONTROL_DEFAULTS.mask_threshold);
       controlState.mask_seconds = toFiniteNumber(calibrationDraft.mask_seconds, CONTROL_DEFAULTS.mask_seconds);
-      controlState.wand_metric_seconds = toFiniteNumber(
-        calibrationDraft.wand_metric_seconds,
-        CONTROL_DEFAULTS.wand_metric_seconds
-      );
+      controlState.wand_metric_seconds = CONTROL_DEFAULTS.wand_metric_seconds;
       syncControlStateConstraints();
     }
 
@@ -1806,7 +1855,6 @@
         blobMax: controlState.blob_max_diameter_px,
         maskThreshold: controlState.mask_threshold,
         maskSeconds: controlState.mask_seconds,
-        wandMetricSeconds: controlState.wand_metric_seconds,
         intExposure: controlState.exposure_us,
         intGain: controlState.gain,
       };
@@ -1847,7 +1895,6 @@
         blob_max_diameter_px: maxValue > 0 ? maxValue : null,
         mask_threshold: controlState.mask_threshold,
         mask_seconds: controlState.mask_seconds,
-        wand_metric_seconds: controlState.wand_metric_seconds,
       };
     }
 
@@ -1877,10 +1924,6 @@
       if (elements.pairWindowUs) elements.pairWindowUs.value = String(pairWindowUs);
       if (elements.wandPairWindowUs) elements.wandPairWindowUs.value = String(wandPairWindowUs);
       return {
-        intrinsics_path: elements.intrinsicsPath?.value ?? "",
-        pose_log_path: elements.logPath?.value ?? "",
-        wand_metric_log_path: elements.generateWandMetricLogPath?.value ?? "",
-        output_path: elements.outputPath?.value ?? "",
         pair_window_us: String(pairWindowUs),
         wand_pair_window_us: String(wandPairWindowUs),
         min_pairs: elements.minPairs?.value ?? "",
@@ -2087,30 +2130,104 @@
       }
     }
 
-    function formatTrackingAge(timestampUs) {
-      if (!timestampUs) {
+    function sceneFreshnessUs(scene = {}) {
+      return Number(scene.host_scene_updated_realtime_us || scene.timestamp_us || 0);
+    }
+
+    function formatTrackingAge(updatedUs) {
+      if (!updatedUs) {
         return "waiting for data";
       }
-      const diffMs = Math.max(0, Date.now() - timestampUs / 1000);
+      const diffMs = Math.max(0, Date.now() - updatedUs / 1000);
       const seconds = Math.round(diffMs / 1000);
       return `Updated ${seconds}s ago`;
     }
 
+    function trackingBlockerMessage(blocker) {
+      switch (String(blocker || "")) {
+        case "extrinsics_missing":
+          return "Generate extrinsics first";
+        case "no_cameras_selected":
+          return "Select at least one camera";
+        case "camera_unhealthy":
+          return "One or more selected cameras are offline";
+        case "mask_missing":
+          return "Build masks for the selected cameras first";
+        default:
+          return "Tracking is not ready";
+      }
+    }
+
+    function trackingBlockerTitle(blocker) {
+      switch (String(blocker || "")) {
+        case "extrinsics_missing":
+          return "Blocked: extrinsics missing";
+        case "no_cameras_selected":
+          return "Blocked: no cameras selected";
+        case "camera_unhealthy":
+          return "Blocked: camera unavailable";
+        case "mask_missing":
+          return "Blocked: mask missing";
+        default:
+          return "Blocked";
+      }
+    }
+
     function renderTrackingBadge(status) {
-      const running = Boolean(status.running);
-      const state = running ? "running" : status.calibration_loaded ? "idle" : "error";
-      const text = running ? "Tracking" : status.calibration_loaded ? "Ready" : "Waiting";
+      const blockers = Array.isArray(status?.start_blockers) ? status.start_blockers : [];
+      const running = Boolean(status?.running);
+      let state = "idle";
+      let text = "Ready";
+      if (trackingUiState.phase === "starting") {
+        state = "running";
+        text = "Starting";
+      } else if (trackingUiState.phase === "failed") {
+        state = "error";
+        text = "Failed";
+      } else if (running) {
+        state = "running";
+        text = "Tracking";
+      } else if (blockers.length) {
+        state = "error";
+        text = "Blocked";
+      }
       elements.trackingStatusBadge.textContent = text;
       elements.trackingStatusBadge.dataset.state = state;
     }
 
+    function renderTrackingControlState(status) {
+      const blockers = Array.isArray(status?.start_blockers) ? status.start_blockers : [];
+      const firstBlocker = blockers[0] || "";
+      let title = "Ready";
+      let detail = "Tracking can start.";
+      if (trackingUiState.phase === "starting") {
+        title = "Starting";
+        detail = "Sending start request to host and selected cameras.";
+      } else if (trackingUiState.phase === "failed") {
+        title = "Failed";
+        detail = trackingUiState.error || "Tracking request failed.";
+      } else if (Boolean(status?.running)) {
+        title = "Running";
+        detail = "Tracking is active.";
+      } else if (firstBlocker) {
+        title = trackingBlockerTitle(firstBlocker);
+        detail = trackingBlockerMessage(firstBlocker);
+      }
+      if (elements.trackingControlStatus) {
+        elements.trackingControlStatus.textContent = title;
+      }
+      if (elements.trackingControlDetail) {
+        elements.trackingControlDetail.textContent = detail;
+      }
+    }
+
     function renderTrackingFooter(status, scene) {
-      const timestampUs = scene.timestamp_us || 0;
-      const timestamp = timestampUs ? new Date(timestampUs / 1000) : null;
+      const freshnessUs = sceneFreshnessUs(scene);
+      const timestamp = freshnessUs ? new Date(freshnessUs / 1000) : null;
       elements.trackingSceneTimestamp.textContent = timestamp
         ? `Last scene: ${timestamp.toLocaleTimeString()}`
         : "Last scene: --";
-      elements.trackingLastUpdate.textContent = formatTrackingAge(timestampUs);
+      elements.trackingLastUpdate.textContent = formatTrackingAge(freshnessUs);
       const cameraCount = (scene.cameras || []).length;
       const rigidCount = (scene.rigid_bodies || []).length;
       const rawPointCount = (scene.raw_points || []).length;
@@ -2259,12 +2376,6 @@
     }
 
     function renderRuntimeHints(settings) {
-      const hints = settings?.runtime_hints || {};
-      const poseHint = hints.pose_log_path ? `Latest pose capture: ${hints.pose_log_path}` : "Latest pose capture: none yet";
-      const wandHint = hints.wand_metric_log_path ? `Latest metric capture: ${hints.wand_metric_log_path}` : "Latest metric capture: none yet";
-      if (elements.latestPoseLogHint) elements.latestPoseLogHint.textContent = poseHint;
-      if (elements.latestWandLogHint) elements.latestWandLogHint.textContent = wandHint;
-      if (elements.latestGenerateWandLogHint) elements.latestGenerateWandLogHint.textContent = wandHint;
     }
 
     function renderSettingsMeta(settings) {
@@ -2321,17 +2432,75 @@
       return payload;
     }
 
+    const mjpegGridSignatures = {};
+
+    function hostMjpegPath(cameraId) {
+      return `/api/cameras/${encodeURIComponent(String(cameraId || "").trim())}/mjpeg`;
+    }
+
+    function mjpegOverlayContent(camera) {
+      const diagnostics = camera?.diagnostics || {};
+      if (!diagnostics.preview_render_requested) {
+        return { text: "Preview off in this view", variant: "warn", showImage: false };
+      }
+      if (!camera?.healthy) {
+        return { text: "Camera unavailable", variant: "warn", showImage: false };
+      }
+      if (diagnostics.preview_unreachable) {
+        return { text: diagnostics.preview_error || "Preview unavailable", variant: "warn", showImage: false };
+      }
+      return { text: "Connecting preview…", variant: "", showImage: true };
+    }
+
     function renderMjpegGrids(cameras) {
       const gridIds = ["mjpegGridCameras", "mjpegGridBlob", "mjpegGridMask", "mjpegGridFloor"];
-      const html = cameras
-        .filter(c => c.ip)
-        .map(c => `<div class="mjpeg-cell">
-          <img src="http://${escapeHtml(c.ip)}:8555/mjpeg" alt="${escapeHtml(c.camera_id)}">
-          <div class="mjpeg-label">${escapeHtml(c.camera_id)}</div>
-        </div>`).join("");
       gridIds.forEach(id => {
         const el = document.getElementById(id);
-        if (el) el.innerHTML = html;
+        if (!el) return;
+        const signature = JSON.stringify(
+          cameras.map((camera) => {
+            const diagnostics = camera?.diagnostics || {};
+            return [
+              camera.camera_id,
+              Boolean(camera.healthy),
+              Boolean(diagnostics.preview_render_requested),
+              diagnostics.preview_error || "",
+              diagnostics.preview_path || hostMjpegPath(camera.camera_id),
+            ];
+          })
+        );
+        if (mjpegGridSignatures[id] === signature) return;
+        mjpegGridSignatures[id] = signature;
+        el.innerHTML = cameras
+          .filter(c => c.camera_id)
+          .map((camera) => {
+            const diagnostics = camera?.diagnostics || {};
+            const overlay = mjpegOverlayContent(camera);
+            const previewPath = diagnostics.preview_path || hostMjpegPath(camera.camera_id);
+            const imageHtml = overlay.showImage
+              ? `<img src="${escapeHtml(previewPath)}" alt="${escapeHtml(camera.camera_id)}" data-role="mjpeg-image">`
+              : `<div style="width:100%;aspect-ratio:16/9"></div>`;
+            return `<div class="mjpeg-cell" data-camera-id="${escapeHtml(camera.camera_id)}">
+              ${imageHtml}
+              <div class="mjpeg-overlay ${overlay.variant}" data-role="mjpeg-overlay">${escapeHtml(overlay.text)}</div>
+              <div class="mjpeg-label">${escapeHtml(camera.camera_id)}</div>
+            </div>`;
+          }).join("");
+        el.querySelectorAll(".mjpeg-cell").forEach((cell) => {
+          const img = cell.querySelector('img[data-role="mjpeg-image"]');
+          const overlay = cell.querySelector('[data-role="mjpeg-overlay"]');
+          if (!(img instanceof HTMLImageElement) || !(overlay instanceof HTMLElement)) return;
+          img.addEventListener("load", () => {
+            overlay.textContent = "";
+            overlay.classList.add("ok");
+            overlay.classList.remove("warn");
+          });
+          img.addEventListener("error", () => {
+            overlay.textContent = "Preview unavailable";
+            overlay.classList.remove("ok");
+            overlay.classList.add("warn");
+          });
+        });
       });
     }
 
@@ -2462,26 +2631,86 @@
 
     function renderExtrinsicsQuality(workflow) {
       const q = workflow.latest_extrinsics_quality || {};
+      const result = extrinsicsRunState.result || workflow.latest_extrinsics_result || null;
+      const currentExtrinsics = workflow.latest_extrinsics_result || result;
       const el = document.getElementById("extrinsicsQualityBadges");
       if (!el) return;
-      if (!workflow.extrinsics_ready) {
+      if (extrinsicsRunState.phase === "running") {
+        el.innerHTML = '<span class="quality-badge running">API running</span><span class="quality-badge info">solving extrinsics</span>';
+      } else if (result && result.ok === false) {
+        el.innerHTML = '<span class="quality-badge error">API failed</span>';
+      } else if (!workflow.extrinsics_ready) {
         el.innerHTML = '<span class="quality-badge">No extrinsics yet</span>';
-        return;
+      } else {
+        const usable = q.usable_rows;
+        const median = q.median_reproj_error_px;
+        const p90 = q.p90_reproj_error_px;
+        const matchP90 = q.matched_delta_us_p90;
+        const medianClass = median != null ? (median < 1.5 ? "ok" : median < 3 ? "warn" : "error") : "";
+        el.innerHTML = [
+          usable != null ? `<span class="quality-badge ok">✓ usable=${usable}</span>` : "",
+          median != null ? `<span class="quality-badge ${medianClass}">median ${Number(median).toFixed(2)}px</span>` : "",
+          p90 != null ? `<span class="quality-badge">p90 ${Number(p90).toFixed(2)}px</span>` : "",
+          matchP90 != null ? `<span class="quality-badge">match p90 ${matchP90}µs</span>` : "",
+        ].join("");
       }
-      const usable = q.usable_rows;
-      const median = q.median_reproj_error_px;
-      const p90 = q.p90_reproj_error_px;
-      const matchP90 = q.matched_delta_us_p90;
-      const medianClass = median != null ? (median < 1.5 ? "ok" : median < 3 ? "warn" : "error") : "";
-      el.innerHTML = [
-        usable != null ? `<span class="quality-badge ok">✓ usable=${usable}</span>` : "",
-        median != null ? `<span class="quality-badge ${medianClass}">median ${Number(median).toFixed(2)}px</span>` : "",
-        p90 != null ? `<span class="quality-badge">p90 ${Number(p90).toFixed(2)}px</span>` : "",
-        matchP90 != null ? `<span class="quality-badge">match p90 ${matchP90}µs</span>` : "",
-      ].join("");
+
+      const setText = (node, value) => {
+        if (node) node.textContent = value;
+      };
+      const formatNumber = (value, digits = 2) => value == null || Number.isNaN(Number(value)) ? "—" : Number(value).toFixed(digits);
+      const apiText = extrinsicsRunState.phase === "running"
+        ? `Processing since ${new Date(extrinsicsRunState.startedAt).toLocaleTimeString()}`
+        : extrinsicsRunState.phase === "success"
+        ? `Success at ${new Date(extrinsicsRunState.finishedAt).toLocaleTimeString()}`
+        : extrinsicsRunState.phase === "error"
+        ? `Failed at ${new Date(extrinsicsRunState.finishedAt).toLocaleTimeString()}`
+        : "Idle";
+      setText(elements.extrinsicsApiStatus, apiText);
+
+      const errorText = result && result.ok === false ? (result.error || "unknown error") : null;
+      setText(elements.extrinsicsResultStatus, errorText || (workflow.extrinsics_ready ? "Generated successfully" : "No successful run yet"));
+
+      const world = (result && result.ok === false ? currentExtrinsics?.world : result?.world) || {};
+      const metric = (result && result.ok === false ? currentExtrinsics?.metric : result?.metric) || {};
+      const worldStatus = (result && result.ok === false ? currentExtrinsics?.world_status : result?.world_status) || world.status || (workflow.extrinsics_ready ? "unknown" : "unresolved");
+      const metricStatus = (result && result.ok === false ? currentExtrinsics?.metric_status : result?.metric_status) || metric.status || (workflow.extrinsics_ready ? "unknown" : "unresolved");
+      const worldBits = [
+        `status=${worldStatus}`,
+        world.frame ? `frame=${world.frame}` : "",
+        world.up_axis ? `up=${world.up_axis}` : "",
+        world.floor_normal_sign_source ? `normal=${world.floor_normal_sign_source}` : "",
+        world.validation?.floor_residual_mm != null ? `floor ${formatNumber(world.validation.floor_residual_mm, 1)}mm` : "",
+      ].filter(Boolean);
+      const metricBits = [
+        `status=${metricStatus}`,
+        metric.frame ? `frame=${metric.frame}` : "",
+        metric.scale_m_per_unit != null ? `scale=${formatNumber(metric.scale_m_per_unit, 5)}m/unit` : "",
+        metric.shape_rms_error_mm != null ? `wand RMS ${formatNumber(metric.shape_rms_error_mm, 1)}mm` : "",
+        metric.validation?.world_up_consistency != null ? `up ${formatNumber(metric.validation.world_up_consistency, 3)}` : "",
+      ].filter(Boolean);
+      setText(elements.extrinsicsWorldStatus, worldBits.join(" · ") || "Not resolved");
+      setText(elements.extrinsicsMetricStatus, metricBits.join(" · ") || "Not resolved");
+
+      const poseSummary = result?.pose_log_summary || {};
+      const inputBits = [
+        result?.pose_log_path || workflow.pose_capture_log_path || "—",
+        poseSummary.usable_camera_count != null ? `${poseSummary.usable_camera_count} usable cams` : "",
+        poseSummary.invalid_rows ? `${poseSummary.invalid_rows} invalid rows` : "",
+      ].filter(Boolean);
+      setText(elements.extrinsicsInputStatus, inputBits.join(" · "));
+      setText(elements.extrinsicsOutputStatus, result?.output_path || workflow.latest_extrinsics_path || "No output yet");
+
       const detailEl = document.getElementById("extrinsicsDetailSummary");
       if (detailEl) {
-        detailEl.textContent = elements.extrinsicsSummary.textContent || "—";
+        const qualityBits = [
+          q.usable_rows != null ? `usable=${q.usable_rows}` : "",
+          q.complete_rows != null ? `complete=${q.complete_rows}` : "",
+          q.median_reproj_error_px != null ? `median=${formatNumber(q.median_reproj_error_px)}px` : "",
+          q.p90_reproj_error_px != null ? `p90=${formatNumber(q.p90_reproj_error_px)}px` : "",
+          q.matched_delta_us_p90 != null ? `match p90=${q.matched_delta_us_p90}µs` : "",
+        ].filter(Boolean);
+        detailEl.textContent = errorText || (qualityBits.length ? qualityBits.join(" · ") : (elements.extrinsicsSummary.textContent || "—"));
       }
     }
 
@@ -2532,7 +2761,7 @@
       const nowMs = performance.now();
       if ((activePage === "tracking" || activeView === "tracking") && nowMs - trackingPanelLastRenderMs > 250) {
         trackingPanelLastRenderMs = nowMs;
-        if (elements.trackingScene) {
+        if (elements.trackingScene && elements.trackingScene.offsetParent !== null) {
           elements.trackingScene.textContent = JSON.stringify(scene, null, 2);
         }
         renderTrackingFooter(latestTrackingStatus, scene);
@@ -2541,16 +2770,46 @@
       }
     }
 
+    function flushTrackingScenePayload() {
+      trackingScenePayloadQueued = false;
+      if (!pendingTrackingSceneRaw) {
+        return;
+      }
+      const rawData = pendingTrackingSceneRaw;
+      const receivedAtMs = pendingTrackingSceneReceivedAtMs;
+      pendingTrackingSceneRaw = null;
+      pendingTrackingSceneReceivedAtMs = 0;
+      const parseStartedAtMs = performance.now();
+      const scene = JSON.parse(rawData);
+      trackingClientDiagnostics.push("jsonParseMs", performance.now() - parseStartedAtMs);
+      applyTrackingScene(scene, { receivedAtMs });
+      if (pendingTrackingSceneRaw) {
+        queueTrackingScenePayloadFlush();
+      }
+    }
+
+    function queueTrackingScenePayloadFlush() {
+      if (trackingScenePayloadQueued) return;
+      trackingScenePayloadQueued = true;
+      requestAnimationFrame(() => {
+        try {
+          flushTrackingScenePayload();
+        } catch (_) {}
+      });
+    }
+
     function handleTrackingScenePayload(rawData) {
       const receivedAtMs = performance.now();
       if (trackingClientDiagnostics.lastEventAtMs > 0) {
         trackingClientDiagnostics.push("sseInterArrivalMs", receivedAtMs - trackingClientDiagnostics.lastEventAtMs);
       }
       trackingClientDiagnostics.lastEventAtMs = receivedAtMs;
-      const parseStartedAtMs = performance.now();
-      const scene = JSON.parse(rawData);
-      trackingClientDiagnostics.push("jsonParseMs", performance.now() - parseStartedAtMs);
-      applyTrackingScene(scene, { receivedAtMs });
+      if (pendingTrackingSceneRaw) {
+        trackingClientDiagnostics.pendingSceneDrops += 1;
+      }
+      pendingTrackingSceneRaw = rawData;
+      pendingTrackingSceneReceivedAtMs = receivedAtMs;
+      queueTrackingScenePayloadFlush();
     }
 
     function startTrackingScenePoller() {
@@ -2582,6 +2841,9 @@
         clearInterval(trackingSceneIntervalId);
         trackingSceneIntervalId = null;
       }
+      pendingTrackingSceneRaw = null;
+      pendingTrackingSceneReceivedAtMs = 0;
+      trackingScenePayloadQueued = false;
     }
 
     async function loadTracking(options = {}) {
@@ -2599,16 +2861,29 @@
       const status = await statusResponse.json();
       const scene = includeScene && sceneResponse ? await sceneResponse.json() : latestTrackingScene;
       latestTrackingStatus = status;
-      elements.trackingStart.disabled = !status.start_allowed;
+      if (status.running) {
+        trackingUiState = { phase: "idle", error: "" };
+      } else if (trackingUiState.phase === "starting") {
+        trackingUiState = { phase: "idle", error: "" };
+      }
+      elements.trackingStart.disabled = !status.start_allowed || Boolean(status.running);
+      elements.trackingStop.disabled = false;
       elements.trackingExtrinsicsPath.textContent = `Extrinsics: ${status.latest_extrinsics_path || "(none)"}`;
-      elements.trackingStatus.textContent = JSON.stringify(status, null, 2);
+      if (elements.trackingStatus && elements.trackingStatus.offsetParent !== null) {
+        elements.trackingStatus.textContent = JSON.stringify(status, null, 2);
+      }
       if (includeScene) {
         applyTrackingScene(scene, { force: true });
-      } else if (elements.trackingScene && Object.keys(latestTrackingScene || {}).length > 0) {
+      } else if (
+        elements.trackingScene
+        && elements.trackingScene.offsetParent !== null
+        && Object.keys(latestTrackingScene || {}).length > 0
+      ) {
         elements.trackingScene.textContent = JSON.stringify(latestTrackingScene, null, 2);
       }
       const emptyText = status.empty_state || scene.empty_state || "";
       renderTrackingBadge(status);
+      renderTrackingControlState(status);
       renderTrackingFooter(status, latestTrackingScene);
       renderCameraHealth(status);
       renderRigidHealth(latestTrackingScene);
@@ -2626,6 +2901,7 @@
         throw new Error(`state_fetch_failed status=${response.status}`);
       }
       const state = await response.json();
+      latestAppState = state;
       mergeSettingsMetaFromState(state.settings_meta);
       renderCameraRows(state.cameras || []);
       if (persistedSelectedCameraIds.length > 0) {
@@ -2743,21 +3019,6 @@
         }
       });
 
-      if (elements.intrinsicsPath && extrinsicsDraft.intrinsics_path != null) {
-        elements.intrinsicsPath.value = String(extrinsicsDraft.intrinsics_path);
-      }
-      if (elements.logPath && extrinsicsDraft.pose_log_path != null) {
-        elements.logPath.value = String(extrinsicsDraft.pose_log_path);
-      }
-      if (elements.wandMetricLogPath && extrinsicsDraft.wand_metric_log_path != null) {
-        elements.wandMetricLogPath.value = String(extrinsicsDraft.wand_metric_log_path);
-      }
-      if (elements.generateWandMetricLogPath && extrinsicsDraft.wand_metric_log_path != null) {
-        elements.generateWandMetricLogPath.value = String(extrinsicsDraft.wand_metric_log_path);
-      }
-      if (elements.outputPath && extrinsicsDraft.output_path != null) {
-        elements.outputPath.value = String(extrinsicsDraft.output_path);
-      }
       if (elements.pairWindowUs && extrinsicsDraft.pair_window_us != null) {
         elements.pairWindowUs.value = String(extrinsicsDraft.pair_window_us);
       }
@@ -2778,6 +3039,7 @@
         active_page: String(ui.active_page || "calibration"),
         active_view: String(ui.active_view || "cameras"),
       };
+      syncIntrinsicsMjpegUrl();
       renderSettingsMeta(settings);
     }
 
@@ -2814,6 +3076,15 @@
         return [cameraId];
       }
       return selectedCameraIds();
+    }
+
+    function syncIntrinsicsMjpegUrl(force = false) {
+      const cameraId = elements.intCameraId?.value?.trim() || "pi-cam-01";
+      if (!elements.intMjpegUrl) return;
+      const nextUrl = hostMjpegPath(cameraId);
+      if (force || !elements.intMjpegUrl.value.trim()) {
+        elements.intMjpegUrl.value = nextUrl;
+      }
     }
 
     async function flushControlUpdates(context, targetMode) {
@@ -2900,13 +3171,6 @@
     document.getElementById("captureWandMetric").addEventListener("click", async () => {
       showStatus("Starting floor / metric capture...", "info");
       try {
-        await saveDraftPatch(
-          {
-            calibration: { wand_metric_seconds: controlState.wand_metric_seconds },
-            extrinsics: { wand_metric_log_path: elements.wandMetricLogPath.value },
-          },
-          "wand_metric_draft"
-        );
         await postJson("/api/command", {
           command: "start_wand_metric_capture",
           camera_ids: selectedCameraIds(),
@@ -2920,12 +3184,25 @@
 
     document.getElementById("generateExtrinsics").addEventListener("click", async () => {
       showStatus("Generating extrinsics...", "info");
+      extrinsicsRunState = { phase: "running", result: null, error: null, startedAt: Date.now(), finishedAt: null };
+      renderExtrinsicsQuality((latestAppState && latestAppState.workflow) || {});
       try {
         await saveDraftPatch({ extrinsics: extrinsicsDraftPayload() }, "generate_extrinsics_draft");
-        await postJson("/api/generate_extrinsics", {});
+        const body = await postJson("/api/generate_extrinsics", {});
+        const result = body?.generate_extrinsics || null;
+        if (result && result.ok === false) {
+          extrinsicsRunState = { phase: "error", result, error: result.error || "extrinsics failed", startedAt: extrinsicsRunState.startedAt, finishedAt: Date.now() };
+          renderExtrinsicsQuality((latestAppState && latestAppState.workflow) || {});
+          showStatus(`Extrinsics generation failed: ${result.error || "unknown error"}`, "error");
+        } else {
+          extrinsicsRunState = { phase: "success", result, error: null, startedAt: extrinsicsRunState.startedAt, finishedAt: Date.now() };
+          renderExtrinsicsQuality((latestAppState && latestAppState.workflow) || {});
+          showStatus("Extrinsics generation finished.", "success");
+        }
         await safeLoadState();
-        showStatus("Extrinsics generation finished.", "success");
       } catch (error) {
+        extrinsicsRunState = { phase: "error", result: null, error: error instanceof Error ? error.message : String(error), startedAt: extrinsicsRunState.startedAt, finishedAt: Date.now() };
+        renderExtrinsicsQuality((latestAppState && latestAppState.workflow) || {});
         reportUiError("generate_extrinsics", error);
       }
     });
@@ -2965,22 +3242,11 @@
     });
 
     [
-      "intrinsicsPath",
-      "logPath",
-      "generateWandMetricLogPath",
-      "outputPath",
       "pairWindowUs",
       "wandPairWindowUs",
       "minPairs",
-      "wandMetricLogPath",
     ].forEach((id) => {
       const handler = () => {
-        if (id === "wandMetricLogPath" && elements.generateWandMetricLogPath) {
-          elements.generateWandMetricLogPath.value = elements.wandMetricLogPath.value;
-        }
-        if (id === "generateWandMetricLogPath" && elements.wandMetricLogPath) {
-          elements.wandMetricLogPath.value = elements.generateWandMetricLogPath.value;
-        }
         queueDraftPatch(
           `extrinsics_${id}`,
           220,
@@ -2998,43 +3264,27 @@
       });
     });
 
-    elements.resetPoseLogPath?.addEventListener("click", async () => {
-      try {
-        await saveDraftPatch({ reset_runtime: ["pose_log_path"] }, "reset_pose_log_path");
-        if (settingsSnapshot?.extrinsics?.draft?.pose_log_path != null) {
-          elements.logPath.value = String(settingsSnapshot.extrinsics.draft.pose_log_path);
-        }
-        showStatus("Latest pose capture path adopted.", "success");
-      } catch (_) {
-        // saveDraftPatch already reports the error
-      }
-    });
-
-    elements.resetWandLogPath?.addEventListener("click", async () => {
-      try {
-        await saveDraftPatch({ reset_runtime: ["wand_metric_log_path"] }, "reset_wand_log_path");
-        const draftWandLog = settingsSnapshot?.extrinsics?.draft?.wand_metric_log_path;
-        if (draftWandLog != null) {
-          elements.wandMetricLogPath.value = String(draftWandLog);
-          elements.generateWandMetricLogPath.value = String(draftWandLog);
-        }
-        showStatus("Latest metric capture path adopted.", "success");
-      } catch (_) {
-        // saveDraftPatch already reports the error
-      }
-    });
-
     elements.trackingStart.addEventListener("click", async () => {
       showStatus("Starting tracking...", "info");
+      trackingUiState = { phase: "starting", error: "" };
+      renderTrackingBadge(latestTrackingStatus);
+      renderTrackingControlState(latestTrackingStatus);
       try {
         await postJson("/api/tracking/start", {
           patterns: ["waist"],
           camera_ids: selectedCameraIds(),
         });
+        trackingUiState = { phase: "idle", error: "" };
         setActivePage("tracking");
         await safeLoadState();
         showStatus("Tracking started.", "success");
       } catch (error) {
+        trackingUiState = {
+          phase: "failed",
+          error: error instanceof Error ? error.message : String(error),
+        };
+        renderTrackingBadge(latestTrackingStatus);
+        renderTrackingControlState(latestTrackingStatus);
         reportUiError("tracking_start", error);
       }
     });
@@ -3043,10 +3293,17 @@
       showStatus("Stopping tracking...", "info");
       try {
         await postJson("/api/tracking/stop", {});
+        trackingUiState = { phase: "idle", error: "" };
         setActivePage("tracking");
         await safeLoadState();
         showStatus("Tracking stopped.", "success");
       } catch (error) {
+        trackingUiState = {
+          phase: "failed",
+          error: error instanceof Error ? error.message : String(error),
+        };
+        renderTrackingBadge(latestTrackingStatus);
+        renderTrackingControlState(latestTrackingStatus);
         reportUiError("tracking_stop", error);
       }
     });
@@ -3129,7 +3386,7 @@
             const cams = Array.isArray(s.cameras) ? s.cameras : [];
             if (cams.length > 0) {
               elements.intCameraList.innerHTML = cams.map(c => {
-                const url = `http://${c.ip}:8555/mjpeg`;
+                const url = hostMjpegPath(c.camera_id);
                 return `<button type="button" class="ghost" style="font-size:12px;padding:4px 10px" data-cam="${escapeHtml(c.camera_id)}" data-url="${escapeHtml(url)}">${escapeHtml(c.camera_id)} <span style="color:var(--muted)">${escapeHtml(c.ip)}</span></button>`;
               }).join("");
               elements.intCameraList.querySelectorAll("button[data-cam]").forEach(btn => {
@@ -3206,6 +3463,9 @@
       "intCooldown",
     ].forEach((id) => {
       elements[id]?.addEventListener("input", () => {
+        if (id === "intCameraId") {
+          syncIntrinsicsMjpegUrl(true);
+        }
         queueDraftPatch(
           `intrinsics_${id}`,
           200,
@@ -3223,6 +3483,9 @@
         }
       });
       elements[id]?.addEventListener("change", async () => {
+        if (id === "intCameraId") {
+          syncIntrinsicsMjpegUrl(true);
+        }
         const timerKey = `intrinsics_${id}`;
         if (draftPatchTimers[timerKey]) {
           clearTimeout(draftPatchTimers[timerKey]);
@@ -3309,6 +3572,7 @@
       } catch (error) {
         reportUiError("load_settings", error);
       }
+      syncIntrinsicsMjpegUrl();
       const initialPage = initialUiState.active_page || "calibration";
       const initialView = initialUiState.active_view || "cameras";
       if (initialPage === "calibration" && initialView) {

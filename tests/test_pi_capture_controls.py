@@ -93,4 +93,27 @@ def test_picamera2_backend_prefers_sensor_metadata_timestamp(monkeypatch) -> Non
     assert captured.timestamp_source == "sensor_metadata"
     assert captured.sensor_timestamp_ns == 2_000_000_000
     assert captured.timestamp_us == 3_000_000
+    assert captured.sensor_to_dequeue_ms == 2.0
+    assert captured.sensor_timestamp_stale is False
+    assert fake_picam2.request.released is True
+
+
+def test_picamera2_backend_falls_back_when_sensor_timestamp_is_stale(monkeypatch) -> None:
+    backend = Picamera2Backend()
+    frame = np.zeros((12, 16, 3), dtype=np.uint8)
+    fake_picam2 = _FakePicamera2CaptureRequest(frame, {"SensorTimestamp": 2_000_000_000})
+    backend._picam2 = fake_picam2  # type: ignore[assignment]
+    backend._running = True
+
+    monkeypatch.setattr("pi.service.capture_runtime._clock_realtime_us", lambda: 5_000_000)
+    monkeypatch.setattr("pi.service.capture_runtime._clock_monotonic_us", lambda: 4_500_000)
+
+    captured = backend.next_captured_frame()
+
+    assert captured.image.shape == frame.shape
+    assert captured.timestamp_source == "capture_dequeue"
+    assert captured.sensor_timestamp_ns == 2_000_000_000
+    assert captured.timestamp_us == 5_000_000
+    assert captured.sensor_to_dequeue_ms == 500.0
+    assert captured.sensor_timestamp_stale is True
     assert fake_picam2.request.released is True

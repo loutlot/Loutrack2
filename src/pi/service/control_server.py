@@ -109,6 +109,9 @@ from mjpeg_streamer import MJPEGStreamer
 from blob_detection import detect_blobs
 
 
+MAX_SCHEDULED_START_DELAY_US = 10_000_000
+
+
 class ControlServer:
     def __init__(self, config: ControlServerConfig):
         self._config: ControlServerConfig = config
@@ -680,6 +683,23 @@ class ControlServer:
                 error_code=ERROR_INVALID_REQUEST,
                 error_message="invalid_request: start.mode must be string",
             )
+        start_at_us = params.get("start_at_us")
+        if start_at_us is not None and not isinstance(start_at_us, int):
+            return self._error_response(
+                request_id=request_id,
+                request_camera_id=request_camera_id,
+                error_code=ERROR_INVALID_REQUEST,
+                error_message="invalid_request: start.start_at_us must be integer epoch microseconds",
+            )
+        if isinstance(start_at_us, int):
+            delay_us = int(start_at_us) - _clock_realtime_us()
+            if delay_us > MAX_SCHEDULED_START_DELAY_US:
+                return self._error_response(
+                    request_id=request_id,
+                    request_camera_id=request_camera_id,
+                    error_code=ERROR_INVALID_REQUEST,
+                    error_message=f"invalid_request: start.start_at_us must be within {MAX_SCHEDULED_START_DELAY_US}us",
+                )
         return self._handle_start(request_id, request_camera_id, mode, params)
 
     def _dispatch_set_int(
@@ -1527,12 +1547,20 @@ class ControlServer:
             self._state = STATE_RUNNING
 
         mask_to_apply = self._static_mask
+        start_at_us_obj = params.get("start_at_us")
+        start_at_us = int(start_at_us_obj) if isinstance(start_at_us_obj, int) else None
+        wait_started_us = _clock_realtime_us()
         try:
             pipeline = self._ensure_pipeline_started()
             pipeline.set_mask(mask_to_apply)
             pipeline.set_state_label(STATE_RUNNING)
+            if start_at_us is not None:
+                self._wait_until_epoch_us(start_at_us)
             pipeline.start_stream(mode)
-            self._log(f"capture pipeline started mode={mode}")
+            if start_at_us is not None:
+                self._log(f"capture pipeline started mode={mode} scheduled_start_at_us={start_at_us}")
+            else:
+                self._log(f"capture pipeline started mode={mode}")
         except BackendUnavailableError as exc:
             with self._state_lock:
                 self._state = prev_state
@@ -1563,12 +1591,31 @@ class ControlServer:
             "mask_active": mask_to_apply is not None,
             "mask_ratio": self._mask_ratio,
             "mask_warning": self._mask_warning,
+            "scheduled_start_at_us": start_at_us,
+            "scheduled_wait_us": max(0, int((start_at_us or wait_started_us) - wait_started_us))
+            if start_at_us is not None
+            else None,
+            "scheduled_start_late_us": max(0, int(wait_started_us - start_at_us))
+            if start_at_us is not None
+            else None,
         }
         return self._ok_response(
             request_id=request_id,
             request_camera_id=camera_id,
             result={k: v for k, v in result.items() if v is not None},
         )
+
+    @staticmethod
+    def _wait_until_epoch_us(start_at_us: int) -> None:
+        while True:
+            now_us = _clock_realtime_us()
+            remaining_us = int(start_at_us) - now_us
+            if remaining_us <= 0:
+                return
+            if remaining_us > 2_000:
+                time.sleep(min(0.05, max(0.0, (remaining_us - 1_000) / 1_000_000.0)))
+            else:
+                time.sleep(max(0.0, remaining_us / 1_000_000.0))
 
     def _handle_stop(self, request_id: str, request_camera_id: str) -> dict[str, object]:
         with self._state_lock:

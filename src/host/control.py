@@ -3,6 +3,7 @@ import socket
 import uuid
 import argparse
 import sys
+import time
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -100,8 +101,19 @@ def ping(ip: str, port: int, camera_id: str, request_id: Optional[str] = None, t
     return _send(ip, port, camera_id, "ping", request_id=request_id, timeout=timeout)
 
 
-def start(ip: str, port: int, camera_id: str, mode: str, request_id: Optional[str] = None, timeout: float = 5.0) -> Dict[str, Any]:
-    return _send(ip, port, camera_id, "start", {"mode": mode}, request_id=request_id, timeout=timeout)
+def start(
+    ip: str,
+    port: int,
+    camera_id: str,
+    mode: str,
+    request_id: Optional[str] = None,
+    timeout: float = 5.0,
+    start_at_us: Optional[int] = None,
+) -> Dict[str, Any]:
+    params: Dict[str, Any] = {"mode": mode}
+    if start_at_us is not None:
+        params["start_at_us"] = int(start_at_us)
+    return _send(ip, port, camera_id, "start", params, request_id=request_id, timeout=timeout)
 
 
 def stop(ip: str, port: int, camera_id: str, request_id: Optional[str] = None, timeout: float = 5.0) -> Dict[str, Any]:
@@ -317,6 +329,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     start_p = sub.add_parser("start", help="Start server in given mode")
     start_p.add_argument("--mode", required=True, help="Mode to start (e.g., 'capture')")
+    start_p.add_argument("--start-at-us", type=int, default=None, help="PTP/epoch microsecond time to start streaming")
+    start_p.add_argument("--start-delay-ms", type=float, default=None, help="Schedule start this many milliseconds in the future")
 
     sub.add_parser("stop", help="Stop server")
 
@@ -388,7 +402,17 @@ def _build_cli_and_run() -> None:
         if args.cmd == "ping":
             resp = ping(ip, port, camera_id=camera_id, request_id=req_id)
         elif args.cmd == "start":
-            resp = start(ip, port, camera_id=camera_id, mode=args.mode, request_id=req_id)
+            start_at_us = args.start_at_us
+            if start_at_us is None and args.start_delay_ms is not None:
+                start_at_us = int(time.time_ns() // 1_000 + float(args.start_delay_ms) * 1_000.0)
+            resp = start(
+                ip,
+                port,
+                camera_id=camera_id,
+                mode=args.mode,
+                request_id=req_id,
+                start_at_us=start_at_us,
+            )
         elif args.cmd == "stop":
             resp = stop(ip, port, camera_id=camera_id, request_id=req_id)
         elif args.cmd == "set_exposure":

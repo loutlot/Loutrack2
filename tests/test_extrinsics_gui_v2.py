@@ -7,6 +7,7 @@ import threading
 from pathlib import Path
 from typing import Any, Dict
 
+import numpy as np
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -178,9 +179,11 @@ class _FakeTrackingRuntime:
     def __init__(self):
         self.running = False
         self.started_with = None
+        self.start_count = 0
 
     def start(self, calibration_path: str, patterns):
         self.running = True
+        self.start_count += 1
         self.started_with = (calibration_path, list(patterns))
         return {"running": True, "calibration_loaded": True}
 
@@ -278,6 +281,33 @@ def test_intrinsics_host_session_polls_status_immediately_on_start(tmp_path: Pat
     assert status["frames_rejected_detection"] == 3
 
 
+def test_intrinsics_host_session_filters_degenerate_calibration_frames() -> None:
+    class _Board:
+        def getChessboardCorners(self):
+            points = []
+            for y in range(7):
+                for x in range(5):
+                    points.append([float(x), float(y), 0.0])
+            return np.asarray(points, dtype=np.float32)
+
+    valid_ids = np.arange(12, dtype=np.int32).reshape(-1, 1)
+    board_points = _Board().getChessboardCorners()[valid_ids.reshape(-1), :2]
+    valid_corners = (board_points * 20.0 + np.asarray([100.0, 50.0], dtype=np.float32)).reshape(-1, 1, 2)
+    sparse_ids = np.arange(6, dtype=np.int32).reshape(-1, 1)
+    sparse_corners = valid_corners[:6].copy()
+
+    corners, ids, rejected = IntrinsicsHostSession._filter_calibration_frames(
+        [sparse_corners, valid_corners],
+        [sparse_ids, valid_ids],
+        _Board(),
+    )
+
+    assert len(corners) == 1
+    assert len(ids) == 1
+    assert rejected == 1
+    assert np.array_equal(ids[0], valid_ids)
+
+
 def test_intrinsics_stop_returns_idle_status(tmp_path: Path) -> None:
     session = _FakeSession()
     state = LoutrackGuiState(
@@ -361,7 +391,8 @@ def test_gui_pose_and_floor_capture_paths(tmp_path: Path, monkeypatch) -> None:
     state.capture_log_dir.mkdir(parents=True, exist_ok=True)
 
     assert "Capture Floor / Metric" in HTML_PAGE
-    assert "wandMetricLogPath" in HTML_PAGE
+    assert "wandMetricLogPath" not in HTML_PAGE
+    assert "wandMetricSeconds" not in HTML_PAGE
 
     start_pose = state.run_command({"command": "start_pose_capture", "camera_ids": ["pi-cam-01"]})
     assert "capture_log" in start_pose
@@ -395,10 +426,10 @@ def test_gui_pose_and_floor_capture_paths(tmp_path: Path, monkeypatch) -> None:
             "duration_s": 2.5,
         }
     )
-    assert start_metric["duration_s"] == 2.5
+    assert start_metric["duration_s"] == 1.0
     assert scheduled == {
         "camera_ids": ["pi-cam-01"],
-        "duration_s": 2.5,
+        "duration_s": 1.0,
         "capture_kind": "wand_metric_capture",
     }
     receiver.emit_frame(_Frame())
@@ -544,7 +575,9 @@ def test_tracking_start_disables_pi_preview_for_explicit_camera_ids(tmp_path: Pa
     }
     assert start_call["fn_name"] == "start"
     assert start_call["camera_ids"] == ["pi-cam-02"]
-    assert start_call["kwargs"] == {"mode": "pose_capture"}
+    assert start_call["kwargs"]["mode"] == "pose_capture"
+    assert isinstance(start_call["kwargs"]["start_at_us"], int)
+    assert response["scheduled_start_at_us"] == start_call["kwargs"]["start_at_us"]
 
 
 def test_tracking_start_uses_saved_selection_for_pi_preview_speedup(tmp_path: Path) -> None:
@@ -614,6 +647,35 @@ def test_tracking_start_treats_pi_already_running_as_usable_stream(tmp_path: Pat
     assert response["running"] is True
     assert runtime.running is True
     assert response["pi_stream_start"]["pi-cam-01"]["error_message"] == "already_running"
+
+
+def test_tracking_start_is_noop_when_runtime_is_already_running(tmp_path: Path) -> None:
+    session = _FakeSession()
+    receiver = _FakeReceiver()
+    receiver.start()
+    runtime = _FakeTrackingRuntime()
+    state = LoutrackGuiState(
+        session=session,
+        receiver=receiver,
+        settings_path=tmp_path / "loutrack_gui_settings.json",
+        tracking_runtime=runtime,
+    )
+    calibration_dir = tmp_path / "calibration"
+    calibration_dir.mkdir()
+    extrinsics_path = calibration_dir / "extrinsics_pose_v2.json"
+    extrinsics_path.write_text("{}", encoding="utf-8")
+    state.latest_extrinsics_path = extrinsics_path
+
+    first = state.start_tracking({"patterns": ["waist"], "camera_ids": ["pi-cam-01"]})
+    second = state.start_tracking({"patterns": ["waist"], "camera_ids": ["pi-cam-01"]})
+
+    assert first["running"] is True
+    assert second["running"] is True
+    assert second["already_running"] is True
+    assert runtime.start_count == 1
+    assert receiver.stop_count == 1
+    assert session.broadcast_history[-1]["fn_name"] == "start"
+    assert len([item for item in session.broadcast_history if item["fn_name"] == "start"]) == 1
 
 
 def test_tracking_start_resumes_gui_udp_receiver_when_runtime_fails(tmp_path: Path) -> None:
@@ -824,7 +886,7 @@ def test_get_settings_does_not_rewrite_existing_settings_file(tmp_path: Path) ->
                 "circularity_min": 0.2,
                 "mask_threshold": 200,
                 "mask_seconds": 0.5,
-                "wand_metric_seconds": 3.0,
+                "wand_metric_seconds": 1.0,
             },
             "committed": {
                 "exposure_us": 5000,
@@ -836,7 +898,7 @@ def test_get_settings_does_not_rewrite_existing_settings_file(tmp_path: Path) ->
                 "circularity_min": 0.2,
                 "mask_threshold": 200,
                 "mask_seconds": 0.5,
-                "wand_metric_seconds": 3.0,
+                "wand_metric_seconds": 1.0,
             },
         },
         "intrinsics": {
@@ -947,6 +1009,7 @@ def test_apply_config_does_not_persist_selected_camera_ids_from_payload(tmp_path
     assert payload["ui"]["selected_camera_ids"] == ["pi-cam-02"]
     assert "fps" not in payload["calibration"]["draft"]
     assert "fps" not in payload["calibration"]["committed"]
+    assert payload["calibration"]["committed"]["wand_metric_seconds"] == 1.0
     assert state.selected_camera_ids == ["pi-cam-02"]
     assert session.last_broadcast is not None
     assert session.last_broadcast["camera_ids"] == ["pi-cam-01"]

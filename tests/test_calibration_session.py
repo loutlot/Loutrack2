@@ -49,7 +49,8 @@ class _FakeControl:
     def mask_start(self, ip, port, camera_id, timeout=2.0, **kwargs):
         return self._resp("mask_start", camera_id, timeout)
 
-    def start(self, ip, port, camera_id, mode, timeout=2.0):
+    def start(self, ip, port, camera_id, mode, timeout=2.0, start_at_us=None):
+        assert start_at_us is None or isinstance(start_at_us, int)
         return self._resp("start", camera_id, timeout)
 
     def stop(self, ip, port, camera_id, timeout=2.0):
@@ -113,6 +114,7 @@ def test_run_session_control_order(monkeypatch, tmp_path: Path) -> None:
     ]
     assert result["config"]["focus"] == FIXED_FOCUS
     assert result["config"]["circularity_min"] == FIXED_CIRCULARITY_MIN
+    assert isinstance(result["config"]["scheduled_start_at_us"], int)
     metadata_path = Path(result["metadata_path"])
     assert metadata_path.exists()
     assert metadata_path.parent == tmp_path

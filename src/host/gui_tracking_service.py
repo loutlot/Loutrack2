@@ -3,21 +3,34 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, List
 
+from .scheduled_start import scheduled_start_kwargs
+
 
 class GuiTrackingService:
     """Tracking orchestration for the host GUI backend."""
 
+    _TRACKING_BLOCKER_MESSAGES = {
+        "extrinsics_missing": "Generate extrinsics first",
+        "no_cameras_selected": "Select at least one camera",
+        "camera_unhealthy": "One or more selected cameras are offline",
+        "mask_missing": "Build masks for the selected cameras first",
+    }
+
     def __init__(self, owner: Any) -> None:
         self._owner = owner
 
-    def get_tracking_status(self) -> Dict[str, Any]:
+    def get_tracking_status(self, cameras: List[Dict[str, Any]] | None = None) -> Dict[str, Any]:
         owner = self._owner
         status = owner.tracking_runtime.status()
-        start_allowed = owner._tracking_extrinsics_ready()
+        start_blockers = self._tracking_start_blockers(cameras)
+        running = bool(status.get("running", False))
+        start_allowed = not start_blockers and not running
         return {
             **status,
             "start_allowed": start_allowed,
-            "empty_state": None if start_allowed else "Generate extrinsics first",
+            "start_blockers": start_blockers,
+            "stop_allowed": running,
+            "empty_state": None if start_allowed else self._tracking_blocker_message(start_blockers),
             "latest_extrinsics_path": str(owner.latest_extrinsics_path) if owner.latest_extrinsics_path else None,
             "latest_extrinsics_quality": owner.latest_extrinsics_quality,
             "sse": owner.get_tracking_sse_diagnostics()
@@ -27,8 +40,8 @@ class GuiTrackingService:
 
     def get_tracking_scene(self) -> Dict[str, Any]:
         owner = self._owner
-        start_allowed = owner._tracking_extrinsics_ready()
-        if not start_allowed:
+        tracking_status = self.get_tracking_status()
+        if not bool(tracking_status.get("start_allowed")) and not bool(tracking_status.get("running")):
             return {
                 "tracking": {
                     "running": False,
@@ -39,14 +52,14 @@ class GuiTrackingService:
                 "rigid_bodies": [],
                 "raw_points": [],
                 "timestamp_us": int(time.time() * 1_000_000),
-                "empty_state": "Generate extrinsics first",
+                "empty_state": tracking_status.get("empty_state") or "Tracking is not ready",
             }
         return owner.tracking_runtime.scene_snapshot()
 
     def wait_tracking_scene(self, last_sequence: int | None, timeout: float = 15.0) -> Dict[str, Any]:
         owner = self._owner
-        start_allowed = owner._tracking_extrinsics_ready()
-        if not start_allowed:
+        tracking_status = self.get_tracking_status()
+        if not bool(tracking_status.get("start_allowed")) and not bool(tracking_status.get("running")):
             return self.get_tracking_scene()
         wait_for_scene = getattr(owner.tracking_runtime, "wait_for_scene_update", None)
         if callable(wait_for_scene):
@@ -59,6 +72,18 @@ class GuiTrackingService:
         patterns = payload.get("patterns", ["waist"])
         if not isinstance(patterns, list):
             patterns = ["waist"]
+        current_status = owner.tracking_runtime.status()
+        if bool(current_status.get("running", False)):
+            response = {
+                "ok": True,
+                **current_status,
+                "running": True,
+                "already_running": True,
+                "camera_ids": list(owner._tracking_camera_ids),
+                "latest_extrinsics_path": str(owner.latest_extrinsics_path) if owner.latest_extrinsics_path else None,
+            }
+            owner.last_result = {"tracking_start": response}
+            return response
         owner._ensure_calibration_settings_valid()
         targets = self._resolve_tracking_targets(payload)
         camera_ids = [target.camera_id for target in targets]
@@ -67,7 +92,8 @@ class GuiTrackingService:
         self._pause_receiver_for_tracking()
         try:
             status = owner.tracking_runtime.start(str(resolved), [str(item) for item in patterns])
-            stream_start = owner.session._broadcast(targets, "start", mode="pose_capture")
+            start_kwargs = scheduled_start_kwargs("pose_capture")
+            stream_start = owner.session._broadcast(targets, "start", **start_kwargs)
             if not self.all_acked_or_already_running(stream_start):
                 owner.tracking_runtime.stop()
                 self._resume_receiver_after_tracking()
@@ -86,6 +112,7 @@ class GuiTrackingService:
             "pi_config": config_result,
             "pi_tracking_optimization": optimization,
             "pi_stream_start": stream_start,
+            "scheduled_start_at_us": start_kwargs["start_at_us"],
         }
         owner.last_result = {"tracking_start": response}
         return response
@@ -165,3 +192,39 @@ class GuiTrackingService:
                 continue
             return False
         return True
+
+    def _tracking_start_blockers(self, cameras: List[Dict[str, Any]] | None = None) -> List[str]:
+        owner = self._owner
+        blockers: List[str] = []
+        if not owner._tracking_extrinsics_ready():
+            blockers.append("extrinsics_missing")
+        active_cameras = self._tracking_active_cameras(cameras)
+        if not active_cameras:
+            blockers.append("no_cameras_selected")
+            return blockers
+        if any(not bool(camera.get("healthy")) for camera in active_cameras):
+            blockers.append("camera_unhealthy")
+        if any(not self._camera_mask_ready(camera) for camera in active_cameras):
+            blockers.append("mask_missing")
+        return blockers
+
+    def _tracking_active_cameras(self, cameras: List[Dict[str, Any]] | None = None) -> List[Dict[str, Any]]:
+        owner = self._owner
+        if cameras is None:
+            cameras = list(owner.camera_status.values())
+        selected = [camera for camera in cameras if bool(camera.get("selected"))]
+        return selected if selected else list(cameras)
+
+    @staticmethod
+    def _camera_mask_ready(camera: Dict[str, Any]) -> bool:
+        diagnostics = camera.get("diagnostics")
+        if not isinstance(diagnostics, dict):
+            diagnostics = {}
+        state = str(diagnostics.get("state") or "").upper()
+        mask_pixels = float(diagnostics.get("mask_pixels", 0) or 0)
+        return state in ("READY", "RUNNING") and mask_pixels > 0.0
+
+    def _tracking_blocker_message(self, blockers: List[str]) -> str | None:
+        if not blockers:
+            return None
+        return self._TRACKING_BLOCKER_MESSAGES.get(blockers[0], "Tracking is not ready")

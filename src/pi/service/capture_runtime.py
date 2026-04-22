@@ -78,6 +78,7 @@ PREVIEW_STOP_TIMEOUT_SECONDS = 2.0
 PROCESSING_QUEUE_MAXSIZE = 2
 PREVIEW_QUEUE_MAXSIZE = 1
 PREVIEW_MAX_DIMENSION = 1280
+SENSOR_TIMESTAMP_STALE_THRESHOLD_MS = 250.0
 PTP_SANITY_CACHE_US = 60_000_000
 PTP_LOCK_OFFSET_THRESHOLD_US = 500.0
 PTP_RO_SOCKET_PATH = "/var/run/ptp4lro"
@@ -668,6 +669,8 @@ class CapturedFrame:
     timestamp_us: int
     timestamp_source: Literal["sensor_metadata", "capture_dequeue"]
     sensor_timestamp_ns: int | None = None
+    sensor_to_dequeue_ms: float | None = None
+    sensor_timestamp_stale: bool = False
 
 
 @dataclass(frozen=True)
@@ -1322,6 +1325,10 @@ class Picamera2Backend:
                 sensor_timestamp_ns = _extract_sensor_timestamp_ns(metadata)
                 if not isinstance(frame_obj, np.ndarray):
                     raise RuntimeError("picamera2 capture_request.make_array returned non-ndarray")
+                sensor_to_dequeue_ms = _sensor_timestamp_age_ms(
+                    sensor_timestamp_ns,
+                    capture_monotonic_us,
+                )
                 timestamp_us = _sensor_timestamp_to_epoch_us(
                     sensor_timestamp_ns,
                     capture_realtime_us,
@@ -1332,18 +1339,31 @@ class Picamera2Backend:
                 except Exception:
                     pass
                 request_obj = None
-                if timestamp_us is not None:
+                if (
+                    timestamp_us is not None
+                    and (
+                        sensor_to_dequeue_ms is None
+                        or sensor_to_dequeue_ms <= SENSOR_TIMESTAMP_STALE_THRESHOLD_MS
+                    )
+                ):
                     return CapturedFrame(
                         image=cast(np.ndarray, frame_obj),
                         timestamp_us=timestamp_us,
                         timestamp_source="sensor_metadata",
                         sensor_timestamp_ns=sensor_timestamp_ns,
+                        sensor_to_dequeue_ms=sensor_to_dequeue_ms,
+                        sensor_timestamp_stale=False,
                     )
                 return CapturedFrame(
                     image=cast(np.ndarray, frame_obj),
                     timestamp_us=int(capture_realtime_us),
                     timestamp_source="capture_dequeue",
                     sensor_timestamp_ns=sensor_timestamp_ns,
+                    sensor_to_dequeue_ms=sensor_to_dequeue_ms,
+                    sensor_timestamp_stale=bool(
+                        sensor_to_dequeue_ms is not None
+                        and sensor_to_dequeue_ms > SENSOR_TIMESTAMP_STALE_THRESHOLD_MS
+                    ),
                 )
             except Exception:
                 if request_obj is not None and hasattr(request_obj, "release"):
@@ -1450,6 +1470,21 @@ def _sensor_timestamp_to_epoch_us(
     if timestamp_us < 0:
         return None
     return int(timestamp_us)
+
+
+def _sensor_timestamp_age_ms(
+    sensor_timestamp_ns: int | None,
+    monotonic_us: int | None = None,
+) -> float | None:
+    if sensor_timestamp_ns is None:
+        return None
+    try:
+        sensor_timestamp_us = int(sensor_timestamp_ns) // 1000
+    except (TypeError, ValueError, OverflowError):
+        return None
+    monotonic_value = _clock_monotonic_us() if monotonic_us is None else int(monotonic_us)
+    age_us = monotonic_value - sensor_timestamp_us
+    return float(age_us) / 1000.0
 
 
 def _extract_sensor_timestamp_ns(metadata: object) -> int | None:
@@ -1790,12 +1825,14 @@ class _ProcessingWorker:
         self._capture_to_process_ms: deque[float] = deque(maxlen=256)
         self._capture_to_send_ms: deque[float] = deque(maxlen=256)
         self._queue_age_ms: deque[float] = deque(maxlen=256)
+        self._sensor_to_dequeue_ms: deque[float] = deque(maxlen=256)
         self._blob_detect_ms: deque[float] = deque(maxlen=256)
         self._preview_build_ms: deque[float] = deque(maxlen=256)
         self._json_encode_ms: deque[float] = deque(maxlen=256)
         self._udp_send_ms: deque[float] = deque(maxlen=256)
         self._stream_payload_bytes: deque[float] = deque(maxlen=256)
         self._udp_send_errors = 0
+        self._stale_sensor_timestamp_frames = 0
         self._started_monotonic = 0.0
 
     def start(self) -> None:
@@ -1893,12 +1930,14 @@ class _ProcessingWorker:
             capture_to_process_ms = list(self._capture_to_process_ms)
             capture_to_send_ms = list(self._capture_to_send_ms)
             queue_age_ms = list(self._queue_age_ms)
+            sensor_to_dequeue_ms = list(self._sensor_to_dequeue_ms)
             blob_detect_ms = list(self._blob_detect_ms)
             preview_build_ms = list(self._preview_build_ms)
             json_encode_ms = list(self._json_encode_ms)
             udp_send_ms = list(self._udp_send_ms)
             stream_payload_bytes = list(self._stream_payload_bytes)
             udp_send_errors = self._udp_send_errors
+            stale_sensor_timestamp_frames = self._stale_sensor_timestamp_frames
             started_monotonic = self._started_monotonic
             stream_mode = self._stream_mode
             preview_packets_built = self._preview_packets_built
@@ -1929,12 +1968,14 @@ class _ProcessingWorker:
             "preview_packets_skipped": int(preview_packets_skipped),
             "stream_payload_bytes_last": int(stream_payload_bytes_last),
             "queue_age_ms": _rolling_summary(queue_age_ms),
+            "sensor_to_dequeue_ms": _rolling_summary(sensor_to_dequeue_ms),
             "blob_detect_ms": _rolling_summary(blob_detect_ms),
             "preview_build_ms": _rolling_summary(preview_build_ms),
             "json_encode_ms": _rolling_summary(json_encode_ms),
             "udp_send_ms": _rolling_summary(udp_send_ms),
             "stream_payload_bytes": _rolling_summary(stream_payload_bytes),
             "udp_send_errors": int(udp_send_errors),
+            "stale_sensor_timestamp_frames": int(stale_sensor_timestamp_frames),
         }
 
     def _has_preview_consumer(self) -> bool:
@@ -2028,6 +2069,8 @@ class _ProcessingWorker:
                 "sensor_timestamp_available": bool(
                     packet.captured_frame.sensor_timestamp_ns is not None
                 ),
+                "sensor_to_dequeue_ms": packet.captured_frame.sensor_to_dequeue_ms,
+                "sensor_timestamp_stale": bool(packet.captured_frame.sensor_timestamp_stale),
             }
             with self._lock:
                 self._last_detection_stats = dict(stats)
@@ -2035,6 +2078,10 @@ class _ProcessingWorker:
                 self._frames_processed += 1
                 self._capture_to_process_ms.append(capture_to_process_ms)
                 self._queue_age_ms.append(queue_age_ms)
+                if packet.captured_frame.sensor_to_dequeue_ms is not None:
+                    self._sensor_to_dequeue_ms.append(float(packet.captured_frame.sensor_to_dequeue_ms))
+                if packet.captured_frame.sensor_timestamp_stale:
+                    self._stale_sensor_timestamp_frames += 1
                 self._blob_detect_ms.append(blob_detect_ms)
 
             preview_packet: _PreviewPacket | None = None
@@ -2074,6 +2121,10 @@ class _ProcessingWorker:
             }
             if packet.captured_frame.sensor_timestamp_ns is not None:
                 msg["sensor_timestamp_ns"] = int(packet.captured_frame.sensor_timestamp_ns)
+            if packet.captured_frame.sensor_to_dequeue_ms is not None:
+                msg["sensor_to_dequeue_ms"] = float(packet.captured_frame.sensor_to_dequeue_ms)
+            if packet.captured_frame.sensor_timestamp_stale:
+                msg["sensor_timestamp_stale"] = True
             if stream_mode != "pose_capture":
                 msg["frame_index"] = int(self._frame_index & 0xFFFFFFFF)
             if stream_mode == "pose_capture":

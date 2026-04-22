@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict
@@ -45,16 +46,32 @@ class GuiExtrinsicsService:
         if not isinstance(committed_extrinsics, dict):
             committed_extrinsics = owner._default_extrinsics_payload()
 
-        extrinsics_method = str(payload.get("extrinsics_method", "blob_pose_v2")).strip() or "blob_pose_v2"
-        intrinsics_raw = str(committed_extrinsics.get("intrinsics_path", "calibration")).strip()
-        log_raw = str(committed_extrinsics.get("pose_log_path", str(owner._default_pose_log_path()))).strip()
+        explicit_payload = payload if isinstance(payload, dict) else {}
+        extrinsics_method = str(explicit_payload.get("extrinsics_method", "blob_pose_v2")).strip() or "blob_pose_v2"
+        runtime_hints = bundle.get("runtime_hints", {})
+        if not isinstance(runtime_hints, dict):
+            runtime_hints = {}
+        default_extrinsics = owner._default_extrinsics_payload()
+        intrinsics_raw = str(
+            explicit_payload.get("intrinsics_path")
+            or default_extrinsics.get("intrinsics_path", "calibration")
+        ).strip()
+        log_raw = str(
+            explicit_payload.get("pose_log_path")
+            or explicit_payload.get("log_path")
+            or runtime_hints.get("pose_log_path")
+            or owner._default_pose_log_path()
+        ).strip()
         output_raw = str(
-            committed_extrinsics.get("output_path", str(owner._default_extrinsics_output_path()))
+            explicit_payload.get("output_path")
+            or owner._default_extrinsics_output_path()
         ).strip()
         intrinsics_path = owner._resolve_project_path(intrinsics_raw, Path("calibration"))
         resolved_log_path = owner._resolve_project_path(log_raw, owner._default_pose_log_path())
         wand_log_raw = str(
-            committed_extrinsics.get("wand_metric_log_path", str(owner.wand_metric_log_path))
+            explicit_payload.get("wand_metric_log_path")
+            or runtime_hints.get("wand_metric_log_path")
+            or owner.wand_metric_log_path
         ).strip()
         resolved_output = owner._resolve_project_path(output_raw, owner._default_extrinsics_output_path())
         resolved_wand_log_path = owner._resolve_project_path(
@@ -151,16 +168,36 @@ class GuiExtrinsicsService:
             )
             if key in solve_summary
         }
+        metric_section = raw_result.get("metric", {})
+        if not isinstance(metric_section, dict):
+            metric_section = {}
+        world_section = raw_result.get("world", {})
+        if not isinstance(world_section, dict):
+            world_section = {}
+        pose_log_summary = self._summarize_pose_log(resolved_log_path)
 
         summary = {
             "ok": True,
+            "status": "success",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
             "extrinsics_method": extrinsics_method,
             "camera_order": raw_result.get("camera_order", []),
             "camera_count": camera_count,
+            "intrinsics_path": str(intrinsics_path),
+            "pose_log_path": str(resolved_log_path),
             "output_path": str(resolved_output),
+            "parameters": {
+                "pair_window_us": pair_window_us,
+                "wand_pair_window_us": wand_pair_window_us,
+                "min_pairs": min_pairs,
+                "wand_face": wand_face,
+            },
+            "pose_log_summary": pose_log_summary,
             "quality": quality_summary,
-            "metric_status": raw_result.get("metric", {}).get("status"),
-            "world_status": raw_result.get("world", {}).get("status"),
+            "metric_status": metric_section.get("status"),
+            "metric": self._summarize_metric_section(metric_section),
+            "world_status": world_section.get("status"),
+            "world": self._summarize_world_section(world_section),
             "wand_metric_log_path": (
                 str(resolved_wand_log_path)
                 if resolved_wand_log_path.exists() and resolved_wand_log_path.is_file()
@@ -169,12 +206,51 @@ class GuiExtrinsicsService:
         }
         owner.latest_extrinsics_path = resolved_output
         owner.latest_extrinsics_quality = quality_summary
+        owner.latest_extrinsics_result = summary
         owner.last_result = {"generate_extrinsics": summary}
         owner._update_runtime_hints(
             pose_log_path=str(resolved_log_path),
             wand_metric_log_path=str(resolved_wand_log_path),
         )
         return owner.last_result
+
+    @staticmethod
+    def _summarize_metric_section(metric_section: Dict[str, Any]) -> Dict[str, Any]:
+        validation = metric_section.get("validation", {})
+        if not isinstance(validation, dict):
+            validation = {}
+        return {
+            "status": metric_section.get("status"),
+            "frame": metric_section.get("frame"),
+            "scale_m_per_unit": metric_section.get("scale_m_per_unit"),
+            "source": metric_section.get("source"),
+            "wand_metric_frames": metric_section.get("wand_metric_frames"),
+            "shape_rms_error_mm": metric_section.get("shape_rms_error_mm"),
+            "wand_face": metric_section.get("wand_face"),
+            "validation": validation,
+        }
+
+    @staticmethod
+    def _summarize_world_section(world_section: Dict[str, Any]) -> Dict[str, Any]:
+        validation = world_section.get("validation", {})
+        if not isinstance(validation, dict):
+            validation = {}
+        floor_plane = world_section.get("floor_plane", {})
+        if not isinstance(floor_plane, dict):
+            floor_plane = {}
+        return {
+            "status": world_section.get("status"),
+            "frame": world_section.get("frame"),
+            "up_axis": floor_plane.get("axis"),
+            "floor_normal": floor_plane.get("normal"),
+            "source": world_section.get("source"),
+            "origin_world": world_section.get("origin_world"),
+            "aligned_axis_world": world_section.get("aligned_axis_world"),
+            "wand_face": world_section.get("wand_face"),
+            "floor_normal_sign_source": world_section.get("floor_normal_sign_source"),
+            "wand_face_alignment": world_section.get("wand_face_alignment"),
+            "validation": validation,
+        }
 
     @staticmethod
     def _extract_pose_log_payload(line: str) -> Dict[str, Any] | None:
@@ -256,6 +332,7 @@ class GuiExtrinsicsService:
         )
         return {
             "ok": False,
+            "status": "failed",
             "output_path": str(resolved_output),
             "error": reason,
             "pose_log_path": str(resolved_log_path),
@@ -265,4 +342,8 @@ class GuiExtrinsicsService:
                 if resolved_wand_log_path.exists() and resolved_wand_log_path.is_file()
                 else None
             ),
+            "metric_status": "skipped",
+            "metric": {"status": "skipped", "reason": "generation_failed"},
+            "world_status": "skipped",
+            "world": {"status": "skipped", "reason": "generation_failed"},
         }

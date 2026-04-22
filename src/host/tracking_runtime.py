@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import threading
 import time
 from collections import defaultdict, deque
@@ -82,6 +83,9 @@ def compute_markers_world(pose: RigidBodyPose, pattern: MarkerPattern) -> List[L
 class TrackingRuntime:
     """Small runtime helper for GUI tracking status and scene snapshots."""
 
+    _START_BIND_RETRY_TIMEOUT_S = 1.0
+    _START_BIND_RETRY_INTERVAL_S = 0.05
+
     def __init__(self, udp_port: int = 5000, trail_length: int = 120, z_near: float = 0.25):
         self.udp_port = udp_port
         self.trail_length = trail_length
@@ -122,7 +126,7 @@ class TrackingRuntime:
             patterns=selected_patterns,
         )
         pipeline.set_pose_callback(self._on_pose)
-        pipeline.start(session_name="tracking_gui")
+        self._start_pipeline_with_retry(pipeline)
         camera_scene = self._build_camera_scene(pipeline)
 
         with self._lock:
@@ -153,6 +157,22 @@ class TrackingRuntime:
             scene["tracking"] = self._scene_tracking_from_status(status)
             self._set_latest_scene_locked(scene)
         return status
+
+    def _start_pipeline_with_retry(self, pipeline: TrackingPipeline) -> None:
+        deadline = time.monotonic() + self._START_BIND_RETRY_TIMEOUT_S
+        while True:
+            try:
+                pipeline.start(session_name="tracking_gui")
+                return
+            except OSError as exc:
+                if not self._is_address_in_use_error(exc) or time.monotonic() >= deadline:
+                    raise
+                pipeline.stop()
+                time.sleep(self._START_BIND_RETRY_INTERVAL_S)
+
+    @staticmethod
+    def _is_address_in_use_error(exc: OSError) -> bool:
+        return int(getattr(exc, "errno", -1)) in {errno.EADDRINUSE, 48, 98}
 
     def stop(self) -> Dict[str, Any]:
         """Stop tracking runtime."""

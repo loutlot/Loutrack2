@@ -42,6 +42,8 @@ class Frame:
     host_received_at_us: int
     timestamp_source: Optional[str] = None
     sensor_timestamp_ns: Optional[int] = None
+    sensor_to_dequeue_ms: Optional[float] = None
+    sensor_timestamp_stale: bool = False
     capture_to_process_ms: Optional[float] = None
     capture_to_send_ms: Optional[float] = None
     
@@ -58,6 +60,10 @@ class Frame:
             payload["timestamp_source"] = self.timestamp_source
         if self.sensor_timestamp_ns is not None:
             payload["sensor_timestamp_ns"] = self.sensor_timestamp_ns
+        if self.sensor_to_dequeue_ms is not None:
+            payload["sensor_to_dequeue_ms"] = self.sensor_to_dequeue_ms
+        if self.sensor_timestamp_stale:
+            payload["sensor_timestamp_stale"] = True
         if self.capture_to_process_ms is not None:
             payload["capture_to_process_ms"] = self.capture_to_process_ms
         if self.capture_to_send_ms is not None:
@@ -551,10 +557,14 @@ class UDPReceiver:
     def stop(self) -> None:
         """Stop the UDP receiver."""
         self._running = False
-        if self._socket:
-            self._socket.close()
-        if self._thread:
-            self._thread.join(timeout=2.0)
+        socket_ref = self._socket
+        thread_ref = self._thread
+        self._socket = None
+        self._thread = None
+        if socket_ref:
+            socket_ref.close()
+        if thread_ref:
+            thread_ref.join(timeout=2.0)
     
     def _receive_loop(self) -> None:
         """Main receive loop."""
@@ -592,6 +602,8 @@ class UDPReceiver:
                     host_received_at_us=host_received_at_us,
                     timestamp_source=str(msg["timestamp_source"]) if msg.get("timestamp_source") is not None else None,
                     sensor_timestamp_ns=int(msg["sensor_timestamp_ns"]) if msg.get("sensor_timestamp_ns") is not None else None,
+                    sensor_to_dequeue_ms=float(msg["sensor_to_dequeue_ms"]) if msg.get("sensor_to_dequeue_ms") is not None else None,
+                    sensor_timestamp_stale=bool(msg.get("sensor_timestamp_stale", False)),
                     capture_to_process_ms=float(msg["capture_to_process_ms"]) if msg.get("capture_to_process_ms") is not None else None,
                     capture_to_send_ms=float(msg["capture_to_send_ms"]) if msg.get("capture_to_send_ms") is not None else None,
                 )
@@ -609,6 +621,8 @@ class UDPReceiver:
             except socket.timeout:
                 continue
             except Exception as e:
+                if not self._running:
+                    break
                 self._errors += 1
                 if self._error_callback:
                     self._error_callback(e)

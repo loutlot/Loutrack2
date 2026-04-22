@@ -162,6 +162,8 @@ def test_udp_receiver_accepts_payload_without_frame_index_and_records_diagnostic
             "timestamp": 1_700_000_000_000_000,
             "timestamp_source": "sensor_metadata",
             "sensor_timestamp_ns": 123456789,
+            "sensor_to_dequeue_ms": 12.5,
+            "sensor_timestamp_stale": True,
             "capture_to_process_ms": 3.5,
             "capture_to_send_ms": 4.25,
             "blobs": [{"x": 10.0, "y": 20.0, "area": 5.0}],
@@ -180,12 +182,16 @@ def test_udp_receiver_accepts_payload_without_frame_index_and_records_diagnostic
     assert frame.frame_index is None
     assert frame.timestamp_source == "sensor_metadata"
     assert frame.sensor_timestamp_ns == 123456789
+    assert frame.sensor_to_dequeue_ms == 12.5
+    assert frame.sensor_timestamp_stale is True
     assert frame.capture_to_process_ms == 3.5
     assert frame.capture_to_send_ms == 4.25
     assert frame.host_received_at_us > 0
     logged = frame.to_dict()
     assert "frame_index" not in logged
     assert logged["host_received_at_us"] == frame.host_received_at_us
+    assert logged["sensor_to_dequeue_ms"] == 12.5
+    assert logged["sensor_timestamp_stale"] is True
 
 
 def test_metrics_can_use_receiver_timestamp_for_fps_and_latency() -> None:

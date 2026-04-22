@@ -18,11 +18,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import cv2
 import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CALIB_SRC_ROOT = Path(__file__).resolve().parents[1]
 REMOTE_INTRINSICS_FETCH_BATCH = 8
+MIN_CALIBRATION_FRAME_CORNERS = 12
 
 
 def _load_calibrate_module() -> Any:
@@ -360,6 +362,12 @@ class IntrinsicsHostSession:
         try:
             cal = self._ensure_cal_module()
             board, dictionary = self._ensure_board(cal)
+            corners, ids, rejected_frames = self._filter_calibration_frames(corners, ids, board)
+            if len(corners) < int(self._config.min_frames):
+                raise ValueError(
+                    "not enough non-degenerate intrinsics frames after filtering: "
+                    f"usable={len(corners)} rejected={rejected_frames} required={self._config.min_frames}"
+                )
 
             rms, camera_matrix, dist_coeffs, rvecs, tvecs = cal.calibrate_camera_charuco(
                 corners, ids, board, image_size
@@ -417,6 +425,42 @@ class IntrinsicsHostSession:
             with self._lock:
                 self._phase = "error"
                 self._set_host_error(f"calibration_failed: {exc}", sticky=True)
+
+    @staticmethod
+    def _filter_calibration_frames(
+        corners: List[np.ndarray],
+        ids: List[np.ndarray],
+        board: Any,
+    ) -> tuple[List[np.ndarray], List[np.ndarray], int]:
+        board_corners = np.asarray(board.getChessboardCorners(), dtype=np.float32)
+        filtered_corners: List[np.ndarray] = []
+        filtered_ids: List[np.ndarray] = []
+        rejected = 0
+
+        for corner_frame, id_frame in zip(corners, ids):
+            corner_arr = np.asarray(corner_frame, dtype=np.float32)
+            id_arr = np.asarray(id_frame, dtype=np.int32).reshape(-1)
+            image_points = corner_arr.reshape(-1, 2) if corner_arr.size else np.empty((0, 2), dtype=np.float32)
+            if image_points.shape[0] != id_arr.shape[0] or id_arr.shape[0] < MIN_CALIBRATION_FRAME_CORNERS:
+                rejected += 1
+                continue
+            if len(set(int(value) for value in id_arr.tolist())) != int(id_arr.shape[0]):
+                rejected += 1
+                continue
+            if int(id_arr.min()) < 0 or int(id_arr.max()) >= int(board_corners.shape[0]):
+                rejected += 1
+                continue
+
+            object_points = board_corners[id_arr, :2].astype(np.float32)
+            homography, _ = cv2.findHomography(object_points, image_points.astype(np.float32), method=0)
+            if homography is None or tuple(homography.shape) != (3, 3) or not np.all(np.isfinite(homography)):
+                rejected += 1
+                continue
+
+            filtered_corners.append(corner_arr)
+            filtered_ids.append(np.asarray(id_frame, dtype=np.int32))
+
+        return filtered_corners, filtered_ids, rejected
 
     def _ensure_cal_module(self) -> Any:
         if self._cal is not None:

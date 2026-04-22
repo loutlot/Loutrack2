@@ -21,6 +21,7 @@ if str(CALIB_SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(CALIB_SRC_ROOT))
 
 from host.intrinsics_capture import IntrinsicsCapture, IntrinsicsConfig
+from pi.service import intrinsics_capture as pi_intrinsics_capture
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -33,6 +34,12 @@ def _load_calibrate_module() -> Any:
     sys.modules["_calibrate_test"] = module
     spec.loader.exec_module(module)
     return module
+
+
+def test_pi_intrinsics_calibrate_module_path_matches_src_layout() -> None:
+    script_path = pi_intrinsics_capture._intrinsics_calibrate_script_path()
+    assert script_path == CALIB_SRC_ROOT / "camera-calibration" / "calibrate.py"
+    assert script_path.exists()
 
 
 def _make_config(**kwargs: Any) -> IntrinsicsConfig:

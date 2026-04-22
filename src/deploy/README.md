@@ -34,35 +34,16 @@ ssh-copy-id -i ~/.ssh/loutrack_deploy_key.pub pi@<PI_IP_02>
 各Raspberry Piで以下を設定:
 
 ```bash
-# PTP prerequisite
+# runtime / PTP prerequisites
 sudo apt-get update
-sudo apt-get install -y linuxptp
+sudo apt-get install -y linuxptp python3-opencv python3-numpy
 
 # ディレクトリ作成
 sudo mkdir -p /opt/loutrack/releases
 sudo chown pi:pi /opt/loutrack
-
-# systemdサービス作成 (例)
-sudo cat > /etc/systemd/system/loutrack.service <<EOF
-[Unit]
-Description=loutrack camera capture
-After=network.target
-
-[Service]
-Type=simple
-User=pi
-WorkingDirectory=/opt/loutrack/current
-ExecStart=/usr/bin/python3 capture.py
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo systemctl daemon-reload
-sudo systemctl enable loutrack.service
 ```
+
+`deploy.sh` は `/opt/loutrack/releases/<version>/src/pi/` と `/opt/loutrack/releases/<version>/src/camera-calibration/` へローカルと同じ `src` 構造で配布し、`hosts.ini` の `camera_id` を使って `/etc/systemd/system/loutrack.service` を作成/更新してから起動します。
 
 PTP はアプリとは別に OS/service レイヤで常時追従させます。
 
@@ -97,9 +78,11 @@ pi-cam-03     <PI_IP_03>       pi-cam-03
 ### 基本的なデプロイ
 
 ```bash
-# ./src/pi/ ディレクトリの内容を全Piに配布
+# リポジトリルートから実行
 ./src/deploy/deploy.sh
 ```
+
+`src/deploy` からも実行できます。
 
 ### オプション
 
@@ -118,7 +101,7 @@ pi-cam-03     <PI_IP_03>       pi-cam-03
 
 1. `hosts.ini` を読み込み
 2. 各Piに `/opt/loutrack/releases/<timestamp>/` を作成
-3. `rsync --delete` で `./pi/` をミラーリング
+3. `rsync --delete` で `src/pi/` と `src/camera-calibration/` を release 内の `src/` 配下へミラーリング（`__pycache__` と `.pyc` は除外し、service でも bytecode 生成を止めます）
 4. `current` シンボリックリンクを新リリースに切り替え (atomic)
 5. `loutrack.service` を再起動
 6. 古いリリースを削除 (直近3世代のみ保持)
@@ -144,6 +127,9 @@ pi-cam-03     <PI_IP_03>       pi-cam-03
 ├── current -> releases/20260222_120000/  # シンボリックリンク
 └── releases/
     ├── 20260222_120000/  # 最新
+    │   └── src/
+    │       ├── pi/
+    │       └── camera-calibration/
     ├── 20260222_100000/  # 1つ前
     └── 20260221_180000/  # 2つ前
 ```
@@ -232,7 +218,7 @@ tail -f src/deploy/deploy.log
 ## Piサービス統合の整合
 このセクションは、新しいPiサービス環境にデプロイ構成と制御プロトコルを統合するためのポイントをまとめたものです。
 
-- エントリポイント: Pi 側のキャプチャ処理は src/pi/service/capture_runtime.py を使用します。
+- エントリポイント: Pi 側のキャプチャ処理は `/opt/loutrack/current/src/pi/service/capture_runtime.py` を使用します。
 - TCP 制御 NDJSON ポート: 8554 をデフォルトとして、制御コマンドは PYTHONPATH=src .venv/bin/python -m host.control ... 形式で実行します。
 - UDP フレーム: Pi から Host へ送信される各データグラムは JSON 形式。デフォルトのブロードキャスト先は 255.255.255.255:5000 です。
 - UDP フレーム: `timestamp_source` と capture-to-process/send 診断値を含みます。`timestamp` は露光寄りの epoch(us) を優先し、`pose_capture` では `frame_index` を送信しません。

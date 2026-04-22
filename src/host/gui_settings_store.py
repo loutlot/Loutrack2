@@ -108,6 +108,11 @@ class GuiSettingsStore:
     def apply_draft_patch(self, bundle: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any]:
         calibration_patch = patch.get("calibration", {})
         if isinstance(calibration_patch, dict):
+            calibration_patch = {
+                key: value
+                for key, value in calibration_patch.items()
+                if key != "wand_metric_seconds"
+            }
             bundle["calibration"]["draft"].update(calibration_patch)
             self._coerce_fixed_calibration_payload(bundle["calibration"]["draft"])
 
@@ -117,12 +122,15 @@ class GuiSettingsStore:
 
         extrinsics_patch = patch.get("extrinsics", {})
         if isinstance(extrinsics_patch, dict):
+            extrinsics_patch = {
+                key: value
+                for key, value in extrinsics_patch.items()
+                if key != "wand_metric_log_path"
+            }
             bundle["extrinsics"]["draft"].update(extrinsics_patch)
             locks = bundle["extrinsics"]["locks"]
             if "pose_log_path" in extrinsics_patch:
                 locks["pose_log_path_manual"] = True
-            if "wand_metric_log_path" in extrinsics_patch:
-                locks["wand_metric_log_path_manual"] = True
 
         reset_runtime = patch.get("reset_runtime")
         if isinstance(reset_runtime, list):
@@ -132,10 +140,6 @@ class GuiSettingsStore:
                     bundle["extrinsics"]["locks"]["pose_log_path_manual"] = False
                     latest_pose = str(hints.get("pose_log_path", self.default_pose_log_path))
                     bundle["extrinsics"]["draft"]["pose_log_path"] = latest_pose
-                if key == "wand_metric_log_path":
-                    bundle["extrinsics"]["locks"]["wand_metric_log_path_manual"] = False
-                    latest_wand = str(hints.get("wand_metric_log_path", self.default_wand_metric_log_path))
-                    bundle["extrinsics"]["draft"]["wand_metric_log_path"] = latest_wand
 
         validation = self._refresh_committed_from_draft(bundle)
         bundle["validation"] = validation
@@ -459,7 +463,6 @@ class GuiSettingsStore:
             "threshold": ("int", lambda v: 0 <= v <= 255, "must be in [0,255]"),
             "mask_threshold": ("int", lambda v: 0 <= v <= 255, "must be in [0,255]"),
             "mask_seconds": ("float", lambda v: v > 0.0, "must be > 0"),
-            "wand_metric_seconds": ("float", lambda v: v > 0.0, "must be > 0"),
         }
         for key, (kind, predicate, message) in numeric_specs.items():
             if key not in draft:
@@ -576,9 +579,6 @@ class GuiSettingsStore:
                 next_committed[key] = value
             else:
                 errors[key] = "must not be empty"
-
-        if "wand_metric_log_path" in draft:
-            next_committed["wand_metric_log_path"] = cls._to_string(draft.get("wand_metric_log_path"))
 
         int_specs = {
             "pair_window_us": (

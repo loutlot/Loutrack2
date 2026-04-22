@@ -8,15 +8,19 @@
 set -euo pipefail
 
 # Configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SRC_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SSH_KEY="$HOME/.ssh/loutrack_deploy_key"
 REMOTE_USER="pi"
 REMOTE_BASE="/opt/loutrack"
 RELEASES_DIR="$REMOTE_BASE/releases"
 CURRENT_LINK="$REMOTE_BASE/current"
 SERVICE_NAME="loutrack.service"
-LOCAL_SRC="$(pwd)/pi/"
-HOSTS_FILE="$(pwd)/deploy/hosts.ini"
-LOG_FILE="$(pwd)/deploy/deploy.log"
+LOCAL_SRC="$SRC_ROOT/pi/"
+LOCAL_CALIB_SRC="$SRC_ROOT/camera-calibration/"
+HOSTS_FILE="$SCRIPT_DIR/hosts.ini"
+LOG_FILE="$SCRIPT_DIR/deploy.log"
+REMOTE_SRC_DIR="$CURRENT_LINK/src"
 
 # Default options
 DRY_RUN=false
@@ -51,11 +55,44 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Build rsync options
-RSYNC_OPTS="-az --delete -e \"ssh -i $SSH_KEY -o StrictHostKeyChecking=no\""
+SSH_OPTS=(-n -i "$SSH_KEY" -o StrictHostKeyChecking=no)
+RSYNC_OPTS=(
+  -az
+  --delete
+  --exclude "__pycache__/"
+  --exclude "*.pyc"
+  -e "ssh -i $SSH_KEY -o StrictHostKeyChecking=no"
+)
 if $DRY_RUN; then
-  RSYNC_OPTS="$RSYNC_OPTS --dry-run"
+  RSYNC_OPTS+=(--dry-run)
 fi
+
+install_service() {
+  local target="$1"
+  local camera_id="$2"
+
+  ssh "${SSH_OPTS[@]}" "$target" "sudo tee /etc/systemd/system/$SERVICE_NAME >/dev/null <<EOF
+[Unit]
+Description=Loutrack camera capture
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$REMOTE_USER
+WorkingDirectory=$CURRENT_LINK
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 $REMOTE_SRC_DIR/pi/service/capture_runtime.py --camera-id $camera_id --udp-dest 255.255.255.255:5000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl daemon-reload
+sudo systemctl enable $SERVICE_NAME >/dev/null"
+}
 
 # Function to deploy to a single host
 deploy_host() {
@@ -68,19 +105,32 @@ deploy_host() {
   log "Deploying to $host ($ip) as release $VERSION"
 
   # Create remote release directory
-  ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "$target" "mkdir -p \"$remote_release\""
+  if $DRY_RUN; then
+    log "[dry-run] Would create $remote_release on $host"
+  else
+    ssh "${SSH_OPTS[@]}" "$target" "sudo mkdir -p \"$remote_release/src/pi\" \"$remote_release/src/camera-calibration\" && sudo chown -R \"$REMOTE_USER:$REMOTE_USER\" \"$REMOTE_BASE\""
+  fi
 
   # Rsync source to remote release directory
-  rsync $RSYNC_OPTS "$LOCAL_SRC" "$target:$remote_release/"
+  rsync "${RSYNC_OPTS[@]}" "$LOCAL_SRC" "$target:$remote_release/src/pi/"
+  rsync "${RSYNC_OPTS[@]}" "$LOCAL_CALIB_SRC" "$target:$remote_release/src/camera-calibration/"
+
+  if $DRY_RUN; then
+    log "[dry-run] Would switch current link, install $SERVICE_NAME, and restart on $host"
+    return
+  fi
 
   # Atomic symlink switch
-  ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "$target" "ln -sfn \"$remote_release\" \"$CURRENT_LINK\""
+  ssh "${SSH_OPTS[@]}" "$target" "ln -sfn \"$remote_release\" \"$CURRENT_LINK\""
+
+  # Install/update systemd service with the host-specific camera_id.
+  install_service "$target" "$camera_id"
 
   # Restart service
-  ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "$target" "sudo systemctl restart $SERVICE_NAME"
+  ssh "${SSH_OPTS[@]}" "$target" "sudo systemctl restart $SERVICE_NAME"
 
   # Cleanup old releases (keep latest 3)
-  ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "$target" "cd \"$RELEASES_DIR\" && ls -1dt */ | tail -n +4 | xargs -r rm -rf"
+  ssh "${SSH_OPTS[@]}" "$target" "cd \"$RELEASES_DIR\" && ls -1dt */ | tail -n +4 | xargs -r rm -rf"
 
   log "Deployment to $host completed"
 }

@@ -6,6 +6,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import numpy as np
+import pytest
 
 from host.geo import CameraParams
 from host.rigid import MarkerPattern, RigidBodyPose
@@ -124,6 +125,98 @@ def test_tracking_runtime_start_stop_state_transition(monkeypatch) -> None:
     assert status_after_stop["calibration_loaded"] is True
     assert status_after_stop["patterns"] == ["waist"]
     assert status_after_stop["last_stop_summary"]["frames_processed"] == 12
+
+
+def test_tracking_runtime_retries_once_for_address_in_use(monkeypatch) -> None:
+    class _FakePipeline:
+        start_calls = 0
+        stop_calls = 0
+
+        def __init__(self, udp_port=5000, calibration_path=None, patterns=None, **kwargs):
+            self.udp_port = udp_port
+            self.calibration_path = calibration_path
+            self.patterns = patterns or []
+            self._running = False
+            self.geometry = type("_Geometry", (), {"camera_params": {}})()
+
+        def set_pose_callback(self, callback):
+            self._pose_callback = callback
+
+        def start(self, session_name=None):
+            _ = session_name
+            type(self).start_calls += 1
+            if type(self).start_calls == 1:
+                raise OSError(48, "Address already in use")
+            self._running = True
+
+        def stop(self):
+            type(self).stop_calls += 1
+            self._running = False
+            return {"frames_processed": 0, "poses_estimated": 0}
+
+        def get_status(self):
+            return {
+                "running": self._running,
+                "calibration_loaded": True,
+                "frames_processed": 0,
+                "poses_estimated": 0,
+                "receiver": {},
+                "metrics": {},
+                "tracking": {},
+                "sync": {},
+                "uptime_seconds": 0.0,
+            }
+
+        def get_latest_triangulation_snapshot(self):
+            return {
+                "timestamp": 0,
+                "points_3d": [],
+                "reprojection_errors": [],
+                "pair_timestamp_range_us": 0,
+            }
+
+    monkeypatch.setattr("host.tracking_runtime.TrackingPipeline", _FakePipeline)
+    monkeypatch.setattr("host.tracking_runtime.time.sleep", lambda _: None)
+
+    runtime = TrackingRuntime(udp_port=7000)
+    start_status = runtime.start(calibration_path="calibration", patterns=["waist"])
+
+    assert start_status["running"] is True
+    assert _FakePipeline.start_calls == 2
+    assert _FakePipeline.stop_calls == 1
+
+
+def test_tracking_runtime_raises_non_bind_oserror_without_retry(monkeypatch) -> None:
+    class _FakePipeline:
+        start_calls = 0
+
+        def __init__(self, udp_port=5000, calibration_path=None, patterns=None, **kwargs):
+            self.geometry = type("_Geometry", (), {"camera_params": {}})()
+
+        def set_pose_callback(self, callback):
+            self._pose_callback = callback
+
+        def start(self, session_name=None):
+            _ = session_name
+            type(self).start_calls += 1
+            raise OSError(13, "Permission denied")
+
+        def stop(self):
+            return {"frames_processed": 0, "poses_estimated": 0}
+
+        def get_status(self):
+            return {"running": False, "calibration_loaded": False}
+
+        def get_latest_triangulation_snapshot(self):
+            return {"timestamp": 0, "points_3d": [], "reprojection_errors": [], "pair_timestamp_range_us": 0}
+
+    monkeypatch.setattr("host.tracking_runtime.TrackingPipeline", _FakePipeline)
+
+    runtime = TrackingRuntime()
+    with pytest.raises(OSError, match="Permission denied"):
+        runtime.start(calibration_path="calibration", patterns=["waist"])
+
+    assert _FakePipeline.start_calls == 1
 
 
 def test_tracking_runtime_scene_resets_after_stop(monkeypatch) -> None:

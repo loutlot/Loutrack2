@@ -29,8 +29,12 @@ DEFAULT_INTRINSICS_SPATIAL_THRESHOLD_PX = 40.0
 CHARUCO_DETECTION_MIN_CORNERS = 6
 
 
+def _intrinsics_calibrate_script_path() -> Path:
+    return Path(__file__).resolve().parents[2] / "camera-calibration" / "calibrate.py"
+
+
 def _load_intrinsics_calibrate_module() -> Any:
-    script_path = Path(__file__).resolve().parents[2] / "camera-calibration" / "calibrate.py"
+    script_path = _intrinsics_calibrate_script_path()
     spec = importlib.util.spec_from_file_location("_pi_intrinsics_calibrate", script_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"failed_to_load_calibrate_module: {script_path}")

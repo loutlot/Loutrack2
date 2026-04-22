@@ -386,6 +386,41 @@ def test_start_pose_capture_always_applies_static_mask_and_uses_pipeline(
     assert captured["state"] == "RUNNING"
 
 
+def test_start_accepts_past_scheduled_start_without_waiting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=False))
+    server._state = STATE_READY
+    server._static_mask = np.ones((8, 8), dtype=bool)
+    sleeps: list[float] = []
+
+    class _FakePipeline:
+        def set_mask(self, mask):
+            pass
+
+        def set_state_label(self, state):
+            pass
+
+        def start_stream(self, mode):
+            pass
+
+        def stop_stream(self):
+            pass
+
+    monkeypatch.setattr(server, "_ensure_pipeline_started", lambda: _FakePipeline())
+    monkeypatch.setattr("control_server.time.sleep", lambda value: sleeps.append(float(value)))
+    response = server._dispatch_start(
+        "req-1",
+        "pi-cam-01",
+        {"mode": "pose_capture", "start_at_us": 1},
+    )
+
+    assert response["ack"] is True
+    assert response["result"]["scheduled_start_at_us"] == 1
+    assert response["result"]["scheduled_start_late_us"] >= 0
+    assert sleeps == []
+
+
 def test_handle_stop_returns_ready_and_keeps_mask(monkeypatch: pytest.MonkeyPatch) -> None:
     server = ControlServer(ControlServerConfig(camera_id="pi-cam-01", debug_preview=False))
     server._state = "RUNNING"

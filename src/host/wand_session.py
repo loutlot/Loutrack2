@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from . import control as control_module
+from .scheduled_start import epoch_us, scheduled_start_kwargs
 from calibration.targets.wand import (
     WAND_MARKER_DIAMETER_MM,
     WAND_NAME,
@@ -123,8 +125,13 @@ class CalibrationSession:
     def _broadcast(self, targets: Iterable[CameraTarget], fn_name: str, **kwargs: Any) -> Dict[str, Dict[str, Any]]:
         fn = getattr(self.control, fn_name)
         timeout = self.mask_timeout_s if fn_name == "mask_start" else self.timeout_s
+        if fn_name == "start" and kwargs.get("start_at_us") is not None:
+            lead_s = max(0.0, (int(kwargs["start_at_us"]) - epoch_us()) / 1_000_000.0)
+            timeout = max(timeout, lead_s + 2.0)
+        target_list = list(targets)
         results: Dict[str, Dict[str, Any]] = {}
-        for target in targets:
+
+        def send_one(target: CameraTarget) -> tuple[str, Dict[str, Any]]:
             try:
                 resp = fn(
                     target.ip,
@@ -135,7 +142,19 @@ class CalibrationSession:
                 )
             except Exception as exc:
                 resp = {"ack": False, "error": str(exc)}
-            results[target.camera_id] = resp
+            return target.camera_id, resp
+
+        if fn_name == "start" and kwargs.get("start_at_us") is not None and len(target_list) > 1:
+            with ThreadPoolExecutor(max_workers=len(target_list)) as executor:
+                futures = [executor.submit(send_one, target) for target in target_list]
+                for future in as_completed(futures):
+                    camera_id, resp = future.result()
+                    results[camera_id] = resp
+            return results
+
+        for target in target_list:
+            camera_id, resp = send_one(target)
+            results[camera_id] = resp
         return results
 
     def run_session(self, config: CalibrationSessionConfig) -> Dict[str, Any]:
@@ -182,7 +201,8 @@ class CalibrationSession:
                 raise RuntimeError("mask_start failed on one or more cameras")
 
         start_mode = config.capture_kind if config.capture_kind else "pose_capture"
-        start_resp = self._broadcast(targets, "start", mode=start_mode)
+        start_kwargs = scheduled_start_kwargs(start_mode)
+        start_resp = self._broadcast(targets, "start", **start_kwargs)
         record("start", start_resp)
         if not self._all_acked(start_resp):
             stop_resp = self._broadcast(targets, "stop")
@@ -210,6 +230,7 @@ class CalibrationSession:
                 "mask_params": dict(config.mask_params or {}),
                 "mask_retry": config.mask_retry,
                 "capture_kind": start_mode,
+                "scheduled_start_at_us": start_kwargs["start_at_us"],
             },
             "wand": {
                 "name": WAND_NAME,

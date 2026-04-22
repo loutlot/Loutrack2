@@ -255,7 +255,8 @@ print(status["recommendation"])
 
 ### wand_session.py - calibration収録オーケストレーション
 
-Host主導で `ping -> set_exposure/set_gain -> mask_start -> start(mode=pose_capture|wand_metric_capture) -> stop` を実行。
+Host主導で `ping -> set_exposure/set_gain -> mask_start -> start(mode=pose_capture|wand_metric_capture, start_at_us=<PTP epoch us>) -> stop` を実行。
+`start_at_us` 付きの `start` は約 1 秒先にスケジュールされ、対象 Pi へ並列送信されるため、PTP lock 済みの複数 Pi が同じ目標時刻で UDP stream を開始できる。
 `hosts.ini` と `UDPReceiver.get_camera_addresses()` をマージして対象カメラを確定。
 
 ```python
@@ -279,7 +280,7 @@ print(result["session_id"])
 
 ### loutrack_gui.py - 映像なし Web GUI（新正規入口）
 
-同期スライダー（exposure/gain）と `ping` / `mask_start` / `pose_capture` / `wand_metric_capture` / `Generate Extrinsics` をブラウザから操作する最小 GUI。fps は 120 固定で、pair window は最大 `4166us` に制限されます。
+同期スライダー（exposure/gain）と `ping` / `mask_start` / `pose_capture` / `wand_metric_capture` / `Generate Extrinsics` をブラウザから操作する最小 GUI。fps は 120 固定で、pair window は最大 `4166us` に制限されます。tracking と extrinsics capture の stream start は PTP/epoch `start_at_us` による countdown start を使います。
 `UDPReceiver` を起動して受動発見し、`CalibrationSession` の inventory merge をそのまま利用する。
 
 ```bash

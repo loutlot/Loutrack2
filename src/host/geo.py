@@ -9,6 +9,8 @@ Provides functionality to:
 """
 
 import json
+import re
+import warnings
 import numpy as np
 import cv2 as cv
 from pathlib import Path
@@ -16,6 +18,11 @@ from typing import Optional, Dict, Any, List, Tuple
 from dataclasses import dataclass, field
 from scipy.optimize import linear_sum_assignment
 from itertools import combinations
+
+
+_CANONICAL_INTRINSICS_FILENAME_RE = re.compile(
+    r"^calibration_intrinsics_v1_(?P<camera_id>[A-Za-z0-9][A-Za-z0-9_\-]*)\.json$"
+)
 
 
 @dataclass
@@ -27,6 +34,7 @@ class CameraParams:
     rotation: np.ndarray  # 3x3 rotation matrix (extrinsic)
     translation: np.ndarray  # 3x1 translation vector (extrinsic)
     resolution: Tuple[int, int] = (1280, 960)  # width, height
+    focal_scale: float = 1.0
 
     @property
     def fx(self) -> float:
@@ -61,19 +69,51 @@ class CalibrationLoader:
 
     @staticmethod
     def load_intrinsics(filepath: str) -> Dict[str, Dict[str, Any]]:
-        """Load intrinsic calibration from loutrack2 schema format."""
+        """Load intrinsic calibration from loutrack2 schema format.
+
+        In directory mode only files whose name matches the canonical
+        `calibration_intrinsics_v1_<camera_id>.json` pattern are read,
+        and the camera_id embedded in the filename must match the JSON
+        content. Non-canonical files (backups like `*.json copy.json`,
+        scratch files, stale duplicates with the same content camera_id)
+        are skipped so the loader is deterministic regardless of filesystem
+        iteration order.
+        """
         path = Path(filepath)
 
         if path.is_dir():
-            calibrations = {}
-            for f in path.glob("*.json"):
+            calibrations: Dict[str, Dict[str, Any]] = {}
+            for f in sorted(path.glob("*.json")):
+                match = _CANONICAL_INTRINSICS_FILENAME_RE.match(f.name)
                 try:
                     with open(f, "r", encoding="utf-8") as handle:
                         data = json.load(handle)
-                    if "camera_id" in data and "camera_matrix" in data:
-                        calibrations[data["camera_id"]] = data
                 except Exception:
                     continue
+                if not isinstance(data, dict):
+                    continue
+                if "camera_id" not in data or "camera_matrix" not in data:
+                    continue
+                if match is None:
+                    warnings.warn(
+                        f"ignoring non-canonical intrinsics file {f.name!r}: "
+                        f"expected name 'calibration_intrinsics_v1_<camera_id>.json'",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+                    continue
+                filename_camera_id = match.group("camera_id")
+                content_camera_id = str(data["camera_id"])
+                if filename_camera_id != content_camera_id:
+                    warnings.warn(
+                        f"ignoring intrinsics file {f.name!r}: filename camera_id "
+                        f"{filename_camera_id!r} does not match content camera_id "
+                        f"{content_camera_id!r}",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+                    continue
+                calibrations[content_camera_id] = data
             return calibrations
 
         with open(path, "r", encoding="utf-8") as f:
@@ -233,14 +273,40 @@ class CalibrationLoader:
                 continue
             if camera_id not in camera_params:
                 continue
+            focal_scale = CalibrationLoader._validate_focal_scale(
+                extrinsic.get("focal_scale", 1.0),
+                str(camera_id),
+            )
             rotation = np.array(
                 extrinsic.get("R", np.eye(3)), dtype=np.float64
             )
             translation = np.array(
                 extrinsic.get("t", [0.0, 0.0, 0.0]), dtype=np.float64
             )
-            camera_params[camera_id].rotation = rotation.reshape(3, 3)
-            camera_params[camera_id].translation = translation.reshape(3)
+            camera = camera_params[camera_id]
+            previous_scale = CalibrationLoader._validate_focal_scale(
+                getattr(camera, "focal_scale", 1.0),
+                str(camera_id),
+            )
+            camera.intrinsic_matrix[0, 0] = (
+                float(camera.intrinsic_matrix[0, 0]) / previous_scale * focal_scale
+            )
+            camera.intrinsic_matrix[1, 1] = (
+                float(camera.intrinsic_matrix[1, 1]) / previous_scale * focal_scale
+            )
+            camera.focal_scale = focal_scale
+            camera.rotation = rotation.reshape(3, 3)
+            camera.translation = translation.reshape(3)
+
+    @staticmethod
+    def _validate_focal_scale(value: Any, camera_id: str) -> float:
+        try:
+            focal_scale = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid focal_scale for {camera_id}: {value!r}") from exc
+        if not np.isfinite(focal_scale) or focal_scale <= 0.0:
+            raise ValueError(f"invalid focal_scale for {camera_id}: {value!r}")
+        return focal_scale
 
     @staticmethod
     def load_from_reference_format(filepath: str) -> Dict[str, "CameraParams"]:
@@ -1195,18 +1261,34 @@ class GeometryPipeline:
 
     def get_diagnostics(self) -> Dict[str, Any]:
         """Return geometry diagnostics for status/log snapshots."""
+        camera_diagnostics = {
+            camera_id: {
+                "focal_scale": float(camera.focal_scale),
+                "fx": float(camera.fx),
+                "fy": float(camera.fy),
+                "cx": float(camera.cx),
+                "cy": float(camera.cy),
+                "resolution": {
+                    "width": int(camera.resolution[0]),
+                    "height": int(camera.resolution[1]),
+                },
+            }
+            for camera_id, camera in self.camera_params.items()
+        }
         if self.triangulator is None:
             return {
                 "assignment": _empty_assignment_diagnostics(),
                 "quality": Triangulator._empty_quality_metrics(),
                 "epipolar_threshold_px": float(self.epipolar_threshold_px),
                 "calibration_validation": dict(self.calibration_validation),
+                "cameras": camera_diagnostics,
             }
         return {
             "assignment": self.triangulator.last_assignment_diagnostics,
             "quality": self.triangulator.last_quality_metrics,
             "epipolar_threshold_px": float(self.epipolar_threshold_px),
             "calibration_validation": dict(self.calibration_validation),
+            "cameras": camera_diagnostics,
         }
 
     def get_camera_ids(self) -> List[str]:

@@ -7,6 +7,8 @@ import sys
 import time
 import threading
 import importlib.util
+import urllib.error
+import urllib.parse
 import urllib.request
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -73,7 +75,7 @@ DEFAULT_POSE_LOG_PATH = Path("logs") / "extrinsics_pose_capture.jsonl"
 DEFAULT_WAND_METRIC_LOG_PATH = Path("logs") / "extrinsics_wand_metric.jsonl"
 DEFAULT_EXTRINSICS_OUTPUT_PATH = Path("calibration") / "extrinsics_pose_v2.json"
 DEFAULT_CAPTURE_LOG_DIR = Path("logs")
-DEFAULT_WAND_METRIC_DURATION_S = 3.0
+DEFAULT_WAND_METRIC_DURATION_S = 1.0
 STATIC_DIR_CANDIDATES = (
     PROJECT_ROOT / "static",
     MODULE_SRC_ROOT / "static",
@@ -121,7 +123,7 @@ class LoutrackGuiState:
     ) -> None:
         self.session = session
         self.receiver = receiver
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self._uses_default_settings_path = settings_path is None
         default_settings_path = DEFAULT_SETTINGS_PATH
         if not default_settings_path.is_absolute():
@@ -171,8 +173,10 @@ class LoutrackGuiState:
         self._tracking_sse_broken_pipes = 0
         self._tracking_sse_write_ms: List[float] = []
         self._tracking_sse_payload_bytes: List[float] = []
+        self._preview_proxy_errors: Dict[str, str] = {}
         self.latest_extrinsics_path: Path | None = None
         self.latest_extrinsics_quality: Dict[str, Any] | None = None
+        self.latest_extrinsics_result: Dict[str, Any] | None = None
         self._restore_latest_extrinsics(self._default_extrinsics_output_path())
         self._intrinsics_host_session: IntrinsicsHostSession | None = None
         self._tracking_service = GuiTrackingService(self)
@@ -488,6 +492,36 @@ class LoutrackGuiState:
         path = self.latest_extrinsics_path
         return bool(path is not None and path.exists() and path.is_file())
 
+    def find_camera_target(self, camera_id: str) -> Any | None:
+        normalized = str(camera_id).strip()
+        if not normalized:
+            return None
+        for target in self.session.discover_targets(None):
+            if str(target.camera_id).strip() == normalized:
+                return target
+        return None
+
+    @staticmethod
+    def get_preview_proxy_path(camera_id: str) -> str:
+        return f"/api/cameras/{urllib.parse.quote(str(camera_id).strip(), safe='')}/mjpeg"
+
+    def record_preview_proxy_result(self, camera_id: str, error: str | None = None) -> None:
+        normalized = str(camera_id).strip()
+        if not normalized:
+            return
+        with self.lock:
+            if error:
+                self._preview_proxy_errors[normalized] = str(error)
+            else:
+                self._preview_proxy_errors.pop(normalized, None)
+
+    def get_preview_proxy_error(self, camera_id: str) -> str | None:
+        normalized = str(camera_id).strip()
+        if not normalized:
+            return None
+        with self.lock:
+            return self._preview_proxy_errors.get(normalized)
+
     @staticmethod
     def _summarize_extrinsics_quality(camera_rows: Any) -> Dict[str, Any]:
         quality_rows: List[Dict[str, Any]] = []
@@ -552,6 +586,58 @@ class LoutrackGuiState:
             }
         else:
             self.latest_extrinsics_quality = {}
+        metric_section = payload.get("metric", {})
+        if not isinstance(metric_section, dict):
+            metric_section = {}
+        world_section = payload.get("world", {})
+        if not isinstance(world_section, dict):
+            world_section = {}
+        pose_rows = payload.get("pose", {}).get("camera_poses", []) if isinstance(payload.get("pose"), dict) else []
+        floor_plane = world_section.get("floor_plane", {})
+        if not isinstance(floor_plane, dict):
+            floor_plane = {}
+        metric_validation = metric_section.get("validation", {})
+        if not isinstance(metric_validation, dict):
+            metric_validation = {}
+        world_validation = world_section.get("validation", {})
+        if not isinstance(world_validation, dict):
+            world_validation = {}
+        self.latest_extrinsics_result = {
+            "ok": True,
+            "status": "restored",
+            "extrinsics_method": payload.get("method"),
+            "camera_order": payload.get("camera_order", []),
+            "camera_count": len(pose_rows) if isinstance(pose_rows, list) else None,
+            "pose_log_path": payload.get("pose_capture_log_path"),
+            "output_path": str(path),
+            "quality": self.latest_extrinsics_quality,
+            "metric_status": metric_section.get("status"),
+            "metric": {
+                "status": metric_section.get("status"),
+                "frame": metric_section.get("frame"),
+                "scale_m_per_unit": metric_section.get("scale_m_per_unit"),
+                "source": metric_section.get("source"),
+                "wand_metric_frames": metric_section.get("wand_metric_frames"),
+                "shape_rms_error_mm": metric_section.get("shape_rms_error_mm"),
+                "wand_face": metric_section.get("wand_face"),
+                "validation": metric_validation,
+            },
+            "world_status": world_section.get("status"),
+            "world": {
+                "status": world_section.get("status"),
+                "frame": world_section.get("frame"),
+                "up_axis": floor_plane.get("axis"),
+                "floor_normal": floor_plane.get("normal"),
+                "source": world_section.get("source"),
+                "origin_world": world_section.get("origin_world"),
+                "aligned_axis_world": world_section.get("aligned_axis_world"),
+                "wand_face": world_section.get("wand_face"),
+                "floor_normal_sign_source": world_section.get("floor_normal_sign_source"),
+                "wand_face_alignment": world_section.get("wand_face_alignment"),
+                "validation": world_validation,
+            },
+            "wand_metric_log_path": payload.get("wand_metric_log_path"),
+        }
 
     @staticmethod
     def _resolve_project_path(raw_path: str, fallback: Path) -> Path:
@@ -577,8 +663,8 @@ class LoutrackGuiState:
             return resolved.parent
         raise ValueError("tracking calibration_path must be a calibration directory or extrinsics file")
 
-    def get_tracking_status(self) -> Dict[str, Any]:
-        return self._tracking_service.get_tracking_status()
+    def get_tracking_status(self, cameras: List[Dict[str, Any]] | None = None) -> Dict[str, Any]:
+        return self._tracking_service.get_tracking_status(cameras=cameras)
 
     def get_tracking_scene(self) -> Dict[str, Any]:
         return self._tracking_service.get_tracking_scene()
@@ -859,7 +945,7 @@ class LoutrackGuiState:
     def get_state(self) -> Dict[str, Any]:
         cameras = self.refresh_targets()
         bundle = self._load_settings_bundle()
-        tracking_status = self.get_tracking_status()
+        tracking_status = self.get_tracking_status(cameras=cameras)
         return self._state_presenter.build(cameras=cameras, bundle=bundle, tracking_status=tracking_status)
 
     def apply_config(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -979,11 +1065,18 @@ class LoutrackGuiState:
 
 class LoutrackGuiHandler(BaseHTTPRequestHandler):
     state: LoutrackGuiState
+    _MJPEG_PROXY_TIMEOUT_S = 2.0
+    _MJPEG_PROXY_CHUNK_BYTES = 64 * 1024
 
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
         if path.startswith("/static/"):
             self._serve_static(path[len("/static/"):])
+            return
+        if path.startswith("/api/cameras/") and path.endswith("/mjpeg"):
+            camera_token = path[len("/api/cameras/"):-len("/mjpeg")]
+            camera_id = urllib.parse.unquote(camera_token.strip("/"))
+            self._proxy_camera_mjpeg(camera_id)
             return
         if path in ("/", "/index.html"):
             # Prefer the on-disk static file so edits take effect without restart.
@@ -1107,6 +1200,62 @@ class LoutrackGuiHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _send_text(self, body: str, status: HTTPStatus = HTTPStatus.OK) -> None:
+        data = body.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _proxy_camera_mjpeg(self, camera_id: str) -> None:
+        normalized = str(camera_id).strip()
+        if not normalized:
+            self._send_text("camera_id is required", status=HTTPStatus.BAD_REQUEST)
+            return
+        target = self.state.find_camera_target(normalized)
+        if target is None:
+            self.state.record_preview_proxy_result(normalized, "camera_not_found")
+            self._send_text(f"unknown camera_id: {normalized}", status=HTTPStatus.NOT_FOUND)
+            return
+        upstream_url = f"http://{target.ip}:8555/mjpeg"
+        request = urllib.request.Request(upstream_url, headers={"User-Agent": "LoutrackGUI/1.0"})
+        try:
+            with urllib.request.urlopen(request, timeout=self._MJPEG_PROXY_TIMEOUT_S) as response:
+                content_type = str(response.headers.get("Content-Type", "multipart/x-mixed-replace; boundary=frame"))
+                self.state.record_preview_proxy_result(normalized, None)
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Accel-Buffering", "no")
+                self.end_headers()
+                while True:
+                    chunk = response.read(self._MJPEG_PROXY_CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    self.wfile.flush()
+        except urllib.error.HTTPError as exc:
+            self.state.record_preview_proxy_result(normalized, f"upstream_http_{exc.code}")
+            self._send_text(
+                f"preview upstream failed for {normalized}: http_{exc.code}",
+                status=HTTPStatus.BAD_GATEWAY,
+            )
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            reason = getattr(exc, "reason", exc)
+            self.state.record_preview_proxy_result(normalized, f"upstream_unreachable: {reason}")
+            self._send_text(
+                f"preview upstream unreachable for {normalized}: {reason}",
+                status=HTTPStatus.BAD_GATEWAY,
+            )
+
+    # Cap SSE scene emission at ~60 Hz so the client renderer (also 60 Hz via
+    # requestAnimationFrame) isn't overwhelmed by the pipeline's ~100 Hz pose
+    # callback. Intermediate scene updates are coalesced: the latest snapshot
+    # is always read when the throttle sleep completes.
+    _TRACKING_SSE_MIN_EMIT_INTERVAL_S: float = 1.0 / 60.0
+
     def _send_tracking_stream(self) -> None:
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -1115,6 +1264,7 @@ class LoutrackGuiHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
         last_sequence: int | None = None
+        last_emit_monotonic: float = 0.0
         self.state.tracking_sse_client_opened()
         broken_pipe = False
         try:
@@ -1132,6 +1282,16 @@ class LoutrackGuiHandler(BaseHTTPRequestHandler):
                     )
                     time.sleep(15.0)
                     continue
+
+                if last_emit_monotonic > 0.0:
+                    elapsed = time.monotonic() - last_emit_monotonic
+                    if elapsed < self._TRACKING_SSE_MIN_EMIT_INTERVAL_S:
+                        time.sleep(self._TRACKING_SSE_MIN_EMIT_INTERVAL_S - elapsed)
+                        scene = self.state.get_tracking_scene()
+                        sequence = int(scene.get("sequence", 0))
+                        if last_sequence is not None and sequence <= last_sequence:
+                            last_sequence = sequence
+                            continue
 
                 scene_payload = dict(scene)
                 scene_payload["sse_emit_realtime_us"] = int(time.time() * 1_000_000)
@@ -1155,6 +1315,7 @@ class LoutrackGuiHandler(BaseHTTPRequestHandler):
                     payload_bytes=len(message),
                 )
                 last_sequence = sequence
+                last_emit_monotonic = time.monotonic()
         except (BrokenPipeError, ConnectionResetError, TimeoutError):
             broken_pipe = True
             return

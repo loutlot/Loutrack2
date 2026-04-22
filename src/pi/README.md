@@ -68,7 +68,7 @@ PYTHONPATH=src .venv/bin/python -m host.control \
 
 描画 ON 時は OpenCV preview と同じ blob/mask/text overlay を MJPEG へ反映し、必要なら Charuco overlay も重畳できます。
 
-`start` は `capture` / `pose_capture` / `wand_metric_capture` の全 mode で static mask を必須にします。つまり `Build Mask` 実行後に `READY` へ入っていることが開始条件です。mask は `mask_start` 中の生成処理を除き常時適用されます。
+`start` は `capture` / `pose_capture` / `wand_metric_capture` の全 mode で static mask を必須にします。つまり `Build Mask` 実行後に `READY` へ入っていることが開始条件です。mask は `mask_start` 中の生成処理を除き常時適用されます。任意の `start_at_us` パラメータを渡すと、Pi は PTP 同期済みの epoch microsecond clock でその時刻まで待ってから stream を開始します。
 
 `pose_capture` は full detection を維持し、UDP payload でも full blobs をそのまま送ります。`blob_count` と `quality` は additive metadata として付与し、single-blob row の採否は host 側が `blob_count` と `len(blobs)` を見て判断します。
 

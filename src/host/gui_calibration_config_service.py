@@ -26,7 +26,6 @@ class GuiCalibrationConfigService:
                 "blob_max_diameter_px",
                 "mask_threshold",
                 "mask_seconds",
-                "wand_metric_seconds",
             )
             if key in payload
         }
