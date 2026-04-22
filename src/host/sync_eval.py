@@ -43,8 +43,8 @@ class _WindowState:
 class SyncEvaluator:
     def __init__(
         self,
-        tolerance_windows_us: Iterable[int] = (1000, 2000, 5000, 10000),
-        target_range_us: Tuple[int, int] = (2000, 5000),
+        tolerance_windows_us: Iterable[int] = (500, 1000, 2000, 4166),
+        target_range_us: Tuple[int, int] = (1000, 4166),
         coverage_target: float = 0.95,
         history_size: int = 2000,
     ):

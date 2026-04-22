@@ -46,7 +46,7 @@ def test_settings_migration_from_old_to_new_and_delete_old(
     new_settings = tmp_path / "loutrack_gui_settings.json"
     old_settings = tmp_path / "wand_gui_settings.json"
     old_settings.write_text(
-        json.dumps({"exposure_us": 31000, "gain": 3.0, "fps": 48}),
+        json.dumps({"exposure_us": 8000, "gain": 3.0, "fps": 48}),
         encoding="utf-8",
     )
     monkeypatch.setattr("host.loutrack_gui.DEFAULT_SETTINGS_PATH", new_settings)
@@ -56,8 +56,11 @@ def test_settings_migration_from_old_to_new_and_delete_old(
         session=_FakeSession(),
         receiver=_FakeReceiver(),
     )
-    assert state.config.exposure_us == 31000
-    assert state.config.fps == 48
+    assert state.config.exposure_us == 8000
+    assert state.config.fps == 120
+    settings = state.get_settings()
+    assert "fps" not in settings["calibration"]["draft"]
+    assert "fps" not in settings["calibration"]["committed"]
     assert new_settings.exists()
     assert not old_settings.exists()
 
@@ -68,8 +71,8 @@ def test_settings_migration_prefers_new_and_deletes_old(
 ) -> None:
     new_settings = tmp_path / "loutrack_gui_settings.json"
     old_settings = tmp_path / "wand_gui_settings.json"
-    new_settings.write_text(json.dumps({"exposure_us": 12000, "fps": 56}), encoding="utf-8")
-    old_settings.write_text(json.dumps({"exposure_us": 31000, "fps": 48}), encoding="utf-8")
+    new_settings.write_text(json.dumps({"exposure_us": 8000, "fps": 56}), encoding="utf-8")
+    old_settings.write_text(json.dumps({"exposure_us": 7000, "fps": 48}), encoding="utf-8")
     monkeypatch.setattr("host.loutrack_gui.DEFAULT_SETTINGS_PATH", new_settings)
     monkeypatch.setattr("host.loutrack_gui.OLD_SETTINGS_PATH", old_settings)
 
@@ -77,9 +80,12 @@ def test_settings_migration_prefers_new_and_deletes_old(
         session=_FakeSession(),
         receiver=_FakeReceiver(),
     )
-    assert state.config.exposure_us == 12000
-    assert state.config.fps == 56
+    assert state.config.exposure_us == 8000
+    assert state.config.fps == 120
     assert state.config.focus == 0.325
+    settings = state.get_settings()
+    assert "fps" not in settings["calibration"]["draft"]
+    assert "fps" not in settings["calibration"]["committed"]
     assert not old_settings.exists()
 
 
@@ -99,8 +105,11 @@ def test_settings_migration_invalid_old_creates_backup_and_defaults(
         receiver=_FakeReceiver(),
     )
     assert state.config.exposure_us == 5000
-    assert state.config.fps == 56
+    assert state.config.fps == 120
     assert state.config.focus == 0.325
+    settings = state.get_settings()
+    assert "fps" not in settings["calibration"]["draft"]
+    assert "fps" not in settings["calibration"]["committed"]
     assert new_settings.exists()
     assert backup.exists()
     assert not old_settings.exists()

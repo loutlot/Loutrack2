@@ -14,11 +14,11 @@ if __package__ in (None, ""):
         sys.path.insert(0, str(MODULE_SRC_ROOT))
     from host.logger import FrameLogger
     from host.receiver import UDPReceiver
-    from host.wand_session import CalibrationSession, CalibrationSessionConfig
+    from host.wand_session import CalibrationSession, CalibrationSessionConfig, FIXED_FPS
 else:
     from .logger import FrameLogger
     from .receiver import UDPReceiver
-    from .wand_session import CalibrationSession, CalibrationSessionConfig
+    from .wand_session import CalibrationSession, CalibrationSessionConfig, FIXED_FPS
 
 
 DEFAULT_OUTPUT = Path("logs") / "extrinsics_wand_metric.jsonl"
@@ -32,7 +32,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--duration-s", type=float, default=3.0, help="Capture duration in seconds")
     parser.add_argument("--exposure-us", type=int, default=8000)
     parser.add_argument("--gain", type=float, default=6.0)
-    parser.add_argument("--fps", type=int, default=60)
     parser.add_argument("--threshold", type=int, default=131)
     parser.add_argument("--blob-min-diameter-px", type=float, default=2.0)
     parser.add_argument("--blob-max-diameter-px", type=float, default=42.5)
@@ -72,7 +71,7 @@ def main() -> int:
         config = CalibrationSessionConfig(
             exposure_us=args.exposure_us,
             gain=args.gain,
-            fps=args.fps,
+            fps=FIXED_FPS,
             threshold=args.threshold,
             blob_min_diameter_px=args.blob_min_diameter_px,
             blob_max_diameter_px=args.blob_max_diameter_px,
@@ -93,7 +92,6 @@ def main() -> int:
         for step, kwargs in (
             ("set_exposure", {"value": config.exposure_us}),
             ("set_gain", {"value": config.gain}),
-            ("set_fps", {"value": config.fps}),
             ("set_threshold", {"value": config.threshold}),
             ("set_blob_diameter", {"min_px": config.blob_min_diameter_px, "max_px": config.blob_max_diameter_px}),
             ("mask_start", {"threshold": args.mask_threshold, "seconds": args.mask_seconds}),

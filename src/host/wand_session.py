@@ -18,6 +18,9 @@ from calibration.targets.wand import (
 
 FIXED_FOCUS = 0.325
 FIXED_CIRCULARITY_MIN = 0.2
+FIXED_FPS = 120
+MAX_EXPOSURE_US = 8000
+FIXED_PAIR_WINDOW_US = 4166
 
 
 @dataclass(frozen=True)
@@ -31,7 +34,7 @@ class CameraTarget:
 class CalibrationSessionConfig:
     exposure_us: int
     gain: float
-    fps: int
+    fps: int = FIXED_FPS
     focus: float = FIXED_FOCUS
     threshold: int = 200
     blob_min_diameter_px: Optional[float] = None
@@ -155,9 +158,6 @@ class CalibrationSession:
         gain_resp = self._broadcast(targets, "set_gain", value=config.gain)
         record("set_gain", gain_resp)
 
-        fps_resp = self._broadcast(targets, "set_fps", value=config.fps)
-        record("set_fps", fps_resp)
-
         threshold_resp = self._broadcast(targets, "set_threshold", value=config.threshold)
         record("set_threshold", threshold_resp)
 
@@ -201,7 +201,6 @@ class CalibrationSession:
             "config": {
                 "exposure_us": config.exposure_us,
                 "gain": config.gain,
-                "fps": config.fps,
                 "focus": fixed_focus,
                 "threshold": config.threshold,
                 "blob_min_diameter_px": config.blob_min_diameter_px,

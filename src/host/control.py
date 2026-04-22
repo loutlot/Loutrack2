@@ -116,10 +116,6 @@ def set_gain(ip: str, port: int, camera_id: str, value: float, request_id: Optio
     return _send(ip, port, camera_id, "set_gain", {"value": float(value)}, request_id=request_id, timeout=timeout)
 
 
-def set_fps(ip: str, port: int, camera_id: str, value: int, request_id: Optional[str] = None, timeout: float = 5.0) -> Dict[str, Any]:
-    return _send(ip, port, camera_id, "set_fps", {"value": int(value)}, request_id=request_id, timeout=timeout)
-
-
 def set_threshold(ip: str, port: int, camera_id: str, value: int, request_id: Optional[str] = None, timeout: float = 5.0) -> Dict[str, Any]:
     return _send(ip, port, camera_id, "set_threshold", {"value": int(value)}, request_id=request_id, timeout=timeout)
 
@@ -330,9 +326,6 @@ def build_parser() -> argparse.ArgumentParser:
     gain_p = sub.add_parser("set_gain", help="Set sensor gain")
     gain_p.add_argument("--value", type=float, required=True, help="Gain value to set")
 
-    fps_p = sub.add_parser("set_fps", help="Set frames per second")
-    fps_p.add_argument("--value", type=int, required=True, help="FPS value to set")
-
     threshold_p = sub.add_parser("set_threshold", help="Set blob threshold brightness")
     threshold_p.add_argument("--value", type=int, required=True, help="Threshold value (0-255)")
 
@@ -402,8 +395,6 @@ def _build_cli_and_run() -> None:
             resp = set_exposure(ip, port, camera_id=camera_id, value=args.value, request_id=req_id)
         elif args.cmd == "set_gain":
             resp = set_gain(ip, port, camera_id=camera_id, value=args.value, request_id=req_id)
-        elif args.cmd == "set_fps":
-            resp = set_fps(ip, port, camera_id=camera_id, value=args.value, request_id=req_id)
         elif args.cmd == "set_threshold":
             resp = set_threshold(ip, port, camera_id=camera_id, value=args.value, request_id=req_id)
         elif args.cmd == "set_blob_diameter":

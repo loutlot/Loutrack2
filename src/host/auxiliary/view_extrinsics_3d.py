@@ -316,7 +316,7 @@ def main() -> None:
         action="store_true",
         help="Overlay triangulated wand metric samples when available",
     )
-    parser.add_argument("--wand-pair-window-us", type=int, default=8000)
+    parser.add_argument("--wand-pair-window-us", type=int, default=4166)
     parser.add_argument(
         "--wand-skeleton-step",
         type=int,

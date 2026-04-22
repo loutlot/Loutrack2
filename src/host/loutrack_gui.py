@@ -27,6 +27,7 @@ if __package__ in (None, ""):
         CalibrationSession,
         CalibrationSessionConfig,
         FIXED_CIRCULARITY_MIN,
+        FIXED_FPS,
         FIXED_FOCUS,
     )
     from host.extrinsics_methods import ExtrinsicsMethodRegistry, build_default_extrinsics_registry
@@ -49,6 +50,7 @@ else:
         CalibrationSession,
         CalibrationSessionConfig,
         FIXED_CIRCULARITY_MIN,
+        FIXED_FPS,
         FIXED_FOCUS,
     )
     from .extrinsics_methods import ExtrinsicsMethodRegistry, build_default_extrinsics_registry
@@ -243,7 +245,7 @@ class LoutrackGuiState:
         return CalibrationSessionConfig(
             exposure_us=5000,
             gain=8.0,
-            fps=56,
+            fps=FIXED_FPS,
             focus=FIXED_FOCUS,
             threshold=200,
             blob_min_diameter_px=None,
@@ -404,7 +406,6 @@ class LoutrackGuiState:
         return {
             "exposure_us": self.config.exposure_us,
             "gain": self.config.gain,
-            "fps": self.config.fps,
             "focus": self.config.focus,
             "threshold": self.config.threshold,
             "blob_min_diameter_px": self.config.blob_min_diameter_px,
@@ -427,7 +428,7 @@ class LoutrackGuiState:
         return CalibrationSessionConfig(
             exposure_us=int(payload.get("exposure_us", source.exposure_us)),
             gain=float(payload.get("gain", source.gain)),
-            fps=int(payload.get("fps", source.fps)),
+            fps=FIXED_FPS,
             focus=FIXED_FOCUS,
             threshold=int(payload.get("threshold", source.threshold)),
             blob_min_diameter_px=payload.get("blob_min_diameter_px", source.blob_min_diameter_px),
@@ -468,7 +469,6 @@ class LoutrackGuiState:
         return {
             "set_exposure": self.session._broadcast(targets, "set_exposure", value=self.config.exposure_us),
             "set_gain": self.session._broadcast(targets, "set_gain", value=self.config.gain),
-            "set_fps": self.session._broadcast(targets, "set_fps", value=self.config.fps),
             "set_threshold": self.session._broadcast(targets, "set_threshold", value=self.config.threshold),
             "set_blob_diameter": self.session._broadcast(
                 targets,

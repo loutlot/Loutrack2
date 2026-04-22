@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from host.pipeline import TrackingPipeline
 from host.receiver import Frame, PairedFrames
 from host.rigid import RigidBodyPose
+from host.wand_session import FIXED_PAIR_WINDOW_US
 
 
 def _frame(camera_id: str, timestamp: int, received_at: float) -> Frame:
@@ -100,8 +101,10 @@ def test_tracking_pipeline_reports_stage_and_logger_diagnostics(tmp_path: Path) 
     )
 
 
-def test_tracking_pipeline_uses_ten_ms_timestamp_pairing_window() -> None:
+def test_tracking_pipeline_uses_half_frame_timestamp_pairing_window() -> None:
     pipeline = TrackingPipeline(enable_logging=False)
 
-    assert pipeline.frame_processor.pairer.timestamp_tolerance_us == 10_000
+    assert pipeline.frame_processor.pairer.timestamp_tolerance_us == FIXED_PAIR_WINDOW_US
     assert pipeline.frame_processor.pairer.frame_index_fallback is False
+    assert tuple(pipeline.sync_evaluator.tolerance_windows_us) == (500, 1000, 2000, FIXED_PAIR_WINDOW_US)
+    assert pipeline.sync_evaluator.target_range_us == (1000, FIXED_PAIR_WINDOW_US)

@@ -40,9 +40,6 @@ class _FakeControl:
     def set_gain(self, ip, port, camera_id, value, timeout=2.0):
         return self._resp("set_gain", camera_id, timeout)
 
-    def set_fps(self, ip, port, camera_id, value, timeout=2.0):
-        return self._resp("set_fps", camera_id, timeout)
-
     def set_threshold(self, ip, port, camera_id, value, timeout=2.0):
         return self._resp("set_threshold", camera_id, timeout)
 
@@ -94,7 +91,6 @@ def test_run_session_control_order(monkeypatch, tmp_path: Path) -> None:
     config = CalibrationSessionConfig(
         exposure_us=12000,
         gain=8.0,
-        fps=56,
         focus=9.9,
         threshold=200,
         blob_min_diameter_px=2.0,
@@ -109,7 +105,6 @@ def test_run_session_control_order(monkeypatch, tmp_path: Path) -> None:
     assert [step["step"] for step in result["ack_history"]] == [
         "set_exposure",
         "set_gain",
-        "set_fps",
         "set_threshold",
         "set_blob_diameter",
         "mask_start",

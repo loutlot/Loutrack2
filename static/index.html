@@ -695,15 +695,11 @@
               <div class="slider-grid">
                 <div class="slider-label">
                   <span>Exposure <span class="slider-value" id="exposureValue"></span> us</span>
-                  <input id="exposure" type="range" min="100" max="30000" step="100" value="5000">
+                  <input id="exposure" type="range" min="100" max="8000" step="100" value="5000">
                 </div>
                 <div class="slider-label">
                   <span>Gain <span class="slider-value" id="gainValue"></span></span>
                   <input id="gain" type="range" min="1" max="16" step="0.1" value="8">
-                </div>
-                <div class="slider-label">
-                  <span>FPS <span class="slider-value" id="fpsValue"></span></span>
-                  <input id="fps" type="range" min="15" max="120" step="1" value="56">
                 </div>
                 <div class="slider-label">
                   <span>Threshold <span class="slider-value" id="thresholdValue"></span></span>
@@ -856,9 +852,9 @@
                   <div id="latestGenerateWandLogHint" class="runtime-hint">Latest metric capture: none yet</div>
                 </label>
                 <label>Output Path<input id="outputPath" type="text" value="calibration/extrinsics_pose_v2.json"></label>
-                <label>Pair Window (us)<input id="pairWindowUs" type="number" min="1" step="100" value="2000"></label>
+                <label>Pair Window (us)<input id="pairWindowUs" type="number" min="1" max="4166" step="1" value="4166"></label>
                 <label>Min Pairs<input id="minPairs" type="number" min="1" step="1" value="8"></label>
-                <label>Wand Pair Window (us)<input id="wandPairWindowUs" type="number" min="1" step="100" value="8000"></label>
+                <label>Wand Pair Window (us)<input id="wandPairWindowUs" type="number" min="1" max="4166" step="1" value="4166"></label>
                 <label>Wand Face Up
                   <select id="wandFace">
                     <option value="front_up">Front side up (+X x +Y)</option>
@@ -969,13 +965,10 @@
               <div class="panel-title">Camera Controls</div>
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px 12px;margin-top:6px">
                 <label><span class="int-slider-title">Exposure <span class="hint" id="intExposureValue">6400</span> µs</span>
-                  <input id="intExposure" type="range" min="100" max="30000" step="100" value="6400">
+                  <input id="intExposure" type="range" min="100" max="8000" step="100" value="6400">
                 </label>
                 <label><span class="int-slider-title">Gain <span class="hint" id="intGainValue">6.0</span></span>
                   <input id="intGain" type="range" min="1" max="16" step="0.1" value="6.0">
-                </label>
-                <label><span class="int-slider-title">FPS <span class="hint" id="intFpsValue">60</span></span>
-                  <input id="intFps" type="range" min="15" max="120" step="1" value="60">
                 </label>
               </div>
               <div class="btn-row" style="margin-top:8px">
@@ -1014,13 +1007,14 @@
       THREE = await import("/static/vendor/three.module.min.js");
       return THREE;
     }
-    const sliders = ["exposure", "gain", "fps", "threshold", "blobMin", "blobMax", "maskThreshold", "maskSeconds"];
+    const MAX_EXPOSURE_US = 8000;
+    const FIXED_PAIR_WINDOW_US = 4166;
+    const sliders = ["exposure", "gain", "threshold", "blobMin", "blobMax", "maskThreshold", "maskSeconds"];
     const mainControlInputIds = [...sliders, "wandMetricSeconds"];
-    const intrinsicsControlInputIds = ["intExposure", "intGain", "intFps"];
+    const intrinsicsControlInputIds = ["intExposure", "intGain"];
     const CONTROL_DEFAULTS = {
       exposure_us: 5000,
       gain: 8.0,
-      fps: 56,
       focus: 0.325,
       threshold: 200,
       circularity_min: 0.2,
@@ -1033,7 +1027,6 @@
     const INPUT_TO_CONTROL_KEY = {
       exposure: "exposure_us",
       gain: "gain",
-      fps: "fps",
       threshold: "threshold",
       blobMin: "blob_min_diameter_px",
       blobMax: "blob_max_diameter_px",
@@ -1042,7 +1035,6 @@
       wandMetricSeconds: "wand_metric_seconds",
       intExposure: "exposure_us",
       intGain: "gain",
-      intFps: "fps",
     };
     const stepOrder = ["blob", "mask", "wand", "floor", "extrinsics"];
     const stepLabels = {
@@ -1055,7 +1047,6 @@
     const values = {
       exposure: document.getElementById("exposureValue"),
       gain: document.getElementById("gainValue"),
-      fps: document.getElementById("fpsValue"),
       threshold: document.getElementById("thresholdValue"),
       blobMin: document.getElementById("blobMinValue"),
       blobMax: document.getElementById("blobMaxValue"),
@@ -1063,13 +1054,11 @@
       maskSeconds: document.getElementById("maskSecondsValue"),
       intExposure: document.getElementById("intExposureValue"),
       intGain: document.getElementById("intGainValue"),
-      intFps: document.getElementById("intFpsValue"),
     };
     const elements = {
       statusBanner: document.getElementById("statusBanner"),
       exposure: document.getElementById("exposure"),
       gain: document.getElementById("gain"),
-      fps: document.getElementById("fps"),
       threshold: document.getElementById("threshold"),
       blobMin: document.getElementById("blobMin"),
       blobMax: document.getElementById("blobMax"),
@@ -1130,7 +1119,6 @@
       intMjpegUrl: document.getElementById("intMjpegUrl"),
       intExposure: document.getElementById("intExposure"),
       intGain: document.getElementById("intGain"),
-      intFps: document.getElementById("intFps"),
       intSquareMm: document.getElementById("intSquareMm"),
       intMarkerMm: document.getElementById("intMarkerMm"),
       intSquaresX: document.getElementById("intSquaresX"),
@@ -1712,7 +1700,6 @@
       calibration: {
         exposure_us: ["exposure", "intExposure"],
         gain: ["gain", "intGain"],
-        fps: ["fps", "intFps"],
         threshold: ["threshold"],
         blob_min_diameter_px: ["blobMin"],
         blob_max_diameter_px: ["blobMax"],
@@ -1774,6 +1761,7 @@
     }
 
     function syncControlStateConstraints() {
+      controlState.exposure_us = Math.max(100, Math.min(MAX_EXPOSURE_US, toFiniteNumber(controlState.exposure_us, CONTROL_DEFAULTS.exposure_us)));
       let minValue = toFiniteNumber(controlState.blob_min_diameter_px, 0);
       let maxValue = toFiniteNumber(controlState.blob_max_diameter_px, 0);
       minValue = minValue > 0 ? minValue : 0;
@@ -1788,7 +1776,6 @@
     function setControlStateFromCalibrationDraft(calibrationDraft = {}) {
       controlState.exposure_us = toFiniteNumber(calibrationDraft.exposure_us, CONTROL_DEFAULTS.exposure_us);
       controlState.gain = toFiniteNumber(calibrationDraft.gain, CONTROL_DEFAULTS.gain);
-      controlState.fps = toFiniteNumber(calibrationDraft.fps, CONTROL_DEFAULTS.fps);
       controlState.focus = CONTROL_DEFAULTS.focus;
       controlState.threshold = toFiniteNumber(calibrationDraft.threshold, CONTROL_DEFAULTS.threshold);
       controlState.circularity_min = CONTROL_DEFAULTS.circularity_min;
@@ -1814,7 +1801,6 @@
       const assignmentMap = {
         exposure: controlState.exposure_us,
         gain: controlState.gain,
-        fps: controlState.fps,
         threshold: controlState.threshold,
         blobMin: controlState.blob_min_diameter_px,
         blobMax: controlState.blob_max_diameter_px,
@@ -1823,7 +1809,6 @@
         wandMetricSeconds: controlState.wand_metric_seconds,
         intExposure: controlState.exposure_us,
         intGain: controlState.gain,
-        intFps: controlState.fps,
       };
       Object.entries(assignmentMap).forEach(([id, value]) => {
         const input = elements[id];
@@ -1833,7 +1818,6 @@
       const valueMap = {
         exposure: controlState.exposure_us,
         gain: controlState.gain,
-        fps: controlState.fps,
         threshold: controlState.threshold,
         blobMin: controlState.blob_min_diameter_px,
         blobMax: controlState.blob_max_diameter_px,
@@ -1841,7 +1825,6 @@
         maskSeconds: controlState.mask_seconds,
         intExposure: controlState.exposure_us,
         intGain: controlState.gain,
-        intFps: controlState.fps,
       };
       Object.entries(valueMap).forEach(([id, value]) => {
         if (values[id]) {
@@ -1857,7 +1840,6 @@
       return {
         exposure_us: controlState.exposure_us,
         gain: controlState.gain,
-        fps: controlState.fps,
         focus: CONTROL_DEFAULTS.focus,
         threshold: controlState.threshold,
         circularity_min: CONTROL_DEFAULTS.circularity_min,
@@ -1890,13 +1872,17 @@
     }
 
     function extrinsicsDraftPayload() {
+      const pairWindowUs = Math.max(1, Math.min(FIXED_PAIR_WINDOW_US, Number(elements.pairWindowUs?.value ?? FIXED_PAIR_WINDOW_US) || FIXED_PAIR_WINDOW_US));
+      const wandPairWindowUs = Math.max(1, Math.min(FIXED_PAIR_WINDOW_US, Number(elements.wandPairWindowUs?.value ?? FIXED_PAIR_WINDOW_US) || FIXED_PAIR_WINDOW_US));
+      if (elements.pairWindowUs) elements.pairWindowUs.value = String(pairWindowUs);
+      if (elements.wandPairWindowUs) elements.wandPairWindowUs.value = String(wandPairWindowUs);
       return {
         intrinsics_path: elements.intrinsicsPath?.value ?? "",
         pose_log_path: elements.logPath?.value ?? "",
         wand_metric_log_path: elements.generateWandMetricLogPath?.value ?? "",
         output_path: elements.outputPath?.value ?? "",
-        pair_window_us: elements.pairWindowUs?.value ?? "",
-        wand_pair_window_us: elements.wandPairWindowUs?.value ?? "",
+        pair_window_us: String(pairWindowUs),
+        wand_pair_window_us: String(wandPairWindowUs),
         min_pairs: elements.minPairs?.value ?? "",
         wand_face: elements.wandFace?.value ?? "front_up",
       };

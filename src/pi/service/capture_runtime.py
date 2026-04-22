@@ -70,9 +70,9 @@ DEFAULT_CIRCULARITY_MIN = 0.2
 DEFAULT_FIXED_FOCUS = 0.325
 IDLE_PREVIEW_FPS = 15.0
 IDLE_DIAGNOSTICS_FPS = 5.0
-DEFAULT_CAPTURE_WIDTH = 2304
-DEFAULT_CAPTURE_HEIGHT = 1296
-DEFAULT_TARGET_FPS = 56
+DEFAULT_CAPTURE_WIDTH = 1536
+DEFAULT_CAPTURE_HEIGHT = 864
+DEFAULT_TARGET_FPS = 120
 DEFAULT_MJPEG_PORT = 8555
 PREVIEW_STOP_TIMEOUT_SECONDS = 2.0
 PROCESSING_QUEUE_MAXSIZE = 2
@@ -2187,7 +2187,6 @@ class _CapturePipeline:
         *,
         exposure_us: int | None = None,
         gain: float | None = None,
-        fps: int | None = None,
         focus: float | None = None,
     ) -> None:
         with self._lock:
@@ -2195,16 +2194,12 @@ class _CapturePipeline:
                 self._desired_exposure_us = int(exposure_us)
             if gain is not None:
                 self._desired_gain = float(gain)
-            if fps is not None and int(fps) > 0:
-                self._desired_fps = float(int(fps))
             if focus is not None:
                 self._desired_focus = float(focus)
         if exposure_us is not None:
             self._camera_worker.apply_control(lambda backend: backend.set_exposure_us(int(exposure_us)))
         if gain is not None:
             self._camera_worker.apply_control(lambda backend: backend.set_gain(float(gain)))
-        if fps is not None and int(fps) > 0:
-            self._camera_worker.apply_control(lambda backend: backend.set_fps(int(fps)))
         if focus is not None:
             self._camera_worker.apply_control(lambda backend: backend.set_focus(float(focus)))
 

@@ -21,6 +21,7 @@ from .rigid import (
 from .metrics import MetricsCollector
 from .logger import FrameLogger
 from .sync_eval import SyncEvaluator
+from .wand_session import FIXED_PAIR_WINDOW_US
 
 
 def _stage_summary(values: List[float]) -> Dict[str, float]:
@@ -55,7 +56,7 @@ class TrackingPipeline:
         patterns: Optional[List[MarkerPattern]] = None,
         enable_logging: bool = True,
         log_dir: str = "./logs",
-        timestamp_tolerance_us: int = 10_000,
+        timestamp_tolerance_us: int = FIXED_PAIR_WINDOW_US,
     ):
         """
         Initialize tracking pipeline.
@@ -81,8 +82,8 @@ class TrackingPipeline:
         self.rigid_estimator = RigidBodyEstimator(patterns=patterns or [WAIST_PATTERN])
         self.metrics = MetricsCollector()
         self.sync_evaluator = SyncEvaluator(
-            tolerance_windows_us=(1000, 2000, 5000, 10000),
-            target_range_us=(2000, 5000),
+            tolerance_windows_us=(500, 1000, 2000, FIXED_PAIR_WINDOW_US),
+            target_range_us=(1000, FIXED_PAIR_WINDOW_US),
             coverage_target=0.95,
         )
         

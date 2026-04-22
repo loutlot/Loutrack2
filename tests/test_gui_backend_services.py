@@ -18,7 +18,7 @@ from host.gui_command_service import GuiCommandService
 from host.gui_state_presenter import GuiStatePresenter
 from host.gui_workflow_presenter import GuiWorkflowPresenter
 from host.loutrack_gui import DEFAULT_EXTRINSICS_OUTPUT_PATH, LoutrackGuiState, PROJECT_ROOT
-from host.wand_session import CameraTarget
+from host.wand_session import CameraTarget, FIXED_FPS
 
 
 class _FakeReceiver:
@@ -57,7 +57,6 @@ class _FakeSession:
             "stop",
             "set_exposure",
             "set_gain",
-            "set_fps",
             "set_threshold",
             "set_blob_diameter",
             "mask_start",
@@ -233,6 +232,8 @@ def test_gui_settings_store_migrates_invalid_legacy_payload_to_backup(tmp_path: 
     assert settings_path.exists()
     assert (tmp_path / "wand_gui_settings.json.invalid.bak").exists()
     assert bundle["calibration"]["committed"]["exposure_us"] == 5000
+    assert "fps" not in bundle["calibration"]["draft"]
+    assert "fps" not in bundle["calibration"]["committed"]
 
 
 def test_gui_calibration_config_service_applies_config_and_dispatches_capture_settings(tmp_path: Path) -> None:
@@ -242,7 +243,7 @@ def test_gui_calibration_config_service_applies_config_and_dispatches_capture_se
     result = service.apply_config(
         {
             "camera_ids": ["pi-cam-01"],
-            "exposure_us": 15000,
+            "exposure_us": 8000,
             "gain": 10.5,
             "mask_threshold": 175,
             "mask_seconds": 0.9,
@@ -253,24 +254,26 @@ def test_gui_calibration_config_service_applies_config_and_dispatches_capture_se
 
     assert result["set_exposure"]["pi-cam-01"]["ack"] is True
     assert result["set_gain"]["pi-cam-01"]["ack"] is True
-    assert result["set_fps"]["pi-cam-01"]["ack"] is True
     assert result["set_threshold"]["pi-cam-01"]["ack"] is True
     assert result["set_blob_diameter"]["pi-cam-01"]["ack"] is True
-    assert state.config.exposure_us == 15000
+    assert state.config.exposure_us == 8000
     assert state.config.gain == 10.5
+    assert state.config.fps == FIXED_FPS
     assert state.config.duration_s == 4.5
     assert state._mask_params()["threshold"] == 175
     assert state._mask_params()["seconds"] == 0.9
-    assert settings["calibration"]["committed"]["exposure_us"] == 15000
+    assert settings["calibration"]["committed"]["exposure_us"] == 8000
     assert settings["calibration"]["committed"]["gain"] == 10.5
     assert settings["calibration"]["committed"]["wand_metric_seconds"] == 4.5
+    assert "fps" not in settings["calibration"]["draft"]
+    assert "fps" not in settings["calibration"]["committed"]
     assert [item["fn_name"] for item in state.session.broadcast_history] == [
         "set_exposure",
         "set_gain",
-        "set_fps",
         "set_threshold",
         "set_blob_diameter",
     ]
+    assert "fps" not in state.get_state()["config"]
     assert state.last_result == result
 
 

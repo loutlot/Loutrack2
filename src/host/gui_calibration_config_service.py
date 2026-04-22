@@ -21,7 +21,6 @@ class GuiCalibrationConfigService:
             for key in (
                 "exposure_us",
                 "gain",
-                "fps",
                 "threshold",
                 "blob_min_diameter_px",
                 "blob_max_diameter_px",

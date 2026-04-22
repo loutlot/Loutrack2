@@ -6,6 +6,9 @@ from pathlib import Path
 from typing import Any, Dict
 
 
+from .wand_session import FIXED_PAIR_WINDOW_US
+
+
 class GuiExtrinsicsService:
     """Extrinsics generation orchestration for the host GUI backend."""
 
@@ -58,16 +61,20 @@ class GuiExtrinsicsService:
             wand_log_raw,
             owner._default_wand_metric_log_path(),
         )
-        pair_window_us = int(committed_extrinsics.get("pair_window_us", 2000))
+        pair_window_us = int(committed_extrinsics.get("pair_window_us", FIXED_PAIR_WINDOW_US))
         min_pairs = int(committed_extrinsics.get("min_pairs", 8))
-        wand_pair_window_us = int(committed_extrinsics.get("wand_pair_window_us", 8000))
+        wand_pair_window_us = int(committed_extrinsics.get("wand_pair_window_us", FIXED_PAIR_WINDOW_US))
         wand_face = str(committed_extrinsics.get("wand_face", "front_up")).strip().lower() or "front_up"
         if pair_window_us < 1:
             raise ValueError("pair_window_us must be >= 1")
+        if pair_window_us > FIXED_PAIR_WINDOW_US:
+            raise ValueError(f"pair_window_us must be <= {FIXED_PAIR_WINDOW_US}")
         if min_pairs < 1:
             raise ValueError("min_pairs must be >= 1")
         if wand_pair_window_us < 1:
             raise ValueError("wand_pair_window_us must be >= 1")
+        if wand_pair_window_us > FIXED_PAIR_WINDOW_US:
+            raise ValueError(f"wand_pair_window_us must be <= {FIXED_PAIR_WINDOW_US}")
         if wand_face not in ("front_up", "back_up"):
             raise ValueError("wand_face must be front_up or back_up")
 

@@ -6,7 +6,13 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 
-from .wand_session import FIXED_CIRCULARITY_MIN, FIXED_FOCUS
+from .wand_session import (
+    FIXED_CIRCULARITY_MIN,
+    FIXED_FOCUS,
+    FIXED_FPS,
+    FIXED_PAIR_WINDOW_US,
+    MAX_EXPOSURE_US,
+)
 
 
 class GuiSettingsStore:
@@ -344,6 +350,7 @@ class GuiSettingsStore:
     def _coerce_fixed_calibration_payload(payload: Dict[str, Any]) -> None:
         payload["focus"] = FIXED_FOCUS
         payload["circularity_min"] = FIXED_CIRCULARITY_MIN
+        payload.pop("fps", None)
 
     @classmethod
     def _coerce_fixed_calibration_bundle(cls, bundle: Dict[str, Any]) -> None:
@@ -354,6 +361,21 @@ class GuiSettingsStore:
             payload = calibration.get(key)
             if isinstance(payload, dict):
                 cls._coerce_fixed_calibration_payload(payload)
+        extrinsics = bundle.get("extrinsics", {})
+        if not isinstance(extrinsics, dict):
+            return
+        for key in ("draft", "committed"):
+            payload = extrinsics.get(key)
+            if not isinstance(payload, dict):
+                continue
+            for pair_key in ("pair_window_us", "wand_pair_window_us"):
+                if pair_key not in payload:
+                    payload[pair_key] = FIXED_PAIR_WINDOW_US
+                    continue
+                try:
+                    payload[pair_key] = max(1, min(cls._to_int(payload[pair_key]), FIXED_PAIR_WINDOW_US))
+                except Exception:
+                    payload[pair_key] = FIXED_PAIR_WINDOW_US
 
     def _refresh_committed_from_draft(self, bundle: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
         calibration = bundle.get("calibration", {})
@@ -428,9 +450,12 @@ class GuiSettingsStore:
         next_committed["focus"] = FIXED_FOCUS
         next_committed["circularity_min"] = FIXED_CIRCULARITY_MIN
         numeric_specs = {
-            "exposure_us": ("int", lambda v: v > 0, "must be integer > 0"),
+            "exposure_us": (
+                "int",
+                lambda v: 0 < v <= MAX_EXPOSURE_US,
+                f"must be integer in [1,{MAX_EXPOSURE_US}]",
+            ),
             "gain": ("float", lambda v: v > 0.0, "must be > 0"),
-            "fps": ("int", lambda v: v > 0, "must be integer > 0"),
             "threshold": ("int", lambda v: 0 <= v <= 255, "must be in [0,255]"),
             "mask_threshold": ("int", lambda v: 0 <= v <= 255, "must be in [0,255]"),
             "mask_seconds": ("float", lambda v: v > 0.0, "must be > 0"),
@@ -556,8 +581,14 @@ class GuiSettingsStore:
             next_committed["wand_metric_log_path"] = cls._to_string(draft.get("wand_metric_log_path"))
 
         int_specs = {
-            "pair_window_us": ("must be integer >= 1", 1),
-            "wand_pair_window_us": ("must be integer >= 1", 1),
+            "pair_window_us": (
+                f"must be integer in [1,{FIXED_PAIR_WINDOW_US}]",
+                1,
+            ),
+            "wand_pair_window_us": (
+                f"must be integer in [1,{FIXED_PAIR_WINDOW_US}]",
+                1,
+            ),
             "min_pairs": ("must be integer >= 1", 1),
         }
         for key, (message, lower_bound) in int_specs.items():
@@ -566,6 +597,8 @@ class GuiSettingsStore:
             try:
                 value = cls._to_int(draft.get(key))
                 if value < lower_bound:
+                    raise ValueError(message)
+                if key in {"pair_window_us", "wand_pair_window_us"} and value > FIXED_PAIR_WINDOW_US:
                     raise ValueError(message)
                 next_committed[key] = value
             except Exception:
@@ -615,7 +648,6 @@ class GuiSettingsStore:
         return {
             "exposure_us": 5000,
             "gain": 8.0,
-            "fps": 56,
             "focus": FIXED_FOCUS,
             "threshold": 200,
             "blob_min_diameter_px": None,
@@ -645,8 +677,8 @@ class GuiSettingsStore:
             "pose_log_path": str(self.default_pose_log_path),
             "wand_metric_log_path": str(self.default_wand_metric_log_path),
             "output_path": str(self.default_extrinsics_output_path),
-            "pair_window_us": 2000,
-            "wand_pair_window_us": 8000,
+            "pair_window_us": FIXED_PAIR_WINDOW_US,
+            "wand_pair_window_us": FIXED_PAIR_WINDOW_US,
             "min_pairs": 8,
             "wand_face": "front_up",
         }

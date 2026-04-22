@@ -57,7 +57,6 @@ class _FakeSession:
             "stop",
             "set_exposure",
             "set_gain",
-            "set_fps",
             "set_threshold",
             "set_blob_diameter",
             "mask_start",
@@ -818,7 +817,6 @@ def test_get_settings_does_not_rewrite_existing_settings_file(tmp_path: Path) ->
             "draft": {
                 "exposure_us": 5000,
                 "gain": 8.0,
-                "fps": 56,
                 "focus": 0.325,
                 "threshold": 200,
                 "blob_min_diameter_px": None,
@@ -831,7 +829,6 @@ def test_get_settings_does_not_rewrite_existing_settings_file(tmp_path: Path) ->
             "committed": {
                 "exposure_us": 5000,
                 "gain": 8.0,
-                "fps": 56,
                 "focus": 0.325,
                 "threshold": 200,
                 "blob_min_diameter_px": None,
@@ -870,8 +867,8 @@ def test_get_settings_does_not_rewrite_existing_settings_file(tmp_path: Path) ->
                 "pose_log_path": "logs/extrinsics_pose_capture.jsonl",
                 "wand_metric_log_path": "logs/extrinsics_wand_metric.jsonl",
                 "output_path": "calibration/extrinsics_pose_v2.json",
-                "pair_window_us": 2000,
-                "wand_pair_window_us": 8000,
+                "pair_window_us": 4166,
+                "wand_pair_window_us": 4166,
                 "min_pairs": 8,
                 "wand_face": "front_up",
             },
@@ -880,8 +877,8 @@ def test_get_settings_does_not_rewrite_existing_settings_file(tmp_path: Path) ->
                 "pose_log_path": "logs/extrinsics_pose_capture.jsonl",
                 "wand_metric_log_path": "logs/extrinsics_wand_metric.jsonl",
                 "output_path": "calibration/extrinsics_pose_v2.json",
-                "pair_window_us": 2000,
-                "wand_pair_window_us": 8000,
+                "pair_window_us": 4166,
+                "wand_pair_window_us": 4166,
                 "min_pairs": 8,
                 "wand_face": "front_up",
             },
@@ -944,10 +941,12 @@ def test_apply_config_does_not_persist_selected_camera_ids_from_payload(tmp_path
     )
     state.apply_settings_ui({"selected_camera_ids": ["pi-cam-02"]})
 
-    state.apply_config({"camera_ids": ["pi-cam-01"], "exposure_us": 13000, "gain": 9.0, "fps": 56, "focus": 5.1, "threshold": 205, "circularity_min": 0.0, "blob_min_diameter_px": None, "blob_max_diameter_px": None, "mask_threshold": 200, "mask_seconds": 0.5, "wand_metric_seconds": 3.0})
+    state.apply_config({"camera_ids": ["pi-cam-01"], "exposure_us": 8000, "gain": 9.0, "fps": 56, "focus": 5.1, "threshold": 205, "circularity_min": 0.0, "blob_min_diameter_px": None, "blob_max_diameter_px": None, "mask_threshold": 200, "mask_seconds": 0.5, "wand_metric_seconds": 3.0})
 
     payload = json.loads(settings_path.read_text(encoding="utf-8"))
     assert payload["ui"]["selected_camera_ids"] == ["pi-cam-02"]
+    assert "fps" not in payload["calibration"]["draft"]
+    assert "fps" not in payload["calibration"]["committed"]
     assert state.selected_camera_ids == ["pi-cam-02"]
     assert session.last_broadcast is not None
     assert session.last_broadcast["camera_ids"] == ["pi-cam-01"]
@@ -1649,7 +1648,11 @@ def test_tracking_page_surfaces_start_stop_status_messages() -> None:
     assert "exposure_us: 5000" in HTML_PAGE
     assert "focus: 0.325" in HTML_PAGE
     assert "circularity_min: 0.2" in HTML_PAGE
-    assert 'id="exposure" type="range" min="100" max="30000" step="100" value="5000"' in HTML_PAGE
+    assert 'id="exposure" type="range" min="100" max="8000" step="100" value="5000"' in HTML_PAGE
+    assert 'id="fps"' not in HTML_PAGE
+    assert 'id="intFps"' not in HTML_PAGE
+    assert "fpsValue" not in HTML_PAGE
+    assert "intFpsValue" not in HTML_PAGE
     assert 'id="focus" type="range"' not in HTML_PAGE
     assert "trackingClientDiagnostics" in HTML_PAGE
     assert "sseInterArrivalMs" in HTML_PAGE

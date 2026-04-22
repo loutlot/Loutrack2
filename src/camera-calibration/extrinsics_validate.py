@@ -186,7 +186,7 @@ def validate_wand_metric_extrinsics(
     camera_poses: Dict[str, Tuple[np.ndarray, np.ndarray]],
     wand_observations_by_camera: Dict[str, Sequence[WandMetricObservation]],
     wand_points_mm: Sequence[Sequence[float]],
-    pair_window_us: int = 8000,
+    pair_window_us: int = 4166,
     up_axis: str = "Z",
     focal_scales: Dict[str, float] | None = None,
     to_world_matrix: np.ndarray | None = None,

@@ -17,7 +17,6 @@ CONTROL_COMMAND_SPECS = (
     ControlCommandSpec("stop"),
     ControlCommandSpec("set_exposure"),
     ControlCommandSpec("set_gain"),
-    ControlCommandSpec("set_fps"),
     ControlCommandSpec("set_threshold"),
     ControlCommandSpec("set_blob_diameter"),
     ControlCommandSpec("mask_start"),

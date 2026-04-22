@@ -28,7 +28,7 @@ DEFAULT_CAMERA = "pi-cam-01"
 DEFAULT_SELF_TEST_VIEWS = 30
 DEFAULT_MIN_FRAMES = 25
 DEFAULT_SEED = 0
-SYNTHETIC_IMAGE_SIZE = (2304, 1296)  # width, height
+SYNTHETIC_IMAGE_SIZE = (1536, 864)  # width, height
 
 
 @dataclass
@@ -1035,12 +1035,12 @@ def run_live_capture(config: CalibrateConfig) -> int:
     print("\nInitializing camera...")
     picam2 = Picamera2()
     config_cam = picam2.create_preview_configuration(
-        main={"size": (2304, 1296), "format": "RGB888"}
+        main={"size": (1536, 864), "format": "RGB888"}
     )
     picam2.configure(config_cam)
     picam2.start()
-    # Set FPS to 56 via FrameDurationLimits
-    frame_duration_us = int(round(1_000_000 / 56.0))
+    # Set FPS to 120 via FrameDurationLimits
+    frame_duration_us = int(round(1_000_000 / 120.0))
     try:
         picam2.set_controls({"FrameDurationLimits": (frame_duration_us, frame_duration_us)})
     except Exception:

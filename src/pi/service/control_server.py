@@ -269,7 +269,6 @@ class ControlServer:
         pipeline.set_backend_controls(
             exposure_us=self._desired_exposure_us,
             gain=self._desired_gain,
-            fps=self._desired_fps,
             focus=self._desired_focus,
         )
         pipeline.set_detection_settings(
@@ -641,9 +640,6 @@ class ControlServer:
             ),
             "set_gain": lambda: self._dispatch_set_number(
                 request_id, request_camera_id, params, "set_gain", self._set_gain
-            ),
-            "set_fps": lambda: self._dispatch_set_int(
-                request_id, request_camera_id, params, "set_fps", self._set_target_fps
             ),
             "set_threshold": lambda: self._dispatch_set_int(
                 request_id, request_camera_id, params, "set_threshold", self._set_threshold
@@ -1703,17 +1699,6 @@ class ControlServer:
             camera_id=self._config.camera_id,
             extra_lines=extra_lines,
         )
-
-    def _set_target_fps(self, fps: int) -> None:
-        fps_value = int(fps)
-        if fps_value <= 0:
-            return
-        with self._state_lock:
-            self._config.target_fps = fps_value
-            self._desired_fps = fps_value
-            pipeline = self._pipeline
-        if pipeline is not None:
-            pipeline.set_backend_controls(fps=fps_value)
 
     def _set_exposure_us(self, value_us: int) -> None:
         value = int(value_us)
