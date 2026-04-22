@@ -120,10 +120,6 @@ def set_fps(ip: str, port: int, camera_id: str, value: int, request_id: Optional
     return _send(ip, port, camera_id, "set_fps", {"value": int(value)}, request_id=request_id, timeout=timeout)
 
 
-def set_focus(ip: str, port: int, camera_id: str, value: float, request_id: Optional[str] = None, timeout: float = 5.0) -> Dict[str, Any]:
-    return _send(ip, port, camera_id, "set_focus", {"value": float(value)}, request_id=request_id, timeout=timeout)
-
-
 def set_threshold(ip: str, port: int, camera_id: str, value: int, request_id: Optional[str] = None, timeout: float = 5.0) -> Dict[str, Any]:
     return _send(ip, port, camera_id, "set_threshold", {"value": int(value)}, request_id=request_id, timeout=timeout)
 
@@ -143,17 +139,6 @@ def set_blob_diameter(
     if max_px is not None:
         params["max_px"] = float(max_px)
     return _send(ip, port, camera_id, "set_blob_diameter", params or None, request_id=request_id, timeout=timeout)
-
-
-def set_circularity_min(
-    ip: str,
-    port: int,
-    camera_id: str,
-    value: float,
-    request_id: Optional[str] = None,
-    timeout: float = 5.0,
-) -> Dict[str, Any]:
-    return _send(ip, port, camera_id, "set_circularity_min", {"value": float(value)}, request_id=request_id, timeout=timeout)
 
 
 def set_preview(
@@ -348,18 +333,12 @@ def build_parser() -> argparse.ArgumentParser:
     fps_p = sub.add_parser("set_fps", help="Set frames per second")
     fps_p.add_argument("--value", type=int, required=True, help="FPS value to set")
 
-    focus_p = sub.add_parser("set_focus", help="Set lens focus (LensPosition)")
-    focus_p.add_argument("--value", type=float, required=True, help="Focus value to set")
-
     threshold_p = sub.add_parser("set_threshold", help="Set blob threshold brightness")
     threshold_p.add_argument("--value", type=int, required=True, help="Threshold value (0-255)")
 
     blob_diameter_p = sub.add_parser("set_blob_diameter", help="Set blob diameter filter (px)")
     blob_diameter_p.add_argument("--min-px", dest="min_px", type=float, default=None, help="Minimum diameter in px")
     blob_diameter_p.add_argument("--max-px", dest="max_px", type=float, default=None, help="Maximum diameter in px")
-
-    circularity_p = sub.add_parser("set_circularity_min", help="Set minimum blob circularity")
-    circularity_p.add_argument("--value", type=float, required=True, help="Circularity lower bound [0,1]")
 
     mask_start_p = sub.add_parser("mask_start", help="Initialize static mask on Pi")
     mask_start_p.add_argument("--threshold", type=int, help="Threshold value")
@@ -425,8 +404,6 @@ def _build_cli_and_run() -> None:
             resp = set_gain(ip, port, camera_id=camera_id, value=args.value, request_id=req_id)
         elif args.cmd == "set_fps":
             resp = set_fps(ip, port, camera_id=camera_id, value=args.value, request_id=req_id)
-        elif args.cmd == "set_focus":
-            resp = set_focus(ip, port, camera_id=camera_id, value=args.value, request_id=req_id)
         elif args.cmd == "set_threshold":
             resp = set_threshold(ip, port, camera_id=camera_id, value=args.value, request_id=req_id)
         elif args.cmd == "set_blob_diameter":
@@ -438,8 +415,6 @@ def _build_cli_and_run() -> None:
                 max_px=args.max_px,
                 request_id=req_id,
             )
-        elif args.cmd == "set_circularity_min":
-            resp = set_circularity_min(ip, port, camera_id=camera_id, value=args.value, request_id=req_id)
         elif args.cmd == "mask_start":
             resp = mask_start(
                 ip,

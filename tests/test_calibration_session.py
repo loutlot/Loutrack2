@@ -7,6 +7,8 @@ from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from host.wand_session import (
+    FIXED_CIRCULARITY_MIN,
+    FIXED_FOCUS,
     WAND_POINTS_MM,
     CalibrationSession,
     CalibrationSessionConfig,
@@ -41,17 +43,11 @@ class _FakeControl:
     def set_fps(self, ip, port, camera_id, value, timeout=2.0):
         return self._resp("set_fps", camera_id, timeout)
 
-    def set_focus(self, ip, port, camera_id, value, timeout=2.0):
-        return self._resp("set_focus", camera_id, timeout)
-
     def set_threshold(self, ip, port, camera_id, value, timeout=2.0):
         return self._resp("set_threshold", camera_id, timeout)
 
     def set_blob_diameter(self, ip, port, camera_id, min_px=None, max_px=None, timeout=2.0):
         return self._resp("set_blob_diameter", camera_id, timeout)
-
-    def set_circularity_min(self, ip, port, camera_id, value, timeout=2.0):
-        return self._resp("set_circularity_min", camera_id, timeout)
 
     def mask_start(self, ip, port, camera_id, timeout=2.0, **kwargs):
         return self._resp("mask_start", camera_id, timeout)
@@ -99,7 +95,7 @@ def test_run_session_control_order(monkeypatch, tmp_path: Path) -> None:
         exposure_us=12000,
         gain=8.0,
         fps=56,
-        focus=5.215,
+        focus=9.9,
         threshold=200,
         blob_min_diameter_px=2.0,
         blob_max_diameter_px=20.0,
@@ -114,14 +110,14 @@ def test_run_session_control_order(monkeypatch, tmp_path: Path) -> None:
         "set_exposure",
         "set_gain",
         "set_fps",
-        "set_focus",
         "set_threshold",
         "set_blob_diameter",
-        "set_circularity_min",
         "mask_start",
         "start",
         "stop",
     ]
+    assert result["config"]["focus"] == FIXED_FOCUS
+    assert result["config"]["circularity_min"] == FIXED_CIRCULARITY_MIN
     metadata_path = Path(result["metadata_path"])
     assert metadata_path.exists()
     assert metadata_path.parent == tmp_path

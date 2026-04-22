@@ -58,10 +58,8 @@ class _FakeSession:
             "set_exposure",
             "set_gain",
             "set_fps",
-            "set_focus",
             "set_threshold",
             "set_blob_diameter",
-            "set_circularity_min",
             "mask_start",
             "mask_stop",
             "set_preview",
@@ -725,7 +723,7 @@ def test_settings_draft_updates_committed_and_returns_validation(tmp_path: Path)
     )
     settings = state.get_settings()
     assert settings["calibration"]["committed"]["exposure_us"] == 5000
-    assert settings["calibration"]["committed"]["focus"] == 0.317
+    assert settings["calibration"]["committed"]["focus"] == 0.325
 
     invalid = state.apply_settings_draft({"intrinsics": {"square_length_mm": 0}})
     assert "square_length_mm" in invalid["validation"]["intrinsics"]
@@ -821,11 +819,11 @@ def test_get_settings_does_not_rewrite_existing_settings_file(tmp_path: Path) ->
                 "exposure_us": 5000,
                 "gain": 8.0,
                 "fps": 56,
-                "focus": 0.317,
+                "focus": 0.325,
                 "threshold": 200,
                 "blob_min_diameter_px": None,
                 "blob_max_diameter_px": None,
-                "circularity_min": 0.0,
+                "circularity_min": 0.2,
                 "mask_threshold": 200,
                 "mask_seconds": 0.5,
                 "wand_metric_seconds": 3.0,
@@ -834,11 +832,11 @@ def test_get_settings_does_not_rewrite_existing_settings_file(tmp_path: Path) ->
                 "exposure_us": 5000,
                 "gain": 8.0,
                 "fps": 56,
-                "focus": 0.317,
+                "focus": 0.325,
                 "threshold": 200,
                 "blob_min_diameter_px": None,
                 "blob_max_diameter_px": None,
-                "circularity_min": 0.0,
+                "circularity_min": 0.2,
                 "mask_threshold": 200,
                 "mask_seconds": 0.5,
                 "wand_metric_seconds": 3.0,
@@ -1649,9 +1647,10 @@ def test_tracking_page_surfaces_start_stop_status_messages() -> None:
     assert 'activePage === "tracking" && elements.trackingLastUpdate' in HTML_PAGE
     assert "elements.trackingLastUpdate.textContent = msg" in HTML_PAGE
     assert "exposure_us: 5000" in HTML_PAGE
-    assert "focus: 0.317" in HTML_PAGE
+    assert "focus: 0.325" in HTML_PAGE
+    assert "circularity_min: 0.2" in HTML_PAGE
     assert 'id="exposure" type="range" min="100" max="30000" step="100" value="5000"' in HTML_PAGE
-    assert 'id="focus" type="range" min="0.0" max="10.0" step="0.001" value="0.317"' in HTML_PAGE
+    assert 'id="focus" type="range"' not in HTML_PAGE
     assert "trackingClientDiagnostics" in HTML_PAGE
     assert "sseInterArrivalMs" in HTML_PAGE
     assert "eventToRenderMs" in HTML_PAGE

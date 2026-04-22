@@ -66,7 +66,8 @@ MASK_MIN_AREA_PX = 4
 MASK_DILATE_PX = 2
 MASK_MAX_RATIO_WARNING = 0.4
 MASK_INIT_TIMEOUT_SECONDS = 10.0
-DEFAULT_CIRCULARITY_MIN = 0.0
+DEFAULT_CIRCULARITY_MIN = 0.2
+DEFAULT_FIXED_FOCUS = 0.325
 IDLE_PREVIEW_FPS = 15.0
 IDLE_DIAGNOSTICS_FPS = 5.0
 DEFAULT_CAPTURE_WIDTH = 2304
@@ -2127,7 +2128,7 @@ class _CapturePipeline:
         self._desired_fps = float(DEFAULT_TARGET_FPS)
         self._desired_exposure_us: int | None = None
         self._desired_gain: float | None = None
-        self._desired_focus: float | None = 5.215
+        self._desired_focus: float | None = DEFAULT_FIXED_FOCUS
         self._state_label = STATE_IDLE
         self._preview_worker = (
             _PreviewWorker(preview=debug_preview, camera_id=camera_id, log_fn=log_fn)

@@ -79,7 +79,7 @@ def test_settings_migration_prefers_new_and_deletes_old(
     )
     assert state.config.exposure_us == 12000
     assert state.config.fps == 56
-    assert state.config.focus == 0.317
+    assert state.config.focus == 0.325
     assert not old_settings.exists()
 
 
@@ -100,7 +100,7 @@ def test_settings_migration_invalid_old_creates_backup_and_defaults(
     )
     assert state.config.exposure_us == 5000
     assert state.config.fps == 56
-    assert state.config.focus == 0.317
+    assert state.config.focus == 0.325
     assert new_settings.exists()
     assert backup.exists()
     assert not old_settings.exists()
@@ -139,10 +139,10 @@ def test_default_settings_path_resolves_from_project_root_not_cwd(
         receiver=_FakeReceiver(),
     )
     assert state.settings_path == settings_abs
-    assert state.config.focus == 0.35
+    assert state.config.focus == 0.325
 
 
-def test_partial_new_shape_settings_preserve_focus_and_square_length(tmp_path: Path) -> None:
+def test_partial_new_shape_settings_lock_focus_and_preserve_square_length(tmp_path: Path) -> None:
     settings_path = tmp_path / "loutrack_gui_settings.json"
     settings_path.write_text(
         json.dumps(
@@ -162,8 +162,8 @@ def test_partial_new_shape_settings_preserve_focus_and_square_length(tmp_path: P
         settings_path=settings_path,
     )
     settings = state.get_settings()
-    assert settings["calibration"]["draft"]["focus"] == 0.35
-    assert settings["calibration"]["committed"]["focus"] == 0.35
+    assert settings["calibration"]["draft"]["focus"] == 0.325
+    assert settings["calibration"]["committed"]["focus"] == 0.325
     assert settings["intrinsics"]["draft"]["square_length_mm"] == 42.0
     assert settings["intrinsics"]["committed"]["square_length_mm"] == 42.0
 

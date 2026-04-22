@@ -58,10 +58,8 @@ class _FakeSession:
             "set_exposure",
             "set_gain",
             "set_fps",
-            "set_focus",
             "set_threshold",
             "set_blob_diameter",
-            "set_circularity_min",
             "mask_start",
             "mask_stop",
             "set_preview",
@@ -256,10 +254,8 @@ def test_gui_calibration_config_service_applies_config_and_dispatches_capture_se
     assert result["set_exposure"]["pi-cam-01"]["ack"] is True
     assert result["set_gain"]["pi-cam-01"]["ack"] is True
     assert result["set_fps"]["pi-cam-01"]["ack"] is True
-    assert result["set_focus"]["pi-cam-01"]["ack"] is True
     assert result["set_threshold"]["pi-cam-01"]["ack"] is True
     assert result["set_blob_diameter"]["pi-cam-01"]["ack"] is True
-    assert result["set_circularity_min"]["pi-cam-01"]["ack"] is True
     assert state.config.exposure_us == 15000
     assert state.config.gain == 10.5
     assert state.config.duration_s == 4.5
@@ -272,10 +268,8 @@ def test_gui_calibration_config_service_applies_config_and_dispatches_capture_se
         "set_exposure",
         "set_gain",
         "set_fps",
-        "set_focus",
         "set_threshold",
         "set_blob_diameter",
-        "set_circularity_min",
     ]
     assert state.last_result == result
 

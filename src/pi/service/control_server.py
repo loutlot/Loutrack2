@@ -132,7 +132,7 @@ class ControlServer:
         self._desired_exposure_us: int | None = None
         self._desired_gain: float | None = None
         self._desired_fps: int | None = int(self._config.target_fps)
-        self._desired_focus: float | None = 5.215
+        self._desired_focus: float | None = _capture_runtime_mod.DEFAULT_FIXED_FOCUS
         self._desired_threshold: int = int(self._config.threshold)
         self._desired_blob_min_diameter_px: float | None = None
         self._desired_blob_max_diameter_px: float | None = None
@@ -645,16 +645,10 @@ class ControlServer:
             "set_fps": lambda: self._dispatch_set_int(
                 request_id, request_camera_id, params, "set_fps", self._set_target_fps
             ),
-            "set_focus": lambda: self._dispatch_set_number(
-                request_id, request_camera_id, params, "set_focus", self._set_focus
-            ),
             "set_threshold": lambda: self._dispatch_set_int(
                 request_id, request_camera_id, params, "set_threshold", self._set_threshold
             ),
             "set_blob_diameter": lambda: self._dispatch_set_blob_diameter(
-                request_id, request_camera_id, params
-            ),
-            "set_circularity_min": lambda: self._dispatch_set_circularity_min(
                 request_id, request_camera_id, params
             ),
             "mask_start": lambda: self._handle_mask_start(request_id, request_camera_id, params),
@@ -776,31 +770,6 @@ class ControlServer:
                 error_message="invalid_request: set_blob_diameter.min_px must be <= max_px",
             )
         self._set_blob_diameter(min_value, max_value)
-        return self._ok_response(request_id, request_camera_id)
-
-    def _dispatch_set_circularity_min(
-        self,
-        request_id: str,
-        request_camera_id: str,
-        params: dict[str, object],
-    ) -> dict[str, object]:
-        value = params.get("value")
-        if not isinstance(value, (int, float)):
-            return self._error_response(
-                request_id=request_id,
-                request_camera_id=request_camera_id,
-                error_code=ERROR_INVALID_REQUEST,
-                error_message="invalid_request: set_circularity_min.value must be number",
-            )
-        circularity_value = float(value)
-        if circularity_value < 0.0 or circularity_value > 1.0:
-            return self._error_response(
-                request_id=request_id,
-                request_camera_id=request_camera_id,
-                error_code=ERROR_INVALID_REQUEST,
-                error_message="invalid_request: set_circularity_min.value must be in [0,1]",
-            )
-        self._set_circularity_min(circularity_value)
         return self._ok_response(request_id, request_camera_id)
 
     def _dispatch_set_preview(

@@ -16,6 +16,9 @@ from calibration.targets.wand import (
     WAND_POINTS_MM,
 )
 
+FIXED_FOCUS = 0.325
+FIXED_CIRCULARITY_MIN = 0.2
+
 
 @dataclass(frozen=True)
 class CameraTarget:
@@ -29,11 +32,11 @@ class CalibrationSessionConfig:
     exposure_us: int
     gain: float
     fps: int
-    focus: float = 5.215
+    focus: float = FIXED_FOCUS
     threshold: int = 200
     blob_min_diameter_px: Optional[float] = None
     blob_max_diameter_px: Optional[float] = None
-    circularity_min: float = 0.0
+    circularity_min: float = FIXED_CIRCULARITY_MIN
     duration_s: float = 60.0
     camera_ids: Optional[List[str]] = None
     mask_params: Optional[Dict[str, Any]] = None
@@ -137,6 +140,8 @@ class CalibrationSession:
         if not targets:
             raise RuntimeError("No healthy cameras found")
 
+        fixed_focus = FIXED_FOCUS
+        fixed_circularity_min = FIXED_CIRCULARITY_MIN
         session_id = str(uuid.uuid4())
         started_at = datetime.now(timezone.utc).isoformat()
         ack_history: List[Dict[str, Any]] = []
@@ -153,9 +158,6 @@ class CalibrationSession:
         fps_resp = self._broadcast(targets, "set_fps", value=config.fps)
         record("set_fps", fps_resp)
 
-        focus_resp = self._broadcast(targets, "set_focus", value=config.focus)
-        record("set_focus", focus_resp)
-
         threshold_resp = self._broadcast(targets, "set_threshold", value=config.threshold)
         record("set_threshold", threshold_resp)
 
@@ -166,9 +168,6 @@ class CalibrationSession:
             max_px=config.blob_max_diameter_px,
         )
         record("set_blob_diameter", blob_diameter_resp)
-
-        circularity_resp = self._broadcast(targets, "set_circularity_min", value=config.circularity_min)
-        record("set_circularity_min", circularity_resp)
 
         mask_kwargs = dict(config.mask_params or {})
         mask_resp = self._broadcast(targets, "mask_start", **mask_kwargs)
@@ -203,11 +202,11 @@ class CalibrationSession:
                 "exposure_us": config.exposure_us,
                 "gain": config.gain,
                 "fps": config.fps,
-                "focus": config.focus,
+                "focus": fixed_focus,
                 "threshold": config.threshold,
                 "blob_min_diameter_px": config.blob_min_diameter_px,
                 "blob_max_diameter_px": config.blob_max_diameter_px,
-                "circularity_min": config.circularity_min,
+                "circularity_min": fixed_circularity_min,
                 "duration_s": config.duration_s,
                 "mask_params": dict(config.mask_params or {}),
                 "mask_retry": config.mask_retry,

@@ -706,16 +706,8 @@
                   <input id="fps" type="range" min="15" max="120" step="1" value="56">
                 </div>
                 <div class="slider-label">
-                  <span>Focus <span class="slider-value" id="focusValue"></span></span>
-                  <input id="focus" type="range" min="0.0" max="10.0" step="0.001" value="0.317">
-                </div>
-                <div class="slider-label">
                   <span>Threshold <span class="slider-value" id="thresholdValue"></span></span>
                   <input id="threshold" type="range" min="0" max="255" step="1" value="200">
-                </div>
-                <div class="slider-label">
-                  <span>Circularity <span class="slider-value" id="circularityValue"></span></span>
-                  <input id="circularity" type="range" min="0.0" max="1.0" step="0.01" value="0.0">
                 </div>
                 <div class="slider-label">
                   <span>Blob Min Dia <span class="slider-value" id="blobMinValue"></span> px</span>
@@ -976,9 +968,6 @@
             <div class="panel">
               <div class="panel-title">Camera Controls</div>
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px 12px;margin-top:6px">
-                <label><span class="int-slider-title">Focus <span class="hint" id="intFocusValue">5.215</span></span>
-                  <input id="intFocus" type="range" min="0" max="10" step="0.001" value="5.215">
-                </label>
                 <label><span class="int-slider-title">Exposure <span class="hint" id="intExposureValue">6400</span> µs</span>
                   <input id="intExposure" type="range" min="100" max="30000" step="100" value="6400">
                 </label>
@@ -1025,16 +1014,16 @@
       THREE = await import("/static/vendor/three.module.min.js");
       return THREE;
     }
-    const sliders = ["exposure", "gain", "fps", "focus", "threshold", "circularity", "blobMin", "blobMax", "maskThreshold", "maskSeconds"];
+    const sliders = ["exposure", "gain", "fps", "threshold", "blobMin", "blobMax", "maskThreshold", "maskSeconds"];
     const mainControlInputIds = [...sliders, "wandMetricSeconds"];
-    const intrinsicsControlInputIds = ["intFocus", "intExposure", "intGain", "intFps"];
+    const intrinsicsControlInputIds = ["intExposure", "intGain", "intFps"];
     const CONTROL_DEFAULTS = {
       exposure_us: 5000,
       gain: 8.0,
       fps: 56,
-      focus: 0.317,
+      focus: 0.325,
       threshold: 200,
-      circularity_min: 0.0,
+      circularity_min: 0.2,
       blob_min_diameter_px: 0,
       blob_max_diameter_px: 0,
       mask_threshold: 200,
@@ -1045,15 +1034,12 @@
       exposure: "exposure_us",
       gain: "gain",
       fps: "fps",
-      focus: "focus",
       threshold: "threshold",
-      circularity: "circularity_min",
       blobMin: "blob_min_diameter_px",
       blobMax: "blob_max_diameter_px",
       maskThreshold: "mask_threshold",
       maskSeconds: "mask_seconds",
       wandMetricSeconds: "wand_metric_seconds",
-      intFocus: "focus",
       intExposure: "exposure_us",
       intGain: "gain",
       intFps: "fps",
@@ -1070,14 +1056,11 @@
       exposure: document.getElementById("exposureValue"),
       gain: document.getElementById("gainValue"),
       fps: document.getElementById("fpsValue"),
-      focus: document.getElementById("focusValue"),
       threshold: document.getElementById("thresholdValue"),
-      circularity: document.getElementById("circularityValue"),
       blobMin: document.getElementById("blobMinValue"),
       blobMax: document.getElementById("blobMaxValue"),
       maskThreshold: document.getElementById("maskThresholdValue"),
       maskSeconds: document.getElementById("maskSecondsValue"),
-      intFocus: document.getElementById("intFocusValue"),
       intExposure: document.getElementById("intExposureValue"),
       intGain: document.getElementById("intGainValue"),
       intFps: document.getElementById("intFpsValue"),
@@ -1087,9 +1070,7 @@
       exposure: document.getElementById("exposure"),
       gain: document.getElementById("gain"),
       fps: document.getElementById("fps"),
-      focus: document.getElementById("focus"),
       threshold: document.getElementById("threshold"),
-      circularity: document.getElementById("circularity"),
       blobMin: document.getElementById("blobMin"),
       blobMax: document.getElementById("blobMax"),
       maskThreshold: document.getElementById("maskThreshold"),
@@ -1147,7 +1128,6 @@
       pageTracking: document.getElementById("pageTracking"),
       intCameraId: document.getElementById("intCameraId"),
       intMjpegUrl: document.getElementById("intMjpegUrl"),
-      intFocus: document.getElementById("intFocus"),
       intExposure: document.getElementById("intExposure"),
       intGain: document.getElementById("intGain"),
       intFps: document.getElementById("intFps"),
@@ -1733,9 +1713,7 @@
         exposure_us: ["exposure", "intExposure"],
         gain: ["gain", "intGain"],
         fps: ["fps", "intFps"],
-        focus: ["focus", "intFocus"],
         threshold: ["threshold"],
-        circularity_min: ["circularity"],
         blob_min_diameter_px: ["blobMin"],
         blob_max_diameter_px: ["blobMax"],
         mask_threshold: ["maskThreshold"],
@@ -1811,9 +1789,9 @@
       controlState.exposure_us = toFiniteNumber(calibrationDraft.exposure_us, CONTROL_DEFAULTS.exposure_us);
       controlState.gain = toFiniteNumber(calibrationDraft.gain, CONTROL_DEFAULTS.gain);
       controlState.fps = toFiniteNumber(calibrationDraft.fps, CONTROL_DEFAULTS.fps);
-      controlState.focus = toFiniteNumber(calibrationDraft.focus, CONTROL_DEFAULTS.focus);
+      controlState.focus = CONTROL_DEFAULTS.focus;
       controlState.threshold = toFiniteNumber(calibrationDraft.threshold, CONTROL_DEFAULTS.threshold);
-      controlState.circularity_min = toFiniteNumber(calibrationDraft.circularity_min, CONTROL_DEFAULTS.circularity_min);
+      controlState.circularity_min = CONTROL_DEFAULTS.circularity_min;
       controlState.blob_min_diameter_px = toFiniteNumber(
         calibrationDraft.blob_min_diameter_px ?? 0,
         CONTROL_DEFAULTS.blob_min_diameter_px
@@ -1837,15 +1815,12 @@
         exposure: controlState.exposure_us,
         gain: controlState.gain,
         fps: controlState.fps,
-        focus: controlState.focus,
         threshold: controlState.threshold,
-        circularity: controlState.circularity_min,
         blobMin: controlState.blob_min_diameter_px,
         blobMax: controlState.blob_max_diameter_px,
         maskThreshold: controlState.mask_threshold,
         maskSeconds: controlState.mask_seconds,
         wandMetricSeconds: controlState.wand_metric_seconds,
-        intFocus: controlState.focus,
         intExposure: controlState.exposure_us,
         intGain: controlState.gain,
         intFps: controlState.fps,
@@ -1859,14 +1834,11 @@
         exposure: controlState.exposure_us,
         gain: controlState.gain,
         fps: controlState.fps,
-        focus: controlState.focus,
         threshold: controlState.threshold,
-        circularity: controlState.circularity_min,
         blobMin: controlState.blob_min_diameter_px,
         blobMax: controlState.blob_max_diameter_px,
         maskThreshold: controlState.mask_threshold,
         maskSeconds: controlState.mask_seconds,
-        intFocus: controlState.focus,
         intExposure: controlState.exposure_us,
         intGain: controlState.gain,
         intFps: controlState.fps,
@@ -1886,9 +1858,9 @@
         exposure_us: controlState.exposure_us,
         gain: controlState.gain,
         fps: controlState.fps,
-        focus: controlState.focus,
+        focus: CONTROL_DEFAULTS.focus,
         threshold: controlState.threshold,
-        circularity_min: controlState.circularity_min,
+        circularity_min: CONTROL_DEFAULTS.circularity_min,
         blob_min_diameter_px: minValue > 0 ? minValue : null,
         blob_max_diameter_px: maxValue > 0 ? maxValue : null,
         mask_threshold: controlState.mask_threshold,
@@ -1992,7 +1964,7 @@
       elements.previewMetric.textContent = `${workflow.preview_enabled_count ?? 0}`;
       elements.previewMetricSummary.textContent = `${workflow.preview_active_count ?? 0}台で preview active`;
 
-      elements.blobSummary.textContent = `${workflow.blob_ready_count ?? 0}/${totalCount} 台で blob が見えています。Pi preview 上で反射マーカーが安定して 3 点前後に見えるまで threshold / diameter / circularity を詰めます。`;
+      elements.blobSummary.textContent = `${workflow.blob_ready_count ?? 0}/${totalCount} 台で blob が見えています。Pi preview 上で反射マーカーが安定して 3 点前後に見えるまで threshold / diameter を詰めます。`;
       elements.maskSummary.textContent = `${workflow.mask_ready_count ?? 0}/${totalCount} 台で mask が準備できています。preview に mask overlay が出ていることと、mask ratio warning が出ていないことを確認します。`;
       elements.wandSummary.textContent = activeCaptureKind === "pose_capture"
         ? `${workflow.running_count} 台が pose capture 中です。Pi デスクトップ preview で単一点の追従と誤検出の有無を見ます。`

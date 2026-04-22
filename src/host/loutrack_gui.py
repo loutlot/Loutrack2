@@ -23,7 +23,12 @@ if __package__ in (None, ""):
     from host.receiver import UDPReceiver
     from host.logger import FrameLogger
     from host.tracking_runtime import TrackingRuntime
-    from host.wand_session import CalibrationSession, CalibrationSessionConfig
+    from host.wand_session import (
+        CalibrationSession,
+        CalibrationSessionConfig,
+        FIXED_CIRCULARITY_MIN,
+        FIXED_FOCUS,
+    )
     from host.extrinsics_methods import ExtrinsicsMethodRegistry, build_default_extrinsics_registry
     from host.intrinsics_host_session import IntrinsicsHostSession, IntrinsicsHostSessionConfig
     from host.gui_settings_store import GuiSettingsStore
@@ -40,7 +45,12 @@ else:
     from .receiver import UDPReceiver
     from .logger import FrameLogger
     from .tracking_runtime import TrackingRuntime
-    from .wand_session import CalibrationSession, CalibrationSessionConfig
+    from .wand_session import (
+        CalibrationSession,
+        CalibrationSessionConfig,
+        FIXED_CIRCULARITY_MIN,
+        FIXED_FOCUS,
+    )
     from .extrinsics_methods import ExtrinsicsMethodRegistry, build_default_extrinsics_registry
     from .intrinsics_host_session import IntrinsicsHostSession, IntrinsicsHostSessionConfig
     from .gui_settings_store import GuiSettingsStore
@@ -234,11 +244,11 @@ class LoutrackGuiState:
             exposure_us=5000,
             gain=8.0,
             fps=56,
-            focus=0.317,
+            focus=FIXED_FOCUS,
             threshold=200,
             blob_min_diameter_px=None,
             blob_max_diameter_px=None,
-            circularity_min=0.0,
+            circularity_min=FIXED_CIRCULARITY_MIN,
             duration_s=DEFAULT_WAND_METRIC_DURATION_S,
         )
 
@@ -418,11 +428,11 @@ class LoutrackGuiState:
             exposure_us=int(payload.get("exposure_us", source.exposure_us)),
             gain=float(payload.get("gain", source.gain)),
             fps=int(payload.get("fps", source.fps)),
-            focus=float(payload.get("focus", source.focus)),
+            focus=FIXED_FOCUS,
             threshold=int(payload.get("threshold", source.threshold)),
             blob_min_diameter_px=payload.get("blob_min_diameter_px", source.blob_min_diameter_px),
             blob_max_diameter_px=payload.get("blob_max_diameter_px", source.blob_max_diameter_px),
-            circularity_min=float(payload.get("circularity_min", source.circularity_min)),
+            circularity_min=FIXED_CIRCULARITY_MIN,
             duration_s=float(payload.get("wand_metric_seconds", source.duration_s)),
             camera_ids=None,
             mask_params=mask,
@@ -459,16 +469,12 @@ class LoutrackGuiState:
             "set_exposure": self.session._broadcast(targets, "set_exposure", value=self.config.exposure_us),
             "set_gain": self.session._broadcast(targets, "set_gain", value=self.config.gain),
             "set_fps": self.session._broadcast(targets, "set_fps", value=self.config.fps),
-            "set_focus": self.session._broadcast(targets, "set_focus", value=self.config.focus),
             "set_threshold": self.session._broadcast(targets, "set_threshold", value=self.config.threshold),
             "set_blob_diameter": self.session._broadcast(
                 targets,
                 "set_blob_diameter",
                 min_px=self.config.blob_min_diameter_px,
                 max_px=self.config.blob_max_diameter_px,
-            ),
-            "set_circularity_min": self.session._broadcast(
-                targets, "set_circularity_min", value=self.config.circularity_min
             ),
         }
 

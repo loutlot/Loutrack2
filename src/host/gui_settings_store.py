@@ -6,6 +6,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 
+from .wand_session import FIXED_CIRCULARITY_MIN, FIXED_FOCUS
+
 
 class GuiSettingsStore:
     """Owns GUI settings migration, normalization, validation, and persistence."""
@@ -69,11 +71,13 @@ class GuiSettingsStore:
     def load_bundle(self) -> Dict[str, Any]:
         raw_payload = self._read_settings_payload()
         bundle = self._normalize_settings_payload(raw_payload)
+        self._coerce_fixed_calibration_bundle(bundle)
         validation = self._refresh_committed_from_draft(bundle)
         bundle["validation"] = validation
         return bundle
 
     def save_bundle(self, bundle: Dict[str, Any]) -> None:
+        self._coerce_fixed_calibration_bundle(bundle)
         payload = {
             "meta": bundle.get("meta", {}),
             "calibration": bundle.get("calibration", {}),
@@ -99,6 +103,7 @@ class GuiSettingsStore:
         calibration_patch = patch.get("calibration", {})
         if isinstance(calibration_patch, dict):
             bundle["calibration"]["draft"].update(calibration_patch)
+            self._coerce_fixed_calibration_payload(bundle["calibration"]["draft"])
 
         intrinsics_patch = patch.get("intrinsics", {})
         if isinstance(intrinsics_patch, dict):
@@ -177,6 +182,7 @@ class GuiSettingsStore:
         bundle = self.load_bundle()
         bundle["calibration"]["draft"].update(payload)
         bundle["calibration"]["committed"].update(payload)
+        self._coerce_fixed_calibration_bundle(bundle)
         bundle["validation"] = self._refresh_committed_from_draft(bundle)
         self.save_bundle(bundle)
         return bundle
@@ -212,6 +218,7 @@ class GuiSettingsStore:
         return {}
 
     def _write_settings_payload(self, payload: Dict[str, Any]) -> None:
+        self._coerce_fixed_calibration_bundle(payload)
         payload.setdefault("meta", {})
         if isinstance(payload["meta"], dict):
             payload["meta"]["version"] = 2
@@ -305,6 +312,7 @@ class GuiSettingsStore:
             meta_src = raw_payload.get("meta")
             if isinstance(meta_src, dict):
                 normalized["meta"]["updated_at"] = int(meta_src.get("updated_at", normalized["meta"]["updated_at"]))
+            self._coerce_fixed_calibration_bundle(normalized)
             return normalized
 
         normalized = defaults
@@ -329,7 +337,23 @@ class GuiSettingsStore:
             normalized["ui"]["active_page"] = str(raw_payload["active_page"])
         if "active_view" in raw_payload:
             normalized["ui"]["active_view"] = str(raw_payload["active_view"])
+        self._coerce_fixed_calibration_bundle(normalized)
         return normalized
+
+    @staticmethod
+    def _coerce_fixed_calibration_payload(payload: Dict[str, Any]) -> None:
+        payload["focus"] = FIXED_FOCUS
+        payload["circularity_min"] = FIXED_CIRCULARITY_MIN
+
+    @classmethod
+    def _coerce_fixed_calibration_bundle(cls, bundle: Dict[str, Any]) -> None:
+        calibration = bundle.get("calibration", {})
+        if not isinstance(calibration, dict):
+            return
+        for key in ("draft", "committed"):
+            payload = calibration.get(key)
+            if isinstance(payload, dict):
+                cls._coerce_fixed_calibration_payload(payload)
 
     def _refresh_committed_from_draft(self, bundle: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
         calibration = bundle.get("calibration", {})
@@ -401,13 +425,13 @@ class GuiSettingsStore:
     ) -> tuple[Dict[str, Any], Dict[str, str]]:
         next_committed = dict(committed)
         errors: Dict[str, str] = {}
+        next_committed["focus"] = FIXED_FOCUS
+        next_committed["circularity_min"] = FIXED_CIRCULARITY_MIN
         numeric_specs = {
             "exposure_us": ("int", lambda v: v > 0, "must be integer > 0"),
             "gain": ("float", lambda v: v > 0.0, "must be > 0"),
             "fps": ("int", lambda v: v > 0, "must be integer > 0"),
-            "focus": ("float", lambda v: True, "must be numeric"),
             "threshold": ("int", lambda v: 0 <= v <= 255, "must be in [0,255]"),
-            "circularity_min": ("float", lambda v: 0.0 <= v <= 1.0, "must be in [0,1]"),
             "mask_threshold": ("int", lambda v: 0 <= v <= 255, "must be in [0,255]"),
             "mask_seconds": ("float", lambda v: v > 0.0, "must be > 0"),
             "wand_metric_seconds": ("float", lambda v: v > 0.0, "must be > 0"),
@@ -592,11 +616,11 @@ class GuiSettingsStore:
             "exposure_us": 5000,
             "gain": 8.0,
             "fps": 56,
-            "focus": 0.317,
+            "focus": FIXED_FOCUS,
             "threshold": 200,
             "blob_min_diameter_px": None,
             "blob_max_diameter_px": None,
-            "circularity_min": 0.0,
+            "circularity_min": FIXED_CIRCULARITY_MIN,
             "mask_threshold": 200,
             "mask_seconds": 0.5,
             "wand_metric_seconds": self.default_wand_metric_duration_s,

@@ -33,11 +33,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--exposure-us", type=int, default=8000)
     parser.add_argument("--gain", type=float, default=6.0)
     parser.add_argument("--fps", type=int, default=60)
-    parser.add_argument("--focus", type=float, default=5.215)
     parser.add_argument("--threshold", type=int, default=131)
     parser.add_argument("--blob-min-diameter-px", type=float, default=2.0)
     parser.add_argument("--blob-max-diameter-px", type=float, default=42.5)
-    parser.add_argument("--circularity-min", type=float, default=0.37)
     parser.add_argument("--mask-threshold", type=int, default=200)
     parser.add_argument("--mask-seconds", type=float, default=0.5)
     parser.add_argument("--camera-id", action="append", dest="camera_ids", default=None, help="Optional camera id filter")
@@ -75,11 +73,9 @@ def main() -> int:
             exposure_us=args.exposure_us,
             gain=args.gain,
             fps=args.fps,
-            focus=args.focus,
             threshold=args.threshold,
             blob_min_diameter_px=args.blob_min_diameter_px,
             blob_max_diameter_px=args.blob_max_diameter_px,
-            circularity_min=args.circularity_min,
             duration_s=args.duration_s,
             camera_ids=args.camera_ids,
             mask_params={
@@ -98,10 +94,8 @@ def main() -> int:
             ("set_exposure", {"value": config.exposure_us}),
             ("set_gain", {"value": config.gain}),
             ("set_fps", {"value": config.fps}),
-            ("set_focus", {"value": config.focus}),
             ("set_threshold", {"value": config.threshold}),
             ("set_blob_diameter", {"min_px": config.blob_min_diameter_px, "max_px": config.blob_max_diameter_px}),
-            ("set_circularity_min", {"value": config.circularity_min}),
             ("mask_start", {"threshold": args.mask_threshold, "seconds": args.mask_seconds}),
             ("start", {"mode": "wand_metric_capture"}),
         ):
