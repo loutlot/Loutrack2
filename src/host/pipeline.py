@@ -37,6 +37,50 @@ def _stage_summary(values: List[float]) -> Dict[str, float]:
     }
 
 
+def _empty_triangulation_quality() -> Dict[str, Any]:
+    empty_summary = {
+        "count": 0,
+        "mean": 0.0,
+        "median": 0.0,
+        "p90": 0.0,
+        "p95": 0.0,
+        "min": 0.0,
+        "max": 0.0,
+    }
+    return {
+        "accepted_points": 0,
+        "contributing_rays": {"per_point": [], "summary": dict(empty_summary)},
+        "reprojection_error_px_summary": dict(empty_summary),
+        "epipolar_error_px_summary": dict(empty_summary),
+        "triangulation_angle_deg_summary": dict(empty_summary),
+        "assignment_diagnostics": {},
+    }
+
+
+def _copy_triangulation_quality(payload: Dict[str, Any]) -> Dict[str, Any]:
+    quality = payload or {}
+    contributing = quality.get("contributing_rays", {})
+    return {
+        "accepted_points": int(quality.get("accepted_points", 0)),
+        "contributing_rays": {
+            "per_point": list(contributing.get("per_point", [])),
+            "summary": dict(contributing.get("summary", {})),
+        },
+        "reprojection_error_px_summary": dict(
+            quality.get("reprojection_error_px_summary", {})
+        ),
+        "epipolar_error_px_summary": dict(
+            quality.get("epipolar_error_px_summary", {})
+        ),
+        "triangulation_angle_deg_summary": dict(
+            quality.get("triangulation_angle_deg_summary", {})
+        ),
+        "assignment_diagnostics": dict(
+            quality.get("assignment_diagnostics", {})
+        ),
+    }
+
+
 class TrackingPipeline:
     """
     Complete tracking pipeline from UDP frames to rigid body poses.
@@ -71,6 +115,11 @@ class TrackingPipeline:
         self.udp_port = udp_port
         self.enable_logging = enable_logging
         self.log_dir = log_dir
+        self.configured_pair_window_us = int(timestamp_tolerance_us)
+        self.active_pair_window_us = int(timestamp_tolerance_us)
+        self._sync_warmup_target = 3
+        self._sync_precision_mode = "warmup"
+        self._sync_degraded_precision = False
         
         # Initialize components
         self.frame_processor = FrameProcessor(
@@ -82,8 +131,8 @@ class TrackingPipeline:
         self.rigid_estimator = RigidBodyEstimator(patterns=patterns or [WAIST_PATTERN])
         self.metrics = MetricsCollector()
         self.sync_evaluator = SyncEvaluator(
-            tolerance_windows_us=(500, 1000, 2000, FIXED_PAIR_WINDOW_US),
-            target_range_us=(1000, FIXED_PAIR_WINDOW_US),
+            tolerance_windows_us=(500, 1000, 2000, 3000, self.configured_pair_window_us),
+            target_range_us=(1000, self.configured_pair_window_us),
             coverage_target=0.95,
         )
         
@@ -109,8 +158,14 @@ class TrackingPipeline:
             "timestamp": 0,
             "points_3d": [],
             "reprojection_errors": [],
+            "triangulation_quality": _empty_triangulation_quality(),
+            "contributing_rays": {"per_point": [], "summary": {}},
+            "reprojection_error_px_summary": {},
+            "epipolar_error_px_summary": {},
+            "triangulation_angle_deg_summary": {},
             "assignment_diagnostics": {},
             "pair_timestamp_range_us": 0,
+            "sync_precision_mode": self._sync_precision_mode,
         }
         
         # Statistics
@@ -156,7 +211,10 @@ class TrackingPipeline:
         params = create_dummy_calibration(camera_ids)
         self.geometry.camera_params = params
         from .geo import Triangulator
-        self.geometry.triangulator = Triangulator(params)
+        self.geometry.triangulator = Triangulator(
+            params,
+            epipolar_threshold_px=self.geometry.epipolar_threshold_px,
+        )
         self._calibration_loaded = True
     
     def start(self, session_name: Optional[str] = None) -> None:
@@ -166,6 +224,11 @@ class TrackingPipeline:
         
         self._running = True
         self.start_time = time.time()
+        self.sync_evaluator.reset()
+        self.active_pair_window_us = int(self.configured_pair_window_us)
+        self._sync_precision_mode = "warmup"
+        self._sync_degraded_precision = False
+        self.frame_processor.pairer.timestamp_tolerance_us = self.active_pair_window_us
         
         # Start logging
         if self.logger:
@@ -195,6 +258,63 @@ class TrackingPipeline:
             "duration_seconds": time.time() - self.start_time if self.start_time else 0,
             "log_metadata": log_metadata
         }
+
+    def _sync_status_snapshot(self) -> Dict[str, Any]:
+        status = self.sync_evaluator.get_status()
+        result = dict(status)
+        result["configured_window_us"] = int(self.configured_pair_window_us)
+        result["active_window_us"] = int(self.active_pair_window_us)
+        result["precision_mode"] = str(self._sync_precision_mode)
+        result["degraded_precision"] = bool(self._sync_degraded_precision)
+        result["warmup_pairs"] = int(self._sync_warmup_target)
+        result["warmup_remaining"] = max(
+            0,
+            self._sync_warmup_target - int(status.get("pair_count", 0)),
+        )
+        return result
+
+    def _update_sync_precision_policy(self) -> Dict[str, Any]:
+        status = self.sync_evaluator.get_status()
+        pair_count = int(status.get("pair_count", 0))
+        if pair_count < self._sync_warmup_target:
+            self.active_pair_window_us = int(self.configured_pair_window_us)
+            self._sync_precision_mode = "warmup"
+            self._sync_degraded_precision = False
+            self.frame_processor.pairer.timestamp_tolerance_us = self.active_pair_window_us
+            return self._sync_status_snapshot()
+
+        recommendation = status.get("recommendation", {})
+        recommended_window_us = recommendation.get("recommended_window_us")
+        if isinstance(recommended_window_us, (int, float)):
+            recommended_window = int(recommended_window_us)
+        else:
+            recommended_window = int(self.configured_pair_window_us)
+
+        tightened_window = min(
+            int(self.configured_pair_window_us),
+            max(2000, recommended_window),
+        )
+        self.active_pair_window_us = int(tightened_window)
+        self.frame_processor.pairer.timestamp_tolerance_us = self.active_pair_window_us
+
+        pair_spread = status.get("pair_spread_us", {})
+        p95_spread = float(pair_spread.get("p95", 0.0))
+        recommendation_status = str(recommendation.get("status", "insufficient_data"))
+        self._sync_degraded_precision = bool(
+            p95_spread > float(self.configured_pair_window_us)
+            or (
+                recommended_window == int(self.configured_pair_window_us)
+                and recommendation_status != "recommended"
+            )
+        )
+        if self._sync_degraded_precision:
+            self._sync_precision_mode = "degraded_precision"
+        elif self.active_pair_window_us < int(self.configured_pair_window_us):
+            self._sync_precision_mode = "tightened"
+        else:
+            self._sync_precision_mode = "configured"
+
+        return self._sync_status_snapshot()
     
     def _on_paired_frames(self, paired_frames: PairedFrames) -> None:
         """Process paired frames."""
@@ -205,6 +325,7 @@ class TrackingPipeline:
         try:
             timestamp = paired_frames.timestamp
             self.sync_evaluator.evaluate_pair(paired_frames)
+            sync_status = self._update_sync_precision_policy()
             
             # Log frames
             stage_started_ns = time.perf_counter_ns()
@@ -217,7 +338,15 @@ class TrackingPipeline:
             result: Dict[str, Any] = {"reprojection_errors": []}
             stage_started_ns = time.perf_counter_ns()
             if self._calibration_loaded:
-                result = self.geometry.process_paired_frames(paired_frames)
+                min_inlier_views = (
+                    3
+                    if self._sync_degraded_precision and len(paired_frames.camera_ids) >= 3
+                    else 2
+                )
+                result = self.geometry.process_paired_frames(
+                    paired_frames,
+                    min_inlier_views=min_inlier_views,
+                )
                 points_3d = result.get("points_3d", [])
             else:
                 points_3d = []
@@ -225,6 +354,9 @@ class TrackingPipeline:
 
             points_3d_list = list(points_3d) if points_3d is not None else []
             point_count = len(points_3d_list)
+            triangulation_quality = _copy_triangulation_quality(
+                result.get("triangulation_quality", _empty_triangulation_quality())
+            )
 
             with self._triangulation_lock:
                 self._latest_triangulation_snapshot = {
@@ -234,8 +366,20 @@ class TrackingPipeline:
                         for point in points_3d_list
                     ],
                     "reprojection_errors": list(result.get("reprojection_errors", [])),
+                    "triangulation_quality": triangulation_quality,
+                    "contributing_rays": dict(triangulation_quality.get("contributing_rays", {})),
+                    "reprojection_error_px_summary": dict(
+                        triangulation_quality.get("reprojection_error_px_summary", {})
+                    ),
+                    "epipolar_error_px_summary": dict(
+                        triangulation_quality.get("epipolar_error_px_summary", {})
+                    ),
+                    "triangulation_angle_deg_summary": dict(
+                        triangulation_quality.get("triangulation_angle_deg_summary", {})
+                    ),
                     "assignment_diagnostics": dict(result.get("assignment_diagnostics", {})),
                     "pair_timestamp_range_us": paired_frames.timestamp_range_us,
+                    "sync_precision_mode": str(self._sync_precision_mode),
                 }
             
             # Estimate rigid body poses
@@ -323,7 +467,7 @@ class TrackingPipeline:
             "pipeline_stage_ms": self._stage_diagnostics(),
             "logger": self._logger_diagnostics(),
             "metrics": self.metrics.get_summary(),
-            "sync": self.sync_evaluator.get_status(),
+            "sync": self._sync_status_snapshot(),
             "frames_processed": self.frames_processed,
             "poses_estimated": self.poses_estimated,
         }
@@ -339,6 +483,7 @@ class TrackingPipeline:
     
     def get_status(self) -> Dict[str, Any]:
         """Get current pipeline status."""
+        triangulation = self.get_latest_triangulation_snapshot()
         return {
             "running": self._running,
             "calibration_loaded": self._calibration_loaded,
@@ -348,7 +493,10 @@ class TrackingPipeline:
             "receiver": self.frame_processor.get_stats(),
             "metrics": self.metrics.get_summary(),
             "tracking": self.rigid_estimator.get_tracking_status(),
-            "sync": self.sync_evaluator.get_status(),
+            "sync": self._sync_status_snapshot(),
+            "triangulation_quality": _copy_triangulation_quality(
+                triangulation.get("triangulation_quality", _empty_triangulation_quality())
+            ),
             "diagnostics": {
                 "geometry": self._geometry_diagnostics(),
                 "pipeline_stage_ms": self._stage_diagnostics(),
@@ -367,8 +515,52 @@ class TrackingPipeline:
                 "timestamp": self._latest_triangulation_snapshot["timestamp"],
                 "points_3d": [list(point) for point in self._latest_triangulation_snapshot["points_3d"]],
                 "reprojection_errors": list(self._latest_triangulation_snapshot["reprojection_errors"]),
+                "triangulation_quality": _copy_triangulation_quality(
+                    self._latest_triangulation_snapshot.get(
+                        "triangulation_quality",
+                        _empty_triangulation_quality(),
+                    )
+                ),
+                "contributing_rays": {
+                    "per_point": list(
+                        self._latest_triangulation_snapshot.get(
+                            "triangulation_quality",
+                            {},
+                        ).get("contributing_rays", {}).get("per_point", [])
+                    ),
+                    "summary": dict(
+                        self._latest_triangulation_snapshot.get(
+                            "triangulation_quality",
+                            {},
+                        ).get("contributing_rays", {}).get("summary", {})
+                    ),
+                },
+                "reprojection_error_px_summary": dict(
+                    self._latest_triangulation_snapshot.get(
+                        "reprojection_error_px_summary",
+                        {},
+                    )
+                ),
+                "epipolar_error_px_summary": dict(
+                    self._latest_triangulation_snapshot.get(
+                        "epipolar_error_px_summary",
+                        {},
+                    )
+                ),
+                "triangulation_angle_deg_summary": dict(
+                    self._latest_triangulation_snapshot.get(
+                        "triangulation_angle_deg_summary",
+                        {},
+                    )
+                ),
                 "assignment_diagnostics": dict(self._latest_triangulation_snapshot.get("assignment_diagnostics", {})),
                 "pair_timestamp_range_us": self._latest_triangulation_snapshot["pair_timestamp_range_us"],
+                "sync_precision_mode": str(
+                    self._latest_triangulation_snapshot.get(
+                        "sync_precision_mode",
+                        self._sync_precision_mode,
+                    )
+                ),
             }
 
 

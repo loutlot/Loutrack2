@@ -30,6 +30,30 @@ AVAILABLE_PATTERNS: Dict[str, MarkerPattern] = {
 }
 
 
+def _copy_triangulation_quality(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    quality = payload or {}
+    contributing = quality.get("contributing_rays", {})
+    return {
+        "accepted_points": int(quality.get("accepted_points", 0)),
+        "contributing_rays": {
+            "per_point": list(contributing.get("per_point", [])),
+            "summary": dict(contributing.get("summary", {})),
+        },
+        "reprojection_error_px_summary": dict(
+            quality.get("reprojection_error_px_summary", {})
+        ),
+        "epipolar_error_px_summary": dict(
+            quality.get("epipolar_error_px_summary", {})
+        ),
+        "triangulation_angle_deg_summary": dict(
+            quality.get("triangulation_angle_deg_summary", {})
+        ),
+        "assignment_diagnostics": dict(
+            quality.get("assignment_diagnostics", {})
+        ),
+    }
+
+
 def compute_frustum_near_corners_world(camera: CameraParams, z_near: float = 0.25) -> List[List[float]]:
     """Compute near-plane frustum corners in world coordinates."""
     width, height = camera.resolution
@@ -239,6 +263,9 @@ class TrackingRuntime:
                     "cameras": [dict(camera) for camera in camera_scene],
                     "rigid_bodies": rigid_bodies,
                     "raw_points": list(triangulation.get("points_3d", [])),
+                    "triangulation_quality": _copy_triangulation_quality(
+                        triangulation.get("triangulation_quality", {})
+                    ),
                     "coordinate_frame": getattr(pipeline.geometry, "coordinate_frame", "camera_similarity"),
                     "coordinate_origin": getattr(pipeline.geometry, "coordinate_origin", "reference_camera"),
                     "coordinate_origin_source": getattr(
@@ -293,6 +320,7 @@ class TrackingRuntime:
             "metrics": {},
             "tracking": {},
             "sync": {},
+            "triangulation_quality": {},
             "uptime_seconds": 0.0,
             "last_stop_summary": last_stop_summary,
         }
@@ -309,6 +337,9 @@ class TrackingRuntime:
             "metrics": dict(status.get("metrics", {})),
             "tracking": dict(status.get("tracking", {})),
             "sync": dict(status.get("sync", {})),
+            "triangulation_quality": _copy_triangulation_quality(
+                status.get("triangulation_quality", {})
+            ),
             "patterns": list(status.get("patterns", [])),
             "last_stop_summary": dict(status.get("last_stop_summary", {})),
         }
@@ -349,6 +380,9 @@ class TrackingRuntime:
             "cameras": list(scene["cameras"]),
             "rigid_bodies": list(scene["rigid_bodies"]),
             "raw_points": list(scene["raw_points"]),
+            "triangulation_quality": _copy_triangulation_quality(
+                scene.get("triangulation_quality", {})
+            ),
             "coordinate_frame": scene.get("coordinate_frame", "camera_similarity"),
             "coordinate_origin": scene.get("coordinate_origin", "reference_camera"),
             "coordinate_origin_source": scene.get("coordinate_origin_source", "extrinsics_pose_reference"),
@@ -409,6 +443,7 @@ class TrackingRuntime:
             "cameras": cameras or [],
             "rigid_bodies": [],
             "raw_points": [],
+            "triangulation_quality": {},
             "coordinate_frame": coordinate_frame,
             "coordinate_origin": coordinate_origin,
             "coordinate_origin_source": coordinate_origin_source,

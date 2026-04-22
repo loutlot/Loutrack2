@@ -4,11 +4,12 @@ import os
 import sys
 import time
 
+import cv2 as cv
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from host.geo import GeometryPipeline, Triangulator, create_dummy_calibration
+from host.geo import CameraParams, GeometryPipeline, Triangulator, create_dummy_calibration
 from host.receiver import Frame, PairedFrames
 
 
@@ -18,6 +19,19 @@ def _project(camera, point: np.ndarray) -> tuple[float, float]:
         float(camera.fx * point_cam[0] / point_cam[2] + camera.cx),
         float(camera.fy * point_cam[1] / point_cam[2] + camera.cy),
     )
+
+
+def _project_distorted(camera: CameraParams, point: np.ndarray) -> tuple[float, float]:
+    rvec, _ = cv.Rodrigues(camera.rotation)
+    projected, _ = cv.projectPoints(
+        point.reshape(1, 3).astype(np.float32),
+        rvec,
+        camera.translation,
+        camera.intrinsic_matrix,
+        camera.distortion_coeffs,
+    )
+    coords = projected.reshape(-1)
+    return float(coords[0]), float(coords[1])
 
 
 def _blob(point: tuple[float, float]) -> dict[str, float]:
@@ -47,10 +61,29 @@ def _paired(blobs_a: list[dict[str, float]], blobs_b: list[dict[str, float]]) ->
     )
 
 
+def _paired_multi(blobs_by_camera: dict[str, list[dict[str, float]]]) -> PairedFrames:
+    return PairedFrames(
+        timestamp=1_000_000,
+        frames={
+            camera_id: _frame(camera_id, blobs)
+            for camera_id, blobs in blobs_by_camera.items()
+        },
+        timestamp_range_us=0,
+    )
+
+
 def _geometry_pipeline() -> GeometryPipeline:
     pipeline = GeometryPipeline()
     pipeline.camera_params = create_dummy_calibration(["cam0", "cam1"], focal_length=800.0)
     pipeline.triangulator = Triangulator(pipeline.camera_params)
+    return pipeline
+
+
+def _geometry_pipeline_with_params(params: dict[str, CameraParams]) -> GeometryPipeline:
+    pipeline = GeometryPipeline()
+    pipeline.camera_params = params
+    pipeline.triangulator = Triangulator(params)
+    pipeline.epipolar_threshold_px = pipeline.triangulator.epipolar_threshold_px
     return pipeline
 
 
@@ -76,7 +109,12 @@ def test_epipolar_helper_uses_one_to_one_assignment(monkeypatch) -> None:
         lambda _f, pt1, pt2: float(costs[int(pt1[0]), int(pt2[0])]),
     )
 
-    matches = triangulator._match_blobs_epipolar(ref_blobs, other_blobs, np.eye(3))
+    matches = triangulator._match_blobs_epipolar(
+        ref_blobs,
+        other_blobs,
+        np.eye(3),
+        threshold_px=10.0,
+    )
 
     assert len(matches) == 4
     assert len(set(matches.values())) == 4
@@ -171,9 +209,105 @@ def test_process_paired_frames_rejects_high_reprojection_error(monkeypatch) -> N
     blobs_b = [_blob(_project(params["cam1"], point))]
 
     assert pipeline.triangulator is not None
-    monkeypatch.setattr(pipeline.triangulator, "compute_reprojection_error", lambda *_args, **_kwargs: 9.0)
+    monkeypatch.setattr(
+        pipeline.triangulator,
+        "compute_reprojection_errors",
+        lambda *_args, **_kwargs: [9.0, 9.0],
+    )
 
     result = pipeline.process_paired_frames(_paired(blobs_a, blobs_b))
 
     assert result["points_3d"] == []
     assert result["assignment_diagnostics"]["assignment_rejected_reprojection"] == 1
+
+
+def test_process_paired_frames_matches_on_undistorted_coordinates_for_distorted_cameras() -> None:
+    params = create_dummy_calibration(["cam0", "cam1"], focal_length=900.0)
+    distortion = np.array([-0.42, 0.18, 0.001, -0.001, 0.0], dtype=np.float64)
+    for camera in params.values():
+        camera.distortion_coeffs = distortion.copy()
+
+    triangulator = Triangulator(params)
+    F = triangulator._compute_fundamental_matrix("cam0", "cam1")
+    assert F is not None
+
+    selected: tuple[np.ndarray, tuple[float, float], tuple[float, float], float, float] | None = None
+    for z in (1.6, 2.0, 2.4):
+        for y in np.linspace(-0.45, 0.45, 19):
+            for x in np.linspace(0.15, 0.95, 33):
+                point = np.array([x, y, z], dtype=np.float64)
+                raw0 = _project_distorted(params["cam0"], point)
+                raw1 = _project_distorted(params["cam1"], point)
+                width, height = params["cam0"].resolution
+                if not (
+                    0.0 <= raw0[0] <= width
+                    and 0.0 <= raw0[1] <= height
+                    and 0.0 <= raw1[0] <= width
+                    and 0.0 <= raw1[1] <= height
+                ):
+                    continue
+                raw_error = triangulator._epipolar_distance(F, raw0, raw1)
+                und0 = triangulator._undistort_point("cam0", raw0)
+                und1 = triangulator._undistort_point("cam1", raw1)
+                und_error = triangulator._epipolar_distance(F, und0, und1)
+                if raw_error > triangulator.epipolar_threshold_px and und_error < 0.1:
+                    selected = (point, raw0, raw1, raw_error, und_error)
+                    break
+            if selected is not None:
+                break
+        if selected is not None:
+            break
+
+    assert selected is not None
+    point, raw0, raw1, raw_error, und_error = selected
+
+    pipeline = _geometry_pipeline_with_params(params)
+    result = pipeline.process_paired_frames(
+        _paired_multi({"cam0": [_blob(raw0)], "cam1": [_blob(raw1)]})
+    )
+    reconstructed = np.asarray(result["points_3d"], dtype=np.float64)
+
+    assert raw_error > triangulator.epipolar_threshold_px
+    assert und_error < 0.1
+    assert reconstructed.shape == (1, 3)
+    assert np.linalg.norm(reconstructed[0] - point) < 1e-3
+
+
+def test_process_paired_frames_drops_worst_view_and_keeps_inlier_fit() -> None:
+    params = create_dummy_calibration(["cam0", "cam1", "cam2", "cam3"], focal_length=800.0)
+    pipeline = _geometry_pipeline_with_params(params)
+    point = np.array([0.04, 0.03, 2.5], dtype=np.float64)
+
+    blobs = {
+        camera_id: [_blob(_project(camera, point))]
+        for camera_id, camera in params.items()
+    }
+    blobs["cam1"][0]["x"] += 18.0
+
+    result = pipeline.process_paired_frames(_paired_multi(blobs))
+    reconstructed = np.asarray(result["points_3d"], dtype=np.float64)
+
+    assert reconstructed.shape == (1, 3)
+    assert np.linalg.norm(reconstructed[0] - point) < 1e-3
+    assert result["assignment_diagnostics"]["dropped_views_for_inlier_fit"] == 1
+    assert result["triangulation_quality"]["accepted_points"] == 1
+    assert result["triangulation_quality"]["contributing_rays"]["per_point"] == [3]
+
+
+def test_process_paired_frames_rejects_low_parallax_candidates() -> None:
+    params = create_dummy_calibration(["cam0", "cam1"], focal_length=900.0)
+    params["cam1"].translation = np.array([-0.02, 0.0, 0.0], dtype=np.float64)
+    pipeline = _geometry_pipeline_with_params(params)
+    point = np.array([0.0, 0.0, 5.0], dtype=np.float64)
+
+    result = pipeline.process_paired_frames(
+        _paired_multi(
+            {
+                "cam0": [_blob(_project(params["cam0"], point))],
+                "cam1": [_blob(_project(params["cam1"], point))],
+            }
+        )
+    )
+
+    assert result["points_3d"] == []
+    assert result["assignment_diagnostics"]["rejected_low_parallax"] == 1

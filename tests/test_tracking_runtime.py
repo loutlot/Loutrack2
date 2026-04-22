@@ -218,6 +218,17 @@ def test_tracking_runtime_updates_scene_even_without_valid_rigid_body(monkeypatc
                 "metrics": {},
                 "tracking": {},
                 "sync": {},
+                "triangulation_quality": {
+                    "accepted_points": 1,
+                    "contributing_rays": {
+                        "per_point": [2],
+                        "summary": {"count": 1, "mean": 2.0, "max": 2.0},
+                    },
+                    "reprojection_error_px_summary": {"count": 1, "mean": 0.2, "max": 0.2},
+                    "epipolar_error_px_summary": {"count": 1, "mean": 0.1, "max": 0.1},
+                    "triangulation_angle_deg_summary": {"count": 1, "mean": 4.0, "max": 4.0},
+                    "assignment_diagnostics": {"assignment_matches": 1},
+                },
                 "uptime_seconds": 0.1,
             }
 
@@ -226,6 +237,17 @@ def test_tracking_runtime_updates_scene_even_without_valid_rigid_body(monkeypatc
                 "timestamp": 789,
                 "points_3d": [[4.0, 5.0, 6.0]],
                 "reprojection_errors": [0.2],
+                "triangulation_quality": {
+                    "accepted_points": 1,
+                    "contributing_rays": {
+                        "per_point": [2],
+                        "summary": {"count": 1, "mean": 2.0, "max": 2.0},
+                    },
+                    "reprojection_error_px_summary": {"count": 1, "mean": 0.2, "max": 0.2},
+                    "epipolar_error_px_summary": {"count": 1, "mean": 0.1, "max": 0.1},
+                    "triangulation_angle_deg_summary": {"count": 1, "mean": 4.0, "max": 4.0},
+                    "assignment_diagnostics": {"assignment_matches": 1},
+                },
                 "pair_timestamp_range_us": 600,
             }
 
@@ -241,6 +263,8 @@ def test_tracking_runtime_updates_scene_even_without_valid_rigid_body(monkeypatc
     assert scene["tracking"]["running"] is True
     assert scene["rigid_bodies"] == []
     assert scene["raw_points"] == [[4.0, 5.0, 6.0]]
+    assert scene["triangulation_quality"]["accepted_points"] == 1
+    assert scene["triangulation_quality"]["reprojection_error_px_summary"]["mean"] == 0.2
     assert scene["sequence"] > initial_sequence
     assert waited_scene["sequence"] == scene["sequence"]
     assert scene["coordinate_origin"] == "reference_camera"
@@ -249,6 +273,7 @@ def test_tracking_runtime_updates_scene_even_without_valid_rigid_body(monkeypatc
     assert scene["host_scene_updated_monotonic_ms"] > 0.0
     assert scene["scene_update_count"] == scene["sequence"]
     assert runtime.status()["scene"]["scene_update_count"] == scene["scene_update_count"]
+    assert runtime.status()["triangulation_quality"]["accepted_points"] == 1
 
 
 def test_tracking_runtime_status_uses_short_lived_cache(monkeypatch) -> None:

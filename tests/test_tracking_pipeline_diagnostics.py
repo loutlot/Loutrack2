@@ -30,6 +30,52 @@ def _frame(camera_id: str, timestamp: int, received_at: float) -> Frame:
     )
 
 
+def _triangulation_quality(accepted_points: int = 1) -> dict[str, object]:
+    return {
+        "accepted_points": accepted_points,
+        "contributing_rays": {
+            "per_point": [2] * accepted_points,
+            "summary": {
+                "count": accepted_points,
+                "mean": 2.0 if accepted_points else 0.0,
+                "median": 2.0 if accepted_points else 0.0,
+                "p90": 2.0 if accepted_points else 0.0,
+                "p95": 2.0 if accepted_points else 0.0,
+                "min": 2.0 if accepted_points else 0.0,
+                "max": 2.0 if accepted_points else 0.0,
+            },
+        },
+        "reprojection_error_px_summary": {
+            "count": accepted_points,
+            "mean": 0.25 if accepted_points else 0.0,
+            "median": 0.25 if accepted_points else 0.0,
+            "p90": 0.25 if accepted_points else 0.0,
+            "p95": 0.25 if accepted_points else 0.0,
+            "min": 0.25 if accepted_points else 0.0,
+            "max": 0.25 if accepted_points else 0.0,
+        },
+        "epipolar_error_px_summary": {
+            "count": accepted_points,
+            "mean": 0.1 if accepted_points else 0.0,
+            "median": 0.1 if accepted_points else 0.0,
+            "p90": 0.1 if accepted_points else 0.0,
+            "p95": 0.1 if accepted_points else 0.0,
+            "min": 0.1 if accepted_points else 0.0,
+            "max": 0.1 if accepted_points else 0.0,
+        },
+        "triangulation_angle_deg_summary": {
+            "count": accepted_points,
+            "mean": 3.0 if accepted_points else 0.0,
+            "median": 3.0 if accepted_points else 0.0,
+            "p90": 3.0 if accepted_points else 0.0,
+            "p95": 3.0 if accepted_points else 0.0,
+            "min": 3.0 if accepted_points else 0.0,
+            "max": 3.0 if accepted_points else 0.0,
+        },
+        "assignment_diagnostics": {"assignment_matches": accepted_points},
+    }
+
+
 def test_tracking_pipeline_reports_stage_and_logger_diagnostics(tmp_path: Path) -> None:
     pipeline = TrackingPipeline(enable_logging=True, log_dir=str(tmp_path))
     pipeline._running = True
@@ -39,8 +85,17 @@ def test_tracking_pipeline_reports_stage_and_logger_diagnostics(tmp_path: Path) 
     pipeline._diagnostics_event_interval_s = 0.0
 
     class _Geometry:
-        def process_paired_frames(self, _paired_frames):
-            return {"points_3d": [np.array([1.0, 2.0, 3.0])], "reprojection_errors": [0.25]}
+        def process_paired_frames(self, _paired_frames, *, min_inlier_views=2):
+            _ = min_inlier_views
+            return {
+                "points_3d": [np.array([1.0, 2.0, 3.0])],
+                "reprojection_errors": [0.25],
+                "assignment_diagnostics": {"assignment_matches": 1},
+                "triangulation_quality": _triangulation_quality(),
+            }
+
+        def get_diagnostics(self):
+            return {"quality": _triangulation_quality()}
 
     class _Rigid:
         def process_points(self, _points, timestamp):
@@ -88,6 +143,7 @@ def test_tracking_pipeline_reports_stage_and_logger_diagnostics(tmp_path: Path) 
     assert stage_ms["pipeline_pair_ms"]["max"] >= 0.0
     assert status["diagnostics"]["logger"]["recording"] is True
     assert callbacks
+    assert status["triangulation_quality"]["accepted_points"] == 1
     assert metadata["total_frames"] == 2
 
     events = [
@@ -106,5 +162,92 @@ def test_tracking_pipeline_uses_half_frame_timestamp_pairing_window() -> None:
 
     assert pipeline.frame_processor.pairer.timestamp_tolerance_us == FIXED_PAIR_WINDOW_US
     assert pipeline.frame_processor.pairer.frame_index_fallback is False
-    assert tuple(pipeline.sync_evaluator.tolerance_windows_us) == (500, 1000, 2000, FIXED_PAIR_WINDOW_US)
+    assert tuple(pipeline.sync_evaluator.tolerance_windows_us) == (
+        500,
+        1000,
+        2000,
+        3000,
+        FIXED_PAIR_WINDOW_US,
+    )
     assert pipeline.sync_evaluator.target_range_us == (1000, FIXED_PAIR_WINDOW_US)
+
+
+def test_tracking_pipeline_tightens_pair_window_after_warmup_and_reports_degraded_precision() -> None:
+    pipeline = TrackingPipeline(enable_logging=False)
+    pipeline._running = True
+    pipeline._calibration_loaded = True
+
+    min_inlier_view_calls: list[int] = []
+
+    class _Geometry:
+        def process_paired_frames(self, _paired_frames, *, min_inlier_views=2):
+            min_inlier_view_calls.append(int(min_inlier_views))
+            return {
+                "points_3d": [np.array([1.0, 2.0, 3.0])],
+                "reprojection_errors": [0.25],
+                "assignment_diagnostics": {
+                    "assignment_matches": 1,
+                    "dropped_views_for_inlier_fit": 0,
+                },
+                "triangulation_quality": _triangulation_quality(),
+            }
+
+        def get_diagnostics(self):
+            return {"quality": _triangulation_quality()}
+
+    class _Rigid:
+        def process_points(self, _points, _timestamp):
+            return {}
+
+        def get_tracking_status(self):
+            return {"ok": True}
+
+    pipeline.geometry = _Geometry()  # type: ignore[assignment]
+    pipeline.rigid_estimator = _Rigid()  # type: ignore[assignment]
+
+    now = time.time()
+    warmup_spreads = [200, 1500, 2200]
+    for index, spread in enumerate(warmup_spreads):
+        pair = PairedFrames(
+            timestamp=1_000_000 + index * 10_000,
+            frames={
+                "pi-cam-01": _frame("pi-cam-01", 1_000_000 + index * 10_000, now + index * 0.01),
+                "pi-cam-02": _frame(
+                    "pi-cam-02",
+                    1_000_000 + index * 10_000 + spread,
+                    now + index * 0.01 + 0.001,
+                ),
+                "pi-cam-03": _frame(
+                    "pi-cam-03",
+                    1_000_000 + index * 10_000 + min(spread + 50, 2500),
+                    now + index * 0.01 + 0.002,
+                ),
+            },
+            timestamp_range_us=spread,
+        )
+        pipeline._on_paired_frames(pair)
+
+    assert pipeline.frame_processor.pairer.timestamp_tolerance_us == 3000
+    assert min_inlier_view_calls == [2, 2, 2]
+
+    degraded_pair = PairedFrames(
+        timestamp=2_000_000,
+        frames={
+            "pi-cam-01": _frame("pi-cam-01", 2_000_000, now + 0.1),
+            "pi-cam-02": _frame("pi-cam-02", 2_009_000, now + 0.101),
+            "pi-cam-03": _frame("pi-cam-03", 2_008_700, now + 0.102),
+        },
+        timestamp_range_us=9000,
+    )
+    pipeline._on_paired_frames(degraded_pair)
+    status = pipeline.get_status()
+    snapshot = pipeline.get_latest_triangulation_snapshot()
+
+    assert min_inlier_view_calls[-1] == 3
+    assert status["sync"]["degraded_precision"] is True
+    assert status["sync"]["precision_mode"] == "degraded_precision"
+    assert status["sync"]["active_window_us"] == FIXED_PAIR_WINDOW_US
+    assert status["triangulation_quality"]["reprojection_error_px_summary"]["count"] == 1
+    assert snapshot["sync_precision_mode"] == "degraded_precision"
+    assert "epipolar_error_px_summary" in snapshot
+    assert "triangulation_angle_deg_summary" in snapshot
