@@ -1,9 +1,5 @@
-Loutrack GUI listening on http://127.0.0.1:8765
+Loutrack GUI listening on http://0.0.0.0:8765
 [loutrack_gui] POST /api/command command=set_preview camera_ids=['pi-cam-01', 'pi-cam-02']
-[loutrack_gui] POST /api/command command=set_preview camera_ids=['pi-cam-01', 'pi-cam-02']
-[loutrack_gui] POST /api/tracking/start
-[loutrack_gui] POST /api/command command=set_preview camera_ids=['pi-cam-01', 'pi-cam-02']
-[loutrack_gui] POST /api/tracking/stop
 [loutrack_gui] POST /api/command command=set_preview camera_ids=['pi-cam-01', 'pi-cam-02']
 [loutrack_gui] POST /api/command command=set_preview camera_ids=['pi-cam-01', 'pi-cam-02']
 [loutrack_gui] POST /api/tracking/start
@@ -12,5 +8,134 @@ Loutrack GUI listening on http://127.0.0.1:8765
 [loutrack_gui] POST /api/command command=set_preview camera_ids=['pi-cam-01', 'pi-cam-02']
 [loutrack_gui] POST /api/tracking/start
 [loutrack_gui] POST /api/command command=set_preview camera_ids=['pi-cam-01', 'pi-cam-02']
+[loutrack_gui] POST /api/command command=set_preview camera_ids=['pi-cam-01', 'pi-cam-02']
+[loutrack_gui] POST /api/command command=set_preview camera_ids=['pi-cam-01', 'pi-cam-02']
 [loutrack_gui] POST /api/tracking/stop
+[loutrack_gui] POST /api/command command=set_preview camera_ids=['pi-cam-01', 'pi-cam-02']
+[loutrack_gui] POST /api/command command=set_preview camera_ids=['pi-cam-01', 'pi-cam-02']
+----------------------------------------
+Exception occurred during processing of request from ('127.0.0.1', 62644)
+Traceback (most recent call last):
+  File "/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/host/loutrack_gui.py", line 1237, in _proxy_camera_mjpeg
+    self.wfile.write(chunk)
+    ~~~~~~~~~~~~~~~~^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.2/Frameworks/Python.framework/Versions/3.13/lib/python3.13/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+    ~~~~~~~~~~~~~~~~~~^^^
+BrokenPipeError: [Errno 32] Broken pipe
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.13/3.13.2/Frameworks/Python.framework/Versions/3.13/lib/python3.13/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.2/Frameworks/Python.framework/Versions/3.13/lib/python3.13/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.2/Frameworks/Python.framework/Versions/3.13/lib/python3.13/socketserver.py", line 766, in __init__
+    self.handle()
+    ~~~~~~~~~~~^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.2/Frameworks/Python.framework/Versions/3.13/lib/python3.13/http/server.py", line 436, in handle
+    self.handle_one_request()
+    ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.2/Frameworks/Python.framework/Versions/3.13/lib/python3.13/http/server.py", line 424, in handle_one_request
+    method()
+    ~~~~~~^^
+  File "/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/host/loutrack_gui.py", line 1079, in do_GET
+    self._proxy_camera_mjpeg(camera_id)
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/host/loutrack_gui.py", line 1248, in _proxy_camera_mjpeg
+    self._send_text(
+    ~~~~~~~~~~~~~~~^
+        f"preview upstream unreachable for {normalized}: {reason}",
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        status=HTTPStatus.BAD_GATEWAY,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/host/loutrack_gui.py", line 1209, in _send_text
+    self.end_headers()
+    ~~~~~~~~~~~~~~~~^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.2/Frameworks/Python.framework/Versions/3.13/lib/python3.13/http/server.py", line 538, in end_headers
+    self.flush_headers()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.2/Frameworks/Python.framework/Versions/3.13/lib/python3.13/http/server.py", line 542, in flush_headers
+    self.wfile.write(b"".join(self._headers_buffer))
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.2/Frameworks/Python.framework/Versions/3.13/lib/python3.13/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+    ~~~~~~~~~~~~~~~~~~^^^
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------
+----------------------------------------
+Exception occurred during processing of request from ('127.0.0.1', 62643)
+Traceback (most recent call last):
+  File "/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/host/loutrack_gui.py", line 1237, in _proxy_camera_mjpeg
+    self.wfile.write(chunk)
+    ~~~~~~~~~~~~~~~~^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.2/Frameworks/Python.framework/Versions/3.13/lib/python3.13/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+    ~~~~~~~~~~~~~~~~~~^^^
+BrokenPipeError: [Errno 32] Broken pipe
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.13/3.13.2/Frameworks/Python.framework/Versions/3.13/lib/python3.13/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.2/Frameworks/Python.framework/Versions/3.13/lib/python3.13/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.2/Frameworks/Python.framework/Versions/3.13/lib/python3.13/socketserver.py", line 766, in __init__
+    self.handle()
+    ~~~~~~~~~~~^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.2/Frameworks/Python.framework/Versions/3.13/lib/python3.13/http/server.py", line 436, in handle
+    self.handle_one_request()
+    ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.2/Frameworks/Python.framework/Versions/3.13/lib/python3.13/http/server.py", line 424, in handle_one_request
+    method()
+    ~~~~~~^^
+  File "/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/host/loutrack_gui.py", line 1079, in do_GET
+    self._proxy_camera_mjpeg(camera_id)
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/host/loutrack_gui.py", line 1248, in _proxy_camera_mjpeg
+    self._send_text(
+    ~~~~~~~~~~~~~~~^
+        f"preview upstream unreachable for {normalized}: {reason}",
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        status=HTTPStatus.BAD_GATEWAY,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/Users/loutlot/Documents/cursor/MOCAP/Loutrack2/src/host/loutrack_gui.py", line 1209, in _send_text
+    self.end_headers()
+    ~~~~~~~~~~~~~~~~^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.2/Frameworks/Python.framework/Versions/3.13/lib/python3.13/http/server.py", line 538, in end_headers
+    self.flush_headers()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.2/Frameworks/Python.framework/Versions/3.13/lib/python3.13/http/server.py", line 542, in flush_headers
+    self.wfile.write(b"".join(self._headers_buffer))
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.13/3.13.2/Frameworks/Python.framework/Versions/3.13/lib/python3.13/socketserver.py", line 845, in write
+    self._sock.sendall(b)
+    ~~~~~~~~~~~~~~~~~~^^^
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------
+[loutrack_gui] POST /api/tracking/start
+[loutrack_gui] POST /api/command command=set_preview camera_ids=['pi-cam-01', 'pi-cam-02']
+[loutrack_gui] POST /api/command command=set_preview camera_ids=['pi-cam-01', 'pi-cam-02']
+[loutrack_gui] POST /api/command command=set_preview camera_ids=['pi-cam-01', 'pi-cam-02']
+[loutrack_gui] POST /api/command command=set_preview camera_ids=['pi-cam-01', 'pi-cam-02']
+[loutrack_gui] POST /api/command command=set_preview camera_ids=['pi-cam-01', 'pi-cam-02']
+[loutrack_gui] POST /api/command command=set_preview camera_ids=['pi-cam-01', 'pi-cam-02']
+[loutrack_gui] POST /api/tracking/stop
+[loutrack_gui] POST /api/command command=set_preview camera_ids=['pi-cam-01', 'pi-cam-02']
+[loutrack_gui] POST /api/tracking/start
+[loutrack_gui] POST /api/command command=set_preview camera_ids=['pi-cam-01', 'pi-cam-02']
+[loutrack_gui] POST /api/tracking/stop
+[loutrack_gui] POST /api/command command=set_preview camera_ids=['pi-cam-01', 'pi-cam-02']
+[loutrack_gui] POST /api/command command=set_preview camera_ids=['pi-cam-01', 'pi-cam-02']
+[loutrack_gui] POST /api/command command=set_preview camera_ids=['pi-cam-01', 'pi-cam-02']
 [loutrack_gui] POST /api/command command=set_preview camera_ids=['pi-cam-01', 'pi-cam-02']

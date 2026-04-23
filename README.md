@@ -195,5 +195,6 @@ This project is intended to be released under `GPL-3.0-or-later`.
 - [`src/camera-calibration`](src/camera-calibration) for intrinsics and extrinsics tooling
 - [`src/calibration`](src/calibration) for calibration domain types and targets
 - [`calibration`](calibration) for generated calibration artifacts
+- [`docs/30_procedure`](docs/30_procedure) for Pi / GUI startup, verification, and shutdown procedures
 - [`schema`](schema) for message and control contracts
 - [`tests`](tests) for regression coverage

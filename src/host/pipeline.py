@@ -120,6 +120,12 @@ class TrackingPipeline:
         self._sync_warmup_target = 3
         self._sync_precision_mode = "warmup"
         self._sync_degraded_precision = False
+        # get_status() does O(N log N) sorts on up to 2000-item deques; calling it
+        # per-pair at 120 Hz saturates a CPU core once deques fill (~17 s).  Cache
+        # the result and re-evaluate at most once per second.
+        self._sync_policy_interval_s: float = 1.0
+        self._sync_policy_last_monotonic: float = 0.0
+        self._sync_policy_cached_status: dict = {}
         
         # Initialize components
         self.frame_processor = FrameProcessor(
@@ -228,6 +234,8 @@ class TrackingPipeline:
         self.active_pair_window_us = int(self.configured_pair_window_us)
         self._sync_precision_mode = "warmup"
         self._sync_degraded_precision = False
+        self._sync_policy_last_monotonic = 0.0
+        self._sync_policy_cached_status = {}
         self.frame_processor.pairer.timestamp_tolerance_us = self.active_pair_window_us
         
         # Start logging
@@ -274,7 +282,16 @@ class TrackingPipeline:
         return result
 
     def _update_sync_precision_policy(self) -> Dict[str, Any]:
+        # get_status() is O(N log N) on 2000-item deques; at 120 Hz this saturates
+        # a CPU core once the deques fill (~17 s).  Throttle to once per second
+        # after warmup.  During warmup we must keep calling to detect the transition.
+        now = time.monotonic()
+        if self._sync_precision_mode != "warmup":
+            if now - self._sync_policy_last_monotonic < self._sync_policy_interval_s and self._sync_policy_cached_status:
+                return self._sync_status_snapshot()
+        self._sync_policy_last_monotonic = now
         status = self.sync_evaluator.get_status()
+        self._sync_policy_cached_status = status
         pair_count = int(status.get("pair_count", 0))
         if pair_count < self._sync_warmup_target:
             self.active_pair_window_us = int(self.configured_pair_window_us)
