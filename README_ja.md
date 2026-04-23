@@ -1,28 +1,30 @@
 # Loutrack2
 
-Raspberry Pi カメラノードをベースにした、オープンソースの光学式モーショントラッキングプロジェクトです。
+Loutrack2 は、Raspberry Pi カメラノード、Host 側の較正ツール、そして GUI 中心の運用フローで構成された、オープンソースの光学式モーショントラッキング基盤です。いまの時点でも、複数カメラの立ち上げ、較正、追跡確認にかなり実用的なところまで来ています。
 
-Loutrack2 は、複数カメラのトラッキングデバイスを自作し、Host 側で較正し、将来的にはフルボディトラッキングまで発展させていくためのコミュニティ志向プロジェクトです。
+English README: [README.md](README.md)
 
 ![Loutrack Pi device](readme_imgs/pi_device.png)
 
-## Loutrack2 とは
+## これは何か
 
-Loutrack2 は、次の要素で構成される光学式トラッキングシステムです。
+Loutrack2 は、次の要素をひとつの流れとして扱えるプロジェクトです。
 
-- Raspberry Pi ベースのカメラキャプチャノード
-- Host 側の制御、較正、可視化
-- 複数カメラ観測にもとづく 3D 復元
-- セットアップから確認までをつなぐ GUI ワークフロー
+- 反射マーカー観測のための Raspberry Pi カメラキャプチャノード
+- Host 側の制御、較正、確認ツール
+- 複数カメラ観測にもとづく 3D 復元と追跡
+- セットアップから調整、収録、確認までをつなぐ GUI ワークフロー
 
-このプロジェクトは、DIY モーショントラッキングをより理解しやすく、再現しやすく、拡張しやすくすることを目標に、オープンに開発されています。
+既製品のブラックボックスに寄せるのではなく、DIY の追跡システムを自分たちで作り、理解し、拡張していくための土台として公開しています。現状は、とくにカメラ立ち上げ、較正、ライブ追跡確認の流れが強いです。
 
-## このプロジェクトの魅力
+## いま実際にできること
 
-- クローズドな既製品に依存せず、自分たちで追跡ハードウェアを作れる
-- 複数カメラを Host 側からまとめて扱える
-- ばらばらのスクリプトではなく、GUI ベースで較正と確認を進められる
-- すでに使える追跡基盤として試しながら、将来のボディトラッキング機能にも参加できる
+- Pi ノードで反射マーカーの blob を検出し、Host に観測結果を送る
+- Host GUI から blob 調整、mask 作成、pose capture、floor or metric capture、extrinsics 生成まで進められる
+- intrinsics と extrinsics の成果物を JSON として生成できる
+- 同期した複数カメラ観測から 3D marker position を復元できる
+- 3D Tracking ページで scene 状態、camera health、stream diagnostics、rigid-body 状態を確認できる
+- triangulated blobs から custom rigid body をその場で登録、削除できる
 
 ## 全体像
 
@@ -64,77 +66,52 @@ flowchart LR
   H --> M
 ```
 
-## 現在の到達点
+## ワークフロー
 
-Loutrack2 は、すでに複数カメラ光学トラッキングの土台として機能しています。
-
-現在できること:
-
-- Raspberry Pi ノードで反射マーカーの blob を検出し、Host に観測結果を送る
-- Host GUI から blob 調整、mask 作成、pose capture、floor or metric capture、extrinsics 生成まで進められる
-- intrinsics と extrinsics の較正成果物を JSON として生成できる
-- 複数カメラ観測から 3D の marker position を復元できる
-- tracking 状態、scene snapshot、較正まわりのメトリクスを可視化できる
-
-いまの Loutrack2 は、複数カメラ環境を組み上げて検証するための基盤としてかなり実用的です。
-
-一方で、完成したフルボディ IK トラッカーとしてはまだ発展途中です。
-
-## ロードマップ
-
-Loutrack2 は、より完成度の高いオープンソースのボディトラッキング基盤を目指しています。
-
-今後の主な方向性:
-
-- 複数剛体に対するより安定したクラスタリングと ID 維持
-- head、chest、waist、feet などの body-part tracking
-- 剛体の対応付けと追跡の安定化
-- IK に載せやすい pose 出力
-- SteamVR tracker output
-- デプロイ、セットアップ、ハードウェア情報のさらなる整備
-
-## GUI ワークフロー
-
-現在の Loutrack2 で特に強い部分のひとつが GUI ベースの運用フローです。カメラ立ち上げから tracking 確認まで、一連の流れを 1 つの操作系で扱えます。
+いまの Loutrack2 は、カメラ起動からライブ追跡確認までをひとつの GUI フローで扱えるのが大きな魅力です。
 
 ![Loutrack GUI](readme_imgs/wip_gui.png)
 
 典型的な流れ:
 
-1. 各 Pi で capture node を起動する
+1. 各 Pi の capture node を起動する
 2. Host GUI を開く
 3. Blob Detection を調整する
 4. Mask を作成する
 5. Pose Capture を行う
 6. Floor / Metric を収録する
 7. Extrinsics を生成する
-8. Tracking と scene snapshot を確認する
+8. Tracking を開始して復元シーンを確認する
 
-Tracking Control には epipolar gate のスライダーがあり、既定値 `3.5px`、範囲 `1.0` から `6.0px`、`0.5px` 刻みで tracking 開始時の判定幅を指定できます。
-Host 側の剛体推定には `max_rms_error_m=0.055` の上限が入り、これを超える rigid-fit 残差の pose は valid として採用されません。
+Pi と GUI の起動、確認、停止の手順は [`docs/30_procedure/pi_gui_start_stop.md`](docs/30_procedure/pi_gui_start_stop.md) にあります。
+
+## 3D Tracking の現在地
+
+3D Tracking ページは、いまの Loutrack2 の雰囲気をかなりよく表しています。動いている最中の scene を見ながら、状態を把握し、rigid body を調整できる設計になっています。
+
+![Loutrack Tracking](readme_imgs/tracking.png)
+
+現在の見どころ:
+
+- tracking の start / stop 状態が GUI 上で分かりやすく見える
+- camera health、latency、stream diagnostics を scene の横で追える
+- Tracking Control から epipolar gate を調整できる
+- triangulated blobs から custom rigid body をその場で登録できる
 
 ## ハードウェアの方向性
 
-Loutrack2 はソフトウェアだけのプロジェクトではなく、DIY のトラッキングハードウェアを含むプロジェクトでもあります。
+Loutrack2 はソフトウェアだけでなく、再現しやすい DIY トラッキングハードウェアも含むプロジェクトです。
 
 ![Tracked HMD prototype](readme_imgs/HMD_tracker.png)
 
-現在のハードウェア構成の方向性:
+現在のハードウェア方向:
 
-- Raspberry Pi をベースにしたカメラノードで構成されています
-- 現在のカメラ構成は Raspberry Pi Camera Module 3 Wide NoIR を前提にしています
-- キャプチャモードは `1536x864 @ 118fps` 固定を前提にしています。Camera Module 3 Wide NoIR の 120fps モードに対して少し余白を残し、PTP countdown start とソフトウェア位相診断の補正が 120fps 相当より短いフレーム期間を要求しないようにしています
-- PoE HAT を使うことで、電源とネットワークを LAN ケーブル 1 本でまとめられます
-- Pi の上には、カメラ保持機構と IR LED 照射を一体化した自作基板を載せる構成です
-- リポジトリには基板データや 3D プリント用部品が含まれており、構成を追えるようになっています
-- トラッキングポイントは、3D プリントした球体と再帰反射テープを組み合わせたマーカーを使う想定です
-
-この構成でできること:
-
-- デバイス側から赤外線を照射できる
-- IR パス構成のカメラと組み合わせることで、反射マーカーの blob を高い SNR で検出しやすくなる
-- PoE により、天井や部屋の高所に比較的配線しやすい
-- DIY と入手しやすい部材をベースに、同じ方向性のノードを再現しやすい
+- Raspberry Pi ベースのカメラノードで構成
+- 現在のカメラ基準は Raspberry Pi Camera Module 3 Wide NoIR
+- PoE HAT により LAN ケーブル 1 本で電源とネットワークをまとめやすい
+- Pi 上部に、カメラ保持機構と IR LED 照射を兼ねる自作基板を載せる構成
+- PCB 設計データや 3D プリント部品をリポジトリに含む
+- 3D プリント球と再帰反射テープを組み合わせたマーカーを使う想定
 
 関連ディレクトリ:
 
@@ -142,7 +119,18 @@ Loutrack2 はソフトウェアだけのプロジェクトではなく、DIY の
 - [`hardware/LED board`](hardware/LED%20board): LED 照射基板の設計データ
 - [`hardware/pi mount`](hardware/pi%20mount): Pi マウント用の 3D プリント部品
 
-将来的には、部屋や用途に合わせて自作、改良、フォークできる、実践的なコミュニティベースのトラッキングプラットフォームを目指しています。
+## プロジェクトの向かう先
+
+Loutrack2 はすでに複数カメラ光学トラッキングの基盤として役立ちますが、まだ完成済みのエンドユーザー向けフルボディトラッカーではありません。いまは、作る人が触って育てるためのプラットフォームです。
+
+次の方向性:
+
+- より安定した rigid-body clustering と identity tracking
+- head、chest、waist、feet などの body-part tracking
+- パイプライン全体を通した rigid-body association の安定化
+- IK に載せやすい pose 出力
+- SteamVR tracker output
+- デプロイ、セットアップ、ハードウェア文書の継続的な改善
 
 ## Open Source とコントリビュート
 
@@ -152,30 +140,18 @@ Loutrack2 はオープンに育てていくプロジェクトです。
 - fork や個人実験を歓迎します
 - ドキュメント改善、セットアップ改善、ハードウェア改善、較正フロー改善を特に歓迎します
 
-DIY ボディトラッキングをもっと作りやすく、運用しやすくしたい人と一緒に育てていけたらうれしいです。
-
 ## ライセンス
 
 このプロジェクトは `GPL-3.0-or-later` で公開する想定です。
 
-オープンソースとして fork や改良、再配布を歓迎しつつ、派生物も GPL 系の条件を引き継ぐことを前提にしています。
-
 ## リポジトリ構成
 
 - [`src/pi`](src/pi): Raspberry Pi 側キャプチャサービス
+- [`src/deploy`](src/deploy): Raspberry Pi 配備、サービス導入、ロールバック補助
 - [`src/host`](src/host): Host 側 GUI、受信、runtime、tracking pipeline
 - [`src/camera-calibration`](src/camera-calibration): intrinsics / extrinsics ツール
 - [`src/calibration`](src/calibration): 較正ドメイン型と target 定義
 - [`calibration`](calibration): 生成された較正成果物
+- [`docs/30_procedure`](docs/30_procedure): Pi / GUI の起動、確認、停止手順
 - [`schema`](schema): 制御とメッセージの契約
 - [`tests`](tests): 回帰テスト
-
-## 現時点での位置づけ
-
-現在の Loutrack2 は、次のように理解するのが近いです。
-
-- 実際に動く複数カメラ追跡基盤
-- GUI 中心の較正・確認ツールチェーン
-- フルボディトラッキングに向かうオープンソース基盤
-
-まだ完成済みのエンドユーザー向け VR トラッキング製品ではありません。
