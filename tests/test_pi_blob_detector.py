@@ -164,7 +164,7 @@ def test_control_server_ping_includes_blob_diagnostics_and_runtime() -> None:
         assert result["charuco_config"]["dictionary"] == "DICT_6X6_250"
         assert "intrinsics_start" in result["supported_commands"]
         assert "intrinsics_status" in result["supported_commands"]
-        assert result["blob_diagnostics"]["threshold"] == 200
+        assert result["blob_diagnostics"]["threshold"] == 150
         assert result["clock_sync"]["status"] in {"locked", "degraded", "unknown"}
         assert result["clock_sync"]["role"] in {"master", "slave", "unknown"}
         assert result["clock_sync"]["timestamping_mode"] in {"software", "hardware", "unknown"}

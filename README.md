@@ -63,47 +63,6 @@ Loutrack2 currently provides a working multi-camera optical tracking foundation.
 
 Available now:
 
-- Raspberry Pi capture nodes can detect reflective blobs and stream observations to the host
-- the host GUI can drive blob tuning, mask building, pose capture, floor or metric capture, and extrinsics generation
-- the host GUI now keeps selected-camera targeting strict for camera commands and settings application
-- runtime-generated capture paths are surfaced as latest observed values and can be adopted explicitly without silently overwriting draft form inputs
-- stopped intrinsics captures can now be synced back from the Pi for host-side calibration without relying on stale in-memory frame state
-- the tracking GUI queues SSE scene updates for the next browser animation frame, drawing raw points without interpolation while surfacing geometry and WebGL timing diagnostics
-- the intrinsics result panel now refreshes immediately when entering the view or launching host-side calibration, reducing stale "Calibrating on host..." displays
-- the Matplotlib extrinsics viewer can now overlay triangulated wand metric samples in similarity, metric, or world space
-- wand-based world alignment now chooses the floor-normal sign so ceiling cameras appear at positive height above the floor plane
-- wand-based world alignment now constrains floor-normal direction from the wand face: +X is elbow to long branch, +Y is elbow to short branch, and the selected front/back side defines +Z
-- the GUI 3D Tracking viewer now uses the floor/metric capture wand as the world origin when metric/world extrinsics are available, with a black Z-up viewport, Z-axis orbit controls, camera-name labels, and visible triangulated-blob points separate from rigid bodies
-- tracking start now configures selected Pis for low-overhead preview and explicitly starts their `pose_capture` UDP streams before expecting 3D blob points
-- Pi `start` commands can now carry a PTP/epoch `start_at_us` countdown; GUI tracking plus extrinsics pose/wand capture schedule starts about 1 second in the future and send them in parallel so synced Pis begin streaming at the same target time
-- host-side intrinsics calibration now filters sparse or homography-degenerate ChArUco frames before calling OpenCV, preventing single bad captures from tripping `initIntrinsicParams2D`
-- tracking now applies extrinsics v2 `focal_scale` to effective `fx/fy`, so live epipolar matching and triangulation use the same intrinsics that bundle adjustment validated
-- tracking start tolerates Pis that are already streaming so the host receiver can recover cleanly after a GUI restart or partial start failure
-- live tracking pairing now consumes each buffered Pi frame only once, emits pairs in chronological order, and calculates FPS/latency from UDP receive timestamps, preventing inflated 300+ FPS and missing-frame counts from stale or out-of-order buffer reprocessing
-- live tracking now assumes Raspberry Pi Camera Module 3 Wide NoIR in fixed `1536x864 @ 120fps` mode and uses a `4166 us` timestamp-only pairing window, matching the nearest capture-time frames within a half-frame bound without re-enabling `frame_index` fallback
-- live tracking scene updates now use a push stream for the GUI viewer, emit newly completed frame pairs without a fixed 16 ms batching delay, and draw world-space trails and marker positions without double-applying rigid-body transforms
-- tracking UDP diagnostics now keep Pi-side capture timestamps separate from raw host receive time; `pose_capture` payloads omit `frame_index`, and tracking pairing uses timestamp-only matching while surfacing timestamp source and capture-to-send timing
-- tracking performance diagnostics now separate Pi queue/detection/send timing, Host pair/3D/rigid/logger timing, SSE write health, and browser receive/apply/render timing with bounded rolling summaries and low-frequency JSONL diagnostic events
-- raw 3D blob reconstruction now uses one-to-one epipolar assignment before triangulation, preventing the same 2D blob from generating multiple 3D points while keeping rigid-body geometry out of the raw matcher
-- host-side raw 3D blob reconstruction now matches on undistorted observations, uses robust multi-view inlier refinement with reprojection/parallax gating, tightens pairing windows after a short sync warmup, and exposes triangulation-quality diagnostics separately from the existing `raw_points` payload
-- rigid-body candidate clustering now uses an 80 mm radius instead of marker-diameter spacing, with a single-pattern fallback that tests the full point set only when clustering produces no large-enough candidate
-- GUI detection defaults now start at exposure `5000 us`, gain `8`, focus `0.325`, threshold `200`, circularity `0.2`, and no blob diameter limits. Exposure controls are capped at `8000 us`, fps is fixed at `120`, and focus/circularity remain fixed in the GUI/control flow.
-- Pi control commands are now defined from a shared runtime manifest so the Pi server, host CLI, ping diagnostics, and `schema/control.json` stay aligned as intrinsics commands evolve
-- the host GUI backend now routes settings, tracking, intrinsics, capture-log, and extrinsics orchestration through dedicated internal services while keeping the existing `/api/*` surface unchanged
-- the next GUI backend split now also has extracted camera-status, workflow-summary, and `/api/state` presentation helpers staged as compatibility-preserving host modules
-- the Pi blob-detection to host tracking-viewer path now skips preview packet work when no preview consumer is active, throttles idle diagnostics, reuses paired-frame buffers incrementally, and updates the Three.js viewer without recreating hot-path geometry attributes on every scene event
-- Pi-side tracking now avoids static-mask frame copies in blob detection, skips diameter/circularity math unless those filters are active, and only builds MJPEG preview packets while a viewer is actually connected
-- Raspberry Pi deployment now preserves the local `src/pi` and `src/camera-calibration` layout inside each Pi release, uses stdin-safe rsync/SSH arguments, and installs/updates a per-camera `loutrack.service` before restarting capture
-- the Extrinsics quality panel now shows API running/success/failure state plus input log, output path, metric scale, and world-frame/Z-up alignment details
-- Extrinsics generation now hides path-edit fields in the GUI and uses the standard calibration/output paths plus latest capture logs automatically
-- Floor / Metric capture now uses a fixed 1 second default capture and the standard wand metric log path without GUI path/duration settings
-- tracking GUI scene updates now coalesce SSE payload parsing to the latest frame, avoid hidden debug JSON churn, and display freshness from host scene update time; Pi capture also flags and falls back from stale sensor timestamps
-- tracking start is now surfaced through explicit readiness blockers (`extrinsics_missing`, `no_cameras_selected`, `camera_unhealthy`, `mask_missing`), Stop remains idempotent from the GUI, and failed starts keep a visible tracking-panel error state
-- browser MJPEG preview now uses same-origin host proxy routes (`/api/cameras/<camera_id>/mjpeg`) instead of direct Pi IP URLs, and camera diagnostics expose preview intent plus upstream proxy errors
-- tracking runtime status for the GUI is now sampled/cached separately from fast scene updates, and camera scene geometry is reused instead of being rebuilt on every pose callback
-- the calibration flow can produce intrinsics and extrinsics JSON outputs
-- synchronized multi-camera observations can be reconstructed into 3D marker positions
-- the host can inspect tracking state, scene snapshots, and calibration-related metrics
 
 Current scope:
 
@@ -142,7 +101,8 @@ Typical flow:
 The tracking page uses the bundled three.js viewer with both `three.module.min.js` and its split `three.core.min.js` dependency. Its initial loading state does not claim a canvas context before WebGL starts, and the retired 2D canvas fallback has been replaced by a clear WebGL-unavailable message if the renderer cannot start.
 When live tracking starts, the GUI temporarily pauses its passive UDP discovery receiver so the tracking pipeline can bind the same UDP port without an address-in-use failure, then resumes discovery after tracking stops or startup fails.
 Tracking start, stop, and error feedback is also mirrored into the Tracking Control status line so failures are visible without leaving the 3D Tracking page.
-Camera preview tiles now distinguish between preview intentionally being off for the current view, a healthy live host-proxied MJPEG stream, and upstream-unreachable proxy failures.
+Camera preview tiles now distinguish between preview intentionally being off for the current view, a healthy live host-proxied MJPEG stream, and upstream-unreachable proxy failures. Client-side MJPEG disconnects are treated as normal preview lifecycle events rather than Pi upstream reachability failures.
+New calibration settings default to blob threshold `150` and mask threshold `120`.
 Tracking status and logs now expose a lightweight performance spine for later optimization: Pi runtime summaries report queue age, blob detection, JSON encode, UDP send, payload bytes, and send errors; Host status reports pair age, cleanup/eviction counts, triangulation, rigid estimation, metrics, logger enqueue, and writer lag; the GUI stream includes scene/SSE timestamps plus browser-side SSE, parse, apply, rAF, and WebGL render summaries.
 
 ## Hardware Direction

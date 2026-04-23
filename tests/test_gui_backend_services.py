@@ -266,6 +266,14 @@ class _FakeMjpegResponse:
         return None
 
 
+class _BrokenPipeWriter:
+    def write(self, _data: bytes) -> int:
+        raise BrokenPipeError()
+
+    def flush(self) -> None:
+        return None
+
+
 def _build_state(
     tmp_path: Path,
     *,
@@ -302,6 +310,8 @@ def test_gui_settings_store_migrates_invalid_legacy_payload_to_backup(tmp_path: 
     assert settings_path.exists()
     assert (tmp_path / "wand_gui_settings.json.invalid.bak").exists()
     assert bundle["calibration"]["committed"]["exposure_us"] == 5000
+    assert bundle["calibration"]["committed"]["threshold"] == 150
+    assert bundle["calibration"]["committed"]["mask_threshold"] == 120
     assert "fps" not in bundle["calibration"]["draft"]
     assert "fps" not in bundle["calibration"]["committed"]
 
@@ -891,6 +901,32 @@ def test_camera_mjpeg_proxy_relays_upstream_stream(tmp_path: Path, monkeypatch: 
         server.shutdown()
         thread.join(timeout=2.0)
         server.server_close()
+
+    assert state.get_preview_proxy_error("pi-cam-01") is None
+
+
+def test_camera_mjpeg_proxy_client_disconnect_does_not_mark_upstream_unreachable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _build_state(tmp_path)
+    state.record_preview_proxy_result("pi-cam-01", "upstream_unreachable: old")
+
+    handler = object.__new__(LoutrackGuiHandler)
+    handler.state = state
+    handler.wfile = _BrokenPipeWriter()
+    handler.send_response = lambda *_args, **_kwargs: None
+    handler.send_header = lambda *_args, **_kwargs: None
+    handler.end_headers = lambda: None
+
+    def _fake_urlopen(request, timeout=0):  # noqa: ANN001
+        assert getattr(request, "full_url", request) == "http://192.168.1.101:8555/mjpeg"
+        assert timeout == LoutrackGuiHandler._MJPEG_PROXY_TIMEOUT_S
+        return _FakeMjpegResponse([b"jpeg-bytes"])
+
+    monkeypatch.setattr("host.loutrack_gui.urllib.request.urlopen", _fake_urlopen)
+
+    handler._proxy_camera_mjpeg("pi-cam-01")
 
     assert state.get_preview_proxy_error("pi-cam-01") is None
 

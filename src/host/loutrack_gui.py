@@ -28,6 +28,8 @@ if __package__ in (None, ""):
     from host.wand_session import (
         CalibrationSession,
         CalibrationSessionConfig,
+        DEFAULT_MASK_THRESHOLD,
+        DEFAULT_THRESHOLD,
         FIXED_CIRCULARITY_MIN,
         FIXED_FPS,
         FIXED_FOCUS,
@@ -51,6 +53,8 @@ else:
     from .wand_session import (
         CalibrationSession,
         CalibrationSessionConfig,
+        DEFAULT_MASK_THRESHOLD,
+        DEFAULT_THRESHOLD,
         FIXED_CIRCULARITY_MIN,
         FIXED_FPS,
         FIXED_FOCUS,
@@ -251,7 +255,7 @@ class LoutrackGuiState:
             gain=8.0,
             fps=FIXED_FPS,
             focus=FIXED_FOCUS,
-            threshold=200,
+            threshold=DEFAULT_THRESHOLD,
             blob_min_diameter_px=None,
             blob_max_diameter_px=None,
             circularity_min=FIXED_CIRCULARITY_MIN,
@@ -398,7 +402,7 @@ class LoutrackGuiState:
         source = config or self.config
         mask = dict(source.mask_params or {})
         return {
-            "threshold": int(mask.get("threshold", 200)),
+            "threshold": int(mask.get("threshold", DEFAULT_MASK_THRESHOLD)),
             "seconds": float(mask.get("seconds", 0.5)),
             "hit_ratio": float(mask.get("hit_ratio", 0.7)),
             "min_area": int(mask.get("min_area", 4)),
@@ -1231,24 +1235,40 @@ class LoutrackGuiHandler(BaseHTTPRequestHandler):
                 self.send_header("X-Accel-Buffering", "no")
                 self.end_headers()
                 while True:
-                    chunk = response.read(self._MJPEG_PROXY_CHUNK_BYTES)
+                    try:
+                        chunk = response.read(self._MJPEG_PROXY_CHUNK_BYTES)
+                    except (TimeoutError, OSError) as exc:
+                        self.state.record_preview_proxy_result(
+                            normalized,
+                            f"upstream_unreachable: {getattr(exc, 'reason', exc)}",
+                        )
+                        return
                     if not chunk:
                         break
-                    self.wfile.write(chunk)
-                    self.wfile.flush()
+                    try:
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError):
+                        self.state.record_preview_proxy_result(normalized, None)
+                        return
         except urllib.error.HTTPError as exc:
             self.state.record_preview_proxy_result(normalized, f"upstream_http_{exc.code}")
             self._send_text(
                 f"preview upstream failed for {normalized}: http_{exc.code}",
                 status=HTTPStatus.BAD_GATEWAY,
             )
+        except (BrokenPipeError, ConnectionResetError):
+            self.state.record_preview_proxy_result(normalized, None)
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             reason = getattr(exc, "reason", exc)
             self.state.record_preview_proxy_result(normalized, f"upstream_unreachable: {reason}")
-            self._send_text(
-                f"preview upstream unreachable for {normalized}: {reason}",
-                status=HTTPStatus.BAD_GATEWAY,
-            )
+            try:
+                self._send_text(
+                    f"preview upstream unreachable for {normalized}: {reason}",
+                    status=HTTPStatus.BAD_GATEWAY,
+                )
+            except (BrokenPipeError, ConnectionResetError):
+                return
 
     # Cap SSE scene emission at ~60 Hz so the client renderer (also 60 Hz via
     # requestAnimationFrame) isn't overwhelmed by the pipeline's ~100 Hz pose

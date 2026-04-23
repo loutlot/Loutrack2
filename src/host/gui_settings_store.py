@@ -12,6 +12,8 @@ from .wand_session import (
     FIXED_FPS,
     FIXED_PAIR_WINDOW_US,
     MAX_EXPOSURE_US,
+    DEFAULT_MASK_THRESHOLD,
+    DEFAULT_THRESHOLD,
 )
 
 
@@ -649,11 +651,11 @@ class GuiSettingsStore:
             "exposure_us": 5000,
             "gain": 8.0,
             "focus": FIXED_FOCUS,
-            "threshold": 200,
+            "threshold": DEFAULT_THRESHOLD,
             "blob_min_diameter_px": None,
             "blob_max_diameter_px": None,
             "circularity_min": FIXED_CIRCULARITY_MIN,
-            "mask_threshold": 200,
+            "mask_threshold": DEFAULT_MASK_THRESHOLD,
             "mask_seconds": 0.5,
             "wand_metric_seconds": self.default_wand_metric_duration_s,
         }

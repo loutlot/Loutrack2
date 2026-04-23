@@ -60,7 +60,8 @@ STATE_READY = "READY"
 STATE_RUNNING = "RUNNING"
 
 MASK_INIT_FRAMES = 30
-MASK_THRESHOLD = 200
+DEFAULT_THRESHOLD = 150
+MASK_THRESHOLD = 120
 MASK_HIT_RATIO = 0.7
 MASK_MIN_AREA_PX = 4
 MASK_DILATE_PX = 2
@@ -420,7 +421,7 @@ class UDPFrameEmitter:
         udp_port: int,
         target_fps: float,
         backend: "FrameBackend",
-        threshold: int = 200,
+        threshold: int = DEFAULT_THRESHOLD,
         min_diameter_px: float | None = None,
         max_diameter_px: float | None = None,
         circularity_min: float = DEFAULT_CIRCULARITY_MIN,
@@ -1790,7 +1791,7 @@ class _ProcessingWorker:
         self._thread: threading.Thread | None = None
         self._socket: socket.socket | None = None
         self._lock = threading.Lock()
-        self._threshold = MASK_THRESHOLD
+        self._threshold = DEFAULT_THRESHOLD
         self._min_diameter_px: float | None = None
         self._max_diameter_px: float | None = None
         self._circularity_min = DEFAULT_CIRCULARITY_MIN
@@ -2428,7 +2429,7 @@ class ControlServerConfig:
     udp_port: int = 5000
     backend: str = field(default_factory=get_default_backend)
     target_fps: int = DEFAULT_TARGET_FPS
-    threshold: int = 200
+    threshold: int = DEFAULT_THRESHOLD
     mask_init_frames: int = MASK_INIT_FRAMES
     mask_threshold: int = MASK_THRESHOLD
     mask_hit_ratio: float = MASK_HIT_RATIO

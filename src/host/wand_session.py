@@ -23,6 +23,8 @@ FIXED_CIRCULARITY_MIN = 0.2
 FIXED_FPS = 120
 MAX_EXPOSURE_US = 8000
 FIXED_PAIR_WINDOW_US = 4166
+DEFAULT_THRESHOLD = 150
+DEFAULT_MASK_THRESHOLD = 120
 
 
 @dataclass(frozen=True)
@@ -38,7 +40,7 @@ class CalibrationSessionConfig:
     gain: float
     fps: int = FIXED_FPS
     focus: float = FIXED_FOCUS
-    threshold: int = 200
+    threshold: int = DEFAULT_THRESHOLD
     blob_min_diameter_px: Optional[float] = None
     blob_max_diameter_px: Optional[float] = None
     circularity_min: float = FIXED_CIRCULARITY_MIN
