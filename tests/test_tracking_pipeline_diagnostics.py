@@ -176,6 +176,7 @@ def test_tracking_pipeline_tightens_pair_window_after_warmup_and_reports_degrade
     pipeline = TrackingPipeline(enable_logging=False)
     pipeline._running = True
     pipeline._calibration_loaded = True
+    pipeline._sync_policy_interval_s = 0.0
 
     min_inlier_view_calls: list[int] = []
 

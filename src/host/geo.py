@@ -9,6 +9,7 @@ Provides functionality to:
 """
 
 import json
+import math
 import re
 import warnings
 import numpy as np
@@ -334,12 +335,29 @@ class CalibrationLoader:
 # tracking on the host: prefer dropping ambiguous points over accepting
 # low-quality reconstructions that would later destabilize rigid solving.
 # --------------------------------------------------------------------------- #
-_EPIPOLAR_THRESHOLD_PX: float = 2.5
-_EPIPOLAR_THRESHOLD_PX_MAX: float = 4.0
+_EPIPOLAR_THRESHOLD_PX: float = 3.5
+_EPIPOLAR_THRESHOLD_PX_MIN: float = 1.0
+_EPIPOLAR_THRESHOLD_PX_MAX: float = 6.0
+_EPIPOLAR_THRESHOLD_PX_STEP: float = 0.5
 _MAX_REPROJECTION_ERROR_PX: float = 2.5
 _P90_REPROJECTION_ERROR_PX: float = 1.5
 _MIN_TRIANGULATION_ANGLE_DEG: float = 1.5
 _INVALID_ASSIGNMENT_COST: float = 1e9
+
+
+def normalize_epipolar_threshold_px(value: Optional[Any]) -> float:
+    """Normalize GUI/API epipolar gate input to the supported slider range."""
+    if value is None:
+        return float(_EPIPOLAR_THRESHOLD_PX)
+    try:
+        threshold = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("epipolar_threshold_px must be numeric") from exc
+    if not np.isfinite(threshold):
+        raise ValueError("epipolar_threshold_px must be finite")
+    threshold = min(_EPIPOLAR_THRESHOLD_PX_MAX, max(_EPIPOLAR_THRESHOLD_PX_MIN, threshold))
+    steps = math.floor((threshold / _EPIPOLAR_THRESHOLD_PX_STEP) + 0.5)
+    return float(steps * _EPIPOLAR_THRESHOLD_PX_STEP)
 
 
 @dataclass(frozen=True)

@@ -110,6 +110,8 @@ processor.start()
 
 DLT三角測量と再投影誤差計算。
 
+Tracking runtime の epipolar gate は既定値 `3.5px` で、GUI の Tracking Control から `1.0` から `6.0px` まで `0.5px` 刻みで開始時に指定できます。
+
 ```python
 from host import Triangulator, create_dummy_calibration
 
@@ -280,7 +282,7 @@ print(result["session_id"])
 
 ### loutrack_gui.py - 映像なし Web GUI（新正規入口）
 
-同期スライダー（exposure/gain）と `ping` / `mask_start` / `pose_capture` / `wand_metric_capture` / `Generate Extrinsics` をブラウザから操作する最小 GUI。fps は 120 固定で、pair window は最大 `4166us` に制限されます。tracking と extrinsics capture の stream start は PTP/epoch `start_at_us` による countdown start を使います。
+同期スライダー（exposure/gain）と `ping` / `mask_start` / `pose_capture` / `wand_metric_capture` / `Generate Extrinsics` をブラウザから操作する最小 GUI。fps は 118 固定で、pair window は最大 `4166us` に制限されます。tracking と extrinsics capture の stream start は PTP/epoch `start_at_us` による countdown start を使います。
 `UDPReceiver` を起動して受動発見し、`CalibrationSession` の inventory merge をそのまま利用する。
 
 ```bash

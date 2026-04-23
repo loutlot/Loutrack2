@@ -73,7 +73,9 @@ IDLE_PREVIEW_FPS = 15.0
 IDLE_DIAGNOSTICS_FPS = 5.0
 DEFAULT_CAPTURE_WIDTH = 1536
 DEFAULT_CAPTURE_HEIGHT = 864
-DEFAULT_TARGET_FPS = 120
+DEFAULT_TARGET_FPS = 118
+SYNC_MAX_SENSOR_FPS = 120
+SYNC_MIN_FRAME_DURATION_US = int(round(1_000_000 / float(SYNC_MAX_SENSOR_FPS)))
 DEFAULT_MJPEG_PORT = 8555
 PREVIEW_STOP_TIMEOUT_SECONDS = 2.0
 PROCESSING_QUEUE_MAXSIZE = 2
@@ -489,7 +491,11 @@ class _SyncBeaconClient:
         phase_error_us = float(raw_err)
         correction_us = phase_error_us * self._pll_gain
         correction_us = max(-self._max_step_us, min(float(self._max_step_us), correction_us))
-        adjusted_us = max(1, period + int(round(correction_us)))
+        correction_per_frame_us = correction_us / max(1, SYNC_BEACON_INTERVAL_N)
+        adjusted_us = max(
+            SYNC_MIN_FRAME_DURATION_US,
+            period + int(round(correction_per_frame_us)),
+        )
         self._sync_state.record_correction(phase_error_us)
         self._apply_sync_duration_us(adjusted_us)
 
@@ -1311,6 +1317,8 @@ class FrameBackend(Protocol):
 
     def set_focus(self, value: float) -> None: ...
 
+    def get_control_diagnostics(self) -> dict[str, object]: ...
+
 
 class _Picamera2Api(Protocol):
     def create_video_configuration(self, *, main: dict[str, object]) -> object: ...
@@ -1364,6 +1372,19 @@ class DummyBackend:
 
     def set_focus(self, value: float) -> None:
         self._focus = float(value)
+
+    def get_control_diagnostics(self) -> dict[str, object]:
+        return {
+            "backend_control_supported": False,
+            "requested_fps": self._fps,
+            "requested_sync_duration_us": None,
+            "frame_duration_limits_requested": None,
+            "frame_duration_limits_applied": None,
+            "control_apply_count": 0,
+            "control_apply_error_count": 0,
+            "control_last_ok": None,
+            "control_last_error": None,
+        }
 
     @property
     def frame_index(self) -> int:
@@ -1439,6 +1460,14 @@ class Picamera2Backend:
         self._fps: int | None = None
         self._focus: float | None = None
         self._sync_duration_us: int | None = None
+        self._control_lock = threading.Lock()
+        self._control_apply_count = 0
+        self._control_apply_error_count = 0
+        self._control_last_ok: bool | None = None
+        self._control_last_error: str | None = None
+        self._control_last_monotonic: float | None = None
+        self._frame_duration_limits_requested: tuple[int, int] | None = None
+        self._frame_duration_limits_applied: tuple[int, int] | None = None
 
     def set_exposure_us(self, value_us: int) -> None:
         self._exposure_us = int(value_us)
@@ -1608,6 +1637,23 @@ class Picamera2Backend:
     def capture_array(self) -> np.ndarray:
         return self.next_captured_frame().image
 
+    def get_control_diagnostics(self) -> dict[str, object]:
+        with self._control_lock:
+            requested = self._frame_duration_limits_requested
+            applied = self._frame_duration_limits_applied
+            return {
+                "backend_control_supported": True,
+                "requested_fps": self._fps,
+                "requested_sync_duration_us": self._sync_duration_us,
+                "frame_duration_limits_requested": list(requested) if requested is not None else None,
+                "frame_duration_limits_applied": list(applied) if applied is not None else None,
+                "control_apply_count": int(self._control_apply_count),
+                "control_apply_error_count": int(self._control_apply_error_count),
+                "control_last_ok": self._control_last_ok,
+                "control_last_error": self._control_last_error,
+                "control_last_monotonic": self._control_last_monotonic,
+            }
+
     def _apply_controls_if_running(self) -> None:
         if not self._running or self._picam2 is None:
             return
@@ -1631,10 +1677,33 @@ class Picamera2Backend:
         if not controls:
             return
 
+        frame_duration_limits = controls.get("FrameDurationLimits")
+        requested_limits = (
+            cast(tuple[int, int], frame_duration_limits)
+            if isinstance(frame_duration_limits, tuple) and len(frame_duration_limits) == 2
+            else None
+        )
+        if requested_limits is not None:
+            with self._control_lock:
+                self._frame_duration_limits_requested = requested_limits
+
         try:
             _ = picam2.set_controls(controls)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            with self._control_lock:
+                self._control_apply_count += 1
+                self._control_apply_error_count += 1
+                self._control_last_ok = False
+                self._control_last_error = str(exc)
+                self._control_last_monotonic = time.monotonic()
             return
+        with self._control_lock:
+            self._control_apply_count += 1
+            self._control_last_ok = True
+            self._control_last_error = None
+            self._control_last_monotonic = time.monotonic()
+            if requested_limits is not None:
+                self._frame_duration_limits_applied = requested_limits
 
     @staticmethod
     def _manual_focus_mode() -> int:
@@ -1932,12 +2001,27 @@ class _CameraWorker:
             backend = self._backend
         elapsed = max(1e-6, time.monotonic() - started_monotonic) if started_monotonic > 0.0 else 0.0
         capture_fps = float(frames_captured) / elapsed if elapsed > 0.0 else 0.0
-        return {
+        diagnostics: dict[str, object] = {
             "capture_fps": capture_fps,
             "frames_captured": int(frames_captured),
             "frames_dropped_processing": int(dropped),
             "backend_active": bool(backend is not None),
         }
+        if backend is not None and hasattr(backend, "get_control_diagnostics"):
+            try:
+                diagnostics["camera_controls"] = backend.get_control_diagnostics()
+            except Exception as exc:  # noqa: BLE001
+                diagnostics["camera_controls"] = {
+                    "backend_control_supported": False,
+                    "control_last_ok": False,
+                    "control_last_error": str(exc),
+                }
+        else:
+            diagnostics["camera_controls"] = {
+                "backend_control_supported": False,
+                "control_last_ok": None,
+            }
+        return diagnostics
 
     def apply_control(self, fn: Callable[[FrameBackend], None]) -> None:
         with self._lock:

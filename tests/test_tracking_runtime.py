@@ -76,6 +76,7 @@ def test_tracking_runtime_start_stop_state_transition(monkeypatch) -> None:
             self.udp_port = udp_port
             self.calibration_path = calibration_path
             self.patterns = patterns or []
+            self.kwargs = dict(kwargs)
             self._running = False
             self._pose_callback = None
             self.geometry = type("_Geometry", (), {"camera_params": {}})()
@@ -110,11 +111,16 @@ def test_tracking_runtime_start_stop_state_transition(monkeypatch) -> None:
     monkeypatch.setattr("host.tracking_runtime.TrackingPipeline", _FakePipeline)
 
     runtime = TrackingRuntime(udp_port=7000)
-    start_status = runtime.start(calibration_path="calibration", patterns=["waist"])
+    start_status = runtime.start(
+        calibration_path="calibration",
+        patterns=["waist"],
+        epipolar_threshold_px=3.5,
+    )
     assert start_status["running"] is True
     assert _FakePipeline.last_instance is not None
     assert _FakePipeline.last_instance.udp_port == 7000
     assert _FakePipeline.last_instance.calibration_path == "calibration"
+    assert _FakePipeline.last_instance.kwargs["epipolar_threshold_px"] == 3.5
 
     stop_result = runtime.stop()
     assert stop_result["frames_processed"] == 12

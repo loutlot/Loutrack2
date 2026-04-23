@@ -1039,8 +1039,8 @@ def run_live_capture(config: CalibrateConfig) -> int:
     )
     picam2.configure(config_cam)
     picam2.start()
-    # Set FPS to 120 via FrameDurationLimits
-    frame_duration_us = int(round(1_000_000 / 120.0))
+    # Set FPS to the repo fixed capture baseline via FrameDurationLimits.
+    frame_duration_us = int(round(1_000_000 / 118.0))
     try:
         picam2.set_controls({"FrameDurationLimits": (frame_duration_us, frame_duration_us)})
     except Exception:

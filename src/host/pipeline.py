@@ -13,7 +13,11 @@ from collections import deque
 from datetime import datetime
 
 from .receiver import FrameProcessor, PairedFrames
-from .geo import GeometryPipeline, create_dummy_calibration
+from .geo import (
+    GeometryPipeline,
+    create_dummy_calibration,
+    normalize_epipolar_threshold_px,
+)
 from .rigid import (
     RigidBodyEstimator, RigidBodyPose, 
     MarkerPattern, WAIST_PATTERN
@@ -101,6 +105,7 @@ class TrackingPipeline:
         enable_logging: bool = True,
         log_dir: str = "./logs",
         timestamp_tolerance_us: int = FIXED_PAIR_WINDOW_US,
+        epipolar_threshold_px: Optional[float] = None,
     ):
         """
         Initialize tracking pipeline.
@@ -117,6 +122,11 @@ class TrackingPipeline:
         self.log_dir = log_dir
         self.configured_pair_window_us = int(timestamp_tolerance_us)
         self.active_pair_window_us = int(timestamp_tolerance_us)
+        self._epipolar_threshold_px_override = (
+            normalize_epipolar_threshold_px(epipolar_threshold_px)
+            if epipolar_threshold_px is not None
+            else None
+        )
         self._sync_warmup_target = 3
         self._sync_precision_mode = "warmup"
         self._sync_degraded_precision = False
@@ -146,6 +156,7 @@ class TrackingPipeline:
         self._calibration_loaded = False
         if calibration_path:
             self._calibration_loaded = self.geometry.load_calibration(calibration_path) > 0
+        self._apply_epipolar_threshold_override()
         
         # Logger
         self.logger: Optional[FrameLogger] = None
@@ -210,7 +221,17 @@ class TrackingPipeline:
         """
         count = self.geometry.load_calibration(filepath)
         self._calibration_loaded = count > 0
+        self._apply_epipolar_threshold_override()
         return count
+
+    def _apply_epipolar_threshold_override(self) -> None:
+        if self._epipolar_threshold_px_override is None:
+            return
+        self.geometry.epipolar_threshold_px = float(self._epipolar_threshold_px_override)
+        if self.geometry.triangulator is not None:
+            self.geometry.triangulator.epipolar_threshold_px = float(
+                self._epipolar_threshold_px_override
+            )
     
     def use_dummy_calibration(self, camera_ids: List[str]) -> None:
         """Use dummy calibration for testing."""

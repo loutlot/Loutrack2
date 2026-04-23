@@ -495,7 +495,7 @@ class UDPReceiver:
     # Maximum single UDP datagram we'll accept (64 KiB covers any JSON blob payload)
     _RECV_BYTES: int = 65536
     # Kernel socket receive buffer (8 MiB).
-    # At 120 fps × 6 cameras × ~600 B/frame ≈ 430 KB/s steady-state; the enlarged
+    # At 118 fps × 6 cameras × ~600 B/frame ≈ 425 KB/s steady-state; the enlarged
     # kernel buffer absorbs multi-second bursts while the processing thread catches up.
     _KERNEL_RECV_BUF: int = 8 * 1024 * 1024
 

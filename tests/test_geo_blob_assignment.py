@@ -9,7 +9,13 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from host.geo import CameraParams, GeometryPipeline, Triangulator, create_dummy_calibration
+from host.geo import (
+    CameraParams,
+    GeometryPipeline,
+    Triangulator,
+    create_dummy_calibration,
+    normalize_epipolar_threshold_px,
+)
 from host.receiver import Frame, PairedFrames
 
 
@@ -85,6 +91,16 @@ def _geometry_pipeline_with_params(params: dict[str, CameraParams]) -> GeometryP
     pipeline.triangulator = Triangulator(params)
     pipeline.epipolar_threshold_px = pipeline.triangulator.epipolar_threshold_px
     return pipeline
+
+
+def test_epipolar_threshold_defaults_to_tracking_slider_value() -> None:
+    triangulator = Triangulator(create_dummy_calibration(["cam0", "cam1"]))
+
+    assert triangulator.epipolar_threshold_px == 3.5
+    assert normalize_epipolar_threshold_px(None) == 3.5
+    assert normalize_epipolar_threshold_px(3.4) == 3.5
+    assert normalize_epipolar_threshold_px(0.0) == 1.0
+    assert normalize_epipolar_threshold_px(9.0) == 6.0
 
 
 def test_epipolar_helper_uses_one_to_one_assignment(monkeypatch) -> None:

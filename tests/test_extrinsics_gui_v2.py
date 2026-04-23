@@ -179,12 +179,14 @@ class _FakeTrackingRuntime:
     def __init__(self):
         self.running = False
         self.started_with = None
+        self.started_epipolar_threshold_px = None
         self.start_count = 0
 
-    def start(self, calibration_path: str, patterns):
+    def start(self, calibration_path: str, patterns, epipolar_threshold_px=None):
         self.running = True
         self.start_count += 1
         self.started_with = (calibration_path, list(patterns))
+        self.started_epipolar_threshold_px = epipolar_threshold_px
         return {"running": True, "calibration_loaded": True}
 
     def stop(self):
@@ -205,7 +207,7 @@ class _FakeTrackingRuntime:
 
 
 class _FailingTrackingRuntime(_FakeTrackingRuntime):
-    def start(self, calibration_path: str, patterns):
+    def start(self, calibration_path: str, patterns, epipolar_threshold_px=None):
         raise RuntimeError("tracking bind failed")
 
 
@@ -1716,6 +1718,9 @@ def test_tracking_page_surfaces_start_stop_status_messages() -> None:
     assert 'id="intFps"' not in HTML_PAGE
     assert "fpsValue" not in HTML_PAGE
     assert "intFpsValue" not in HTML_PAGE
+    assert 'id="trackingEpipolarThreshold" type="range" min="1" max="6" step="0.5" value="3.5"' in HTML_PAGE
+    assert "trackingEpipolarThresholdValue" in HTML_PAGE
+    assert "epipolar_threshold_px: Number(elements.trackingEpipolarThreshold?.value || 3.5)" in HTML_PAGE
     assert 'id="focus" type="range"' not in HTML_PAGE
     assert "trackingClientDiagnostics" in HTML_PAGE
     assert "sseInterArrivalMs" in HTML_PAGE

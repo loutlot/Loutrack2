@@ -109,7 +109,12 @@ class TrackingRuntime:
         self._lock = threading.Lock()
         self._scene_condition = threading.Condition(self._lock)
 
-    def start(self, calibration_path: str, patterns: Optional[List[str]] = None) -> Dict[str, Any]:
+    def start(
+        self,
+        calibration_path: str,
+        patterns: Optional[List[str]] = None,
+        epipolar_threshold_px: Optional[float] = None,
+    ) -> Dict[str, Any]:
         """Start tracking runtime and attach pose callback."""
         self.stop()
 
@@ -124,6 +129,7 @@ class TrackingRuntime:
             udp_port=self.udp_port,
             calibration_path=calibration_path,
             patterns=selected_patterns,
+            epipolar_threshold_px=epipolar_threshold_px,
         )
         pipeline.set_pose_callback(self._on_pose)
         self._start_pipeline_with_retry(pipeline)

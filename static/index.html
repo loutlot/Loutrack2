@@ -952,6 +952,10 @@
             <div class="panel">
               <div class="panel-title">Tracking Control</div>
               <div style="font-size:11px;color:var(--ink-muted);margin-bottom:8px" id="trackingExtrinsicsPath"></div>
+              <label style="display:block;margin-bottom:8px">
+                <span>Epipolar Gate <span class="slider-value" id="trackingEpipolarThresholdValue">3.5</span> px</span>
+                <input id="trackingEpipolarThreshold" type="range" min="1" max="6" step="0.5" value="3.5">
+              </label>
               <div class="btn-row" style="margin-top:0">
                 <button id="trackingStart" class="btn-teal btn-sm" type="button">Start</button>
                 <button id="trackingStop" class="btn-ghost btn-sm" type="button">Stop</button>
@@ -1203,6 +1207,8 @@
       trackingRigidList: document.getElementById("trackingRigidList"),
       trackingRigidCount: document.getElementById("trackingRigidCount"),
       trackingClientDiagnostics: document.getElementById("trackingClientDiagnostics"),
+      trackingEpipolarThreshold: document.getElementById("trackingEpipolarThreshold"),
+      trackingEpipolarThresholdValue: document.getElementById("trackingEpipolarThresholdValue"),
       trackingStart: document.getElementById("trackingStart"),
       trackingStop: document.getElementById("trackingStop"),
       trackingControlStatus: document.getElementById("trackingControlStatus"),
@@ -3274,6 +3280,7 @@
         await postJson("/api/tracking/start", {
           patterns: ["waist"],
           camera_ids: selectedCameraIds(),
+          epipolar_threshold_px: Number(elements.trackingEpipolarThreshold?.value || 3.5),
         });
         trackingUiState = { phase: "idle", error: "" };
         setActivePage("tracking");
@@ -3288,6 +3295,12 @@
         renderTrackingControlState(latestTrackingStatus);
         reportUiError("tracking_start", error);
       }
+    });
+
+    elements.trackingEpipolarThreshold?.addEventListener("input", () => {
+      elements.trackingEpipolarThresholdValue.textContent = Number(
+        elements.trackingEpipolarThreshold.value
+      ).toFixed(1);
     });
 
     elements.trackingStop.addEventListener("click", async () => {

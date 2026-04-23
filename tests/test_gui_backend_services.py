@@ -216,12 +216,19 @@ class _TrackingRuntime:
         self.fail = fail
         self.running = False
         self.started_with = None
+        self.started_epipolar_threshold_px = None
 
-    def start(self, calibration_path: str, patterns):  # noqa: ANN001
+    def start(  # noqa: ANN001
+        self,
+        calibration_path: str,
+        patterns,
+        epipolar_threshold_px=None,
+    ):
         if self.fail:
             raise RuntimeError("tracking bind failed")
         self.running = True
         self.started_with = (calibration_path, list(patterns))
+        self.started_epipolar_threshold_px = epipolar_threshold_px
         return {"running": True, "calibration_loaded": True}
 
     def stop(self) -> Dict[str, Any]:
@@ -490,6 +497,27 @@ def test_gui_tracking_service_tolerates_already_running_streams(tmp_path: Path) 
     assert response["ok"] is True
     assert response["running"] is True
     assert response["pi_stream_start"]["pi-cam-01"]["error_message"] == "already_running"
+
+
+def test_gui_tracking_service_forwards_epipolar_threshold(tmp_path: Path) -> None:
+    runtime = _TrackingRuntime()
+    state = _build_state(tmp_path, runtime=runtime)
+    calibration_dir = tmp_path / "calibration"
+    calibration_dir.mkdir()
+    extrinsics_path = calibration_dir / "extrinsics_pose_v2.json"
+    extrinsics_path.write_text("{}", encoding="utf-8")
+    state.latest_extrinsics_path = extrinsics_path
+
+    response = state._tracking_service.start_tracking(
+        {
+            "patterns": ["waist"],
+            "camera_ids": ["pi-cam-01"],
+            "epipolar_threshold_px": 3.4,
+        }
+    )
+
+    assert runtime.started_epipolar_threshold_px == 3.5
+    assert response["epipolar_threshold_px"] == 3.5
 
 
 def test_gui_tracking_service_rolls_back_receiver_when_runtime_start_fails(tmp_path: Path) -> None:

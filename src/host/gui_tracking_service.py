@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, List
 
+from .geo import normalize_epipolar_threshold_px
 from .scheduled_start import scheduled_start_kwargs
 
 
@@ -72,6 +73,9 @@ class GuiTrackingService:
         patterns = payload.get("patterns", ["waist"])
         if not isinstance(patterns, list):
             patterns = ["waist"]
+        epipolar_threshold_px = normalize_epipolar_threshold_px(
+            payload.get("epipolar_threshold_px")
+        )
         current_status = owner.tracking_runtime.status()
         if bool(current_status.get("running", False)):
             response = {
@@ -91,7 +95,11 @@ class GuiTrackingService:
         optimization = self._prepare_pis_for_tracking(targets)
         self._pause_receiver_for_tracking()
         try:
-            status = owner.tracking_runtime.start(str(resolved), [str(item) for item in patterns])
+            status = owner.tracking_runtime.start(
+                str(resolved),
+                [str(item) for item in patterns],
+                epipolar_threshold_px=epipolar_threshold_px,
+            )
             start_kwargs = scheduled_start_kwargs("pose_capture")
             stream_start = owner.session._broadcast(targets, "start", **start_kwargs)
             if not self.all_acked_or_already_running(stream_start):
@@ -113,6 +121,7 @@ class GuiTrackingService:
             "pi_tracking_optimization": optimization,
             "pi_stream_start": stream_start,
             "scheduled_start_at_us": start_kwargs["start_at_us"],
+            "epipolar_threshold_px": epipolar_threshold_px,
         }
         owner.last_result = {"tracking_start": response}
         return response

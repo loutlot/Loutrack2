@@ -6,9 +6,10 @@
 - UDP フレーム (1 データグラムにつき 1 つの JSON): デフォルト `255.255.255.255:5000`
 - デフォルトバックエンド: Raspberry Pi では `picamera2`、それ以外では `dummy`
 - 前提カメラ: `Raspberry Pi Camera Module 3 Wide NoIR`
-- 固定キャプチャモード: `1536x864 @ 120fps`
+- 固定キャプチャモード: `1536x864 @ 118fps`
 - 起動時のログはリスンアドレス、バックエンド、プレビュー状態、キャプチャ開始/停止ステータスを出力します
 - UDP ペイロードは `timestamp_source` と capture-to-process/send 診断値を含みます。`pose_capture` では同期キーとして信用しない `frame_index` を送信しません
+- runtime diagnostics の `camera_controls` には、要求した `FrameDurationLimits`、最後に Picamera2 が受理した `FrameDurationLimits`、control 適用の成功/失敗回数が含まれます
 
 正規モジュール:
 

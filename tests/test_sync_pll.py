@@ -14,8 +14,10 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from pi.service.capture_runtime import (  # noqa: E402
+    DEFAULT_TARGET_FPS,
     SYNC_LOCK_MIN_COUNT,
     SYNC_MAX_STEP_US,
+    SYNC_MIN_FRAME_DURATION_US,
     SYNC_PLL_GAIN,
     Picamera2Backend,
     _SyncBeaconClient,
@@ -40,6 +42,12 @@ class _FakePicamera2:
 
     def set_controls(self, controls: dict[str, object]) -> None:
         self.calls.append(dict(controls))
+
+
+class _FailingPicamera2(_FakePicamera2):
+    def set_controls(self, controls: dict[str, object]) -> None:
+        self.calls.append(dict(controls))
+        raise RuntimeError("FrameDurationLimits rejected")
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +115,10 @@ def test_sync_state_thread_safety() -> None:
 # _SyncBeaconClient._apply_correction
 # ---------------------------------------------------------------------------
 
-def _make_client(apply_fn=None, nominal_period_us=8333) -> tuple[_SyncBeaconClient, _SyncState]:
+def _make_client(
+    apply_fn=None,
+    nominal_period_us=int(round(1_000_000 / DEFAULT_TARGET_FPS)),
+) -> tuple[_SyncBeaconClient, _SyncState]:
     state = _SyncState()
     applied: list[int] = []
 
@@ -129,47 +140,47 @@ def _make_client(apply_fn=None, nominal_period_us=8333) -> tuple[_SyncBeaconClie
 
 def test_pll_skips_before_first_frame() -> None:
     client, state = _make_client()
-    client._apply_correction(1_000_500, 8333)
+    client._apply_correction(1_000_500, int(round(1_000_000 / DEFAULT_TARGET_FPS)))
     assert client._applied == []  # type: ignore[attr-defined]
 
 
 def test_pll_phase_error_positive() -> None:
     client, state = _make_client()
     state.update_frame_ts(1_000_000)
-    client._apply_correction(1_000_500, 8333)
-    # phase_error = 500, correction = 500*0.15 = 75, adjusted = 8333+75 = 8408
-    assert client._applied == [8408]  # type: ignore[attr-defined]
+    client._apply_correction(1_000_500, int(round(1_000_000 / DEFAULT_TARGET_FPS)))
+    # phase_error = 500, correction = 500*0.15 = 75, per-frame = 75/10, adjusted = 8475+8 = 8483
+    assert client._applied == [8483]  # type: ignore[attr-defined]
     assert state.phase_error_us == pytest.approx(500.0)
 
 
 def test_pll_phase_error_negative() -> None:
-    # client is 500µs AHEAD of server → server_ts appears 8333-500 = 7833 ahead mod period
+    nominal_period = int(round(1_000_000 / DEFAULT_TARGET_FPS))
+    # client is 500µs AHEAD of server → server_ts appears period-500 ahead mod period
     client, state = _make_client()
     state.update_frame_ts(1_000_000)
     # server_ts = 999_500: server is 500µs behind client
-    # raw_err = (999_500 - 1_000_000) % 8333 = (-500) % 8333 = 7833
-    # 7833 > 4166.5 → phase_error = 7833 - 8333 = -500
-    # correction = -500 * 0.15 = -75, adjusted = 8333 - 75 = 8258
-    client._apply_correction(999_500, 8333)
-    assert client._applied == [8258]  # type: ignore[attr-defined]
+    # raw_err = (999_500 - 1_000_000) % period = period-500
+    # period-500 > period/2 → phase_error = -500
+    # correction = -500 * 0.15 = -75, per-frame = -75/10, adjusted = 8475 - 8 = 8467
+    client._apply_correction(999_500, nominal_period)
+    assert client._applied == [8467]  # type: ignore[attr-defined]
     assert state.phase_error_us == pytest.approx(-500.0)
 
 
 def test_pll_correction_clamp() -> None:
     client, state = _make_client()
     state.update_frame_ts(1_000_000)
-    # phase_error = 2000, correction = 2000*0.15 = 300 → clamped to 200
-    client._apply_correction(1_002_000, 8333)
-    assert client._applied == [8533]  # type: ignore[attr-defined]
+    # phase_error = 2000, correction = 2000*0.15 = 300 → clamped to 200, per-frame = 20
+    client._apply_correction(1_002_000, int(round(1_000_000 / DEFAULT_TARGET_FPS)))
+    assert client._applied == [8495]  # type: ignore[attr-defined]
 
 
 def test_pll_correction_clamp_negative() -> None:
     client, state = _make_client()
     state.update_frame_ts(1_000_000)
     # client ahead by 2000: server_ts = 998_000 → error maps to -2000 → clamped to -200
-    client._apply_correction(1_000_000 - 2000, 8333)
-    # raw = (998_000 - 1_000_000) % 8333 = 6333, 6333 > 4166 → phase = -2000
-    assert client._applied == [8133]  # type: ignore[attr-defined]
+    client._apply_correction(1_000_000 - 2000, int(round(1_000_000 / DEFAULT_TARGET_FPS)))
+    assert client._applied == [8455]  # type: ignore[attr-defined]
 
 
 def test_pll_uses_nominal_period_over_beacon() -> None:
@@ -177,8 +188,15 @@ def test_pll_uses_nominal_period_over_beacon() -> None:
     client, state = _make_client(nominal_period_us=10000)
     state.update_frame_ts(1_000_000)
     client._apply_correction(1_000_500, 8333)
-    # correction = 500*0.15=75, adjusted = 10000+75 = 10075
-    assert client._applied == [10075]  # type: ignore[attr-defined]
+    # correction = 500*0.15=75, per-frame = 75/10, adjusted = 10000+8 = 10008
+    assert client._applied == [10008]  # type: ignore[attr-defined]
+
+
+def test_pll_never_requests_faster_than_120fps_sensor_limit() -> None:
+    client, state = _make_client(nominal_period_us=SYNC_MIN_FRAME_DURATION_US + 1)
+    state.update_frame_ts(1_000_000)
+    client._apply_correction(998_000, SYNC_MIN_FRAME_DURATION_US + 1)
+    assert client._applied == [SYNC_MIN_FRAME_DURATION_US]  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------
@@ -264,9 +282,10 @@ def test_picamera2_sync_duration_overrides_nominal() -> None:
     backend._picam2 = fake  # type: ignore[assignment]
     backend._running = True
 
-    backend.set_fps(120)
+    backend.set_fps(DEFAULT_TARGET_FPS)
     nominal_calls = [c for c in fake.calls if "FrameDurationLimits" in c]
-    assert nominal_calls[-1]["FrameDurationLimits"] == (8333, 8333)
+    expected_us = int(round(1_000_000 / DEFAULT_TARGET_FPS))
+    assert nominal_calls[-1]["FrameDurationLimits"] == (expected_us, expected_us)
 
     backend.set_sync_duration_us(8500)
     sync_calls = [c for c in fake.calls if "FrameDurationLimits" in c]
@@ -279,11 +298,12 @@ def test_picamera2_sync_duration_none_reverts_to_nominal() -> None:
     backend._picam2 = fake  # type: ignore[assignment]
     backend._running = True
 
-    backend.set_fps(120)
+    backend.set_fps(DEFAULT_TARGET_FPS)
     backend.set_sync_duration_us(8500)
     backend.set_sync_duration_us(None)
     fdl_calls = [c["FrameDurationLimits"] for c in fake.calls if "FrameDurationLimits" in c]
-    assert fdl_calls[-1] == (8333, 8333)
+    expected_us = int(round(1_000_000 / DEFAULT_TARGET_FPS))
+    assert fdl_calls[-1] == (expected_us, expected_us)
 
 
 def test_picamera2_set_fps_clears_sync_override() -> None:
@@ -292,7 +312,7 @@ def test_picamera2_set_fps_clears_sync_override() -> None:
     backend._picam2 = fake  # type: ignore[assignment]
     backend._running = True
 
-    backend.set_fps(120)
+    backend.set_fps(DEFAULT_TARGET_FPS)
     backend.set_sync_duration_us(8500)
     assert backend._sync_duration_us == 8500
 
@@ -300,6 +320,45 @@ def test_picamera2_set_fps_clears_sync_override() -> None:
     assert backend._sync_duration_us is None
     fdl_calls = [c["FrameDurationLimits"] for c in fake.calls if "FrameDurationLimits" in c]
     assert fdl_calls[-1] == (16667, 16667)
+
+
+def test_picamera2_control_diagnostics_records_frame_duration_success() -> None:
+    backend = Picamera2Backend()
+    fake = _FakePicamera2()
+    backend._picam2 = fake  # type: ignore[assignment]
+    backend._running = True
+
+    backend.set_fps(DEFAULT_TARGET_FPS)
+    backend.set_sync_duration_us(8500)
+
+    diag = backend.get_control_diagnostics()
+    assert diag["backend_control_supported"] is True
+    assert diag["requested_fps"] == DEFAULT_TARGET_FPS
+    assert diag["requested_sync_duration_us"] == 8500
+    assert diag["frame_duration_limits_requested"] == [8500, 8500]
+    assert diag["frame_duration_limits_applied"] == [8500, 8500]
+    assert diag["control_last_ok"] is True
+    assert diag["control_last_error"] is None
+    assert diag["control_apply_count"] == 2
+    assert diag["control_apply_error_count"] == 0
+
+
+def test_picamera2_control_diagnostics_records_frame_duration_failure() -> None:
+    backend = Picamera2Backend()
+    fake = _FailingPicamera2()
+    backend._picam2 = fake  # type: ignore[assignment]
+    backend._running = True
+
+    backend.set_fps(DEFAULT_TARGET_FPS)
+
+    expected_us = int(round(1_000_000 / DEFAULT_TARGET_FPS))
+    diag = backend.get_control_diagnostics()
+    assert diag["frame_duration_limits_requested"] == [expected_us, expected_us]
+    assert diag["frame_duration_limits_applied"] is None
+    assert diag["control_last_ok"] is False
+    assert diag["control_last_error"] == "FrameDurationLimits rejected"
+    assert diag["control_apply_count"] == 1
+    assert diag["control_apply_error_count"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -363,6 +422,7 @@ def test_parse_args_sync_role_auto_unknown(monkeypatch) -> None:
 
 def test_client_receives_beacon_and_applies_correction() -> None:
     port = _free_udp_port()
+    nominal_period = int(round(1_000_000 / DEFAULT_TARGET_FPS))
     state = _SyncState()
     state.update_frame_ts(1_000_000)
     applied: list[int] = []
@@ -371,7 +431,7 @@ def test_client_receives_beacon_and_applies_correction() -> None:
         beacon_port=port,
         sync_state=state,
         apply_sync_duration_us=applied.append,
-        get_nominal_period_us=lambda: 8333,
+        get_nominal_period_us=lambda: nominal_period,
         log_fn=lambda msg: None,
     )
     client.start()
@@ -386,7 +446,7 @@ def test_client_receives_beacon_and_applies_correction() -> None:
             time.sleep(0.02)
 
         assert applied, "No correction applied within 2s"
-        assert applied[0] == 8408  # 8333 + round(500*0.15)
+        assert applied[0] == 8483
     finally:
         client.stop()
         send_sock.close()

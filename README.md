@@ -101,8 +101,11 @@ Typical flow:
 The tracking page uses the bundled three.js viewer with both `three.module.min.js` and its split `three.core.min.js` dependency. Its initial loading state does not claim a canvas context before WebGL starts, and the retired 2D canvas fallback has been replaced by a clear WebGL-unavailable message if the renderer cannot start.
 When live tracking starts, the GUI temporarily pauses its passive UDP discovery receiver so the tracking pipeline can bind the same UDP port without an address-in-use failure, then resumes discovery after tracking stops or startup fails.
 Tracking start, stop, and error feedback is also mirrored into the Tracking Control status line so failures are visible without leaving the 3D Tracking page.
+Tracking Control exposes the live epipolar gate as a `1.0` to `6.0px` slider in `0.5px` steps, with the current runtime default set to `3.5px`.
 Camera preview tiles now distinguish between preview intentionally being off for the current view, a healthy live host-proxied MJPEG stream, and upstream-unreachable proxy failures. Client-side MJPEG disconnects are treated as normal preview lifecycle events rather than Pi upstream reachability failures.
 New calibration settings default to blob threshold `150` and mask threshold `120`.
+The current Raspberry Pi Camera Module 3 Wide NoIR capture baseline is `1536x864 @ 118fps`. The 118fps fixed runtime leaves a small frame-duration margin below the sensor's 120fps mode so PTP-based scheduled start and software phase diagnostics can apply bounded timing corrections without requesting a faster-than-120fps frame period.
+Pi runtime diagnostics include `camera_controls`, which reports the requested and last accepted `FrameDurationLimits` plus Picamera2 control success/error counters so frame-rate trimming can be verified from ping/status logs.
 Tracking status and logs now expose a lightweight performance spine for later optimization: Pi runtime summaries report queue age, blob detection, JSON encode, UDP send, payload bytes, and send errors; Host status reports pair age, cleanup/eviction counts, triangulation, rigid estimation, metrics, logger enqueue, and writer lag; the GUI stream includes scene/SSE timestamps plus browser-side SSE, parse, apply, rAF, and WebGL render summaries.
 
 ## Hardware Direction
