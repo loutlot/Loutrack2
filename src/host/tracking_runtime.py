@@ -485,7 +485,6 @@ class TrackingRuntime:
             "receiver": {"frames_received": 0, "cameras_discovered": 0},
             "metrics": {},
             "tracking": {},
-            "sync": {},
             "triangulation_quality": {},
             "uptime_seconds": 0.0,
             "last_stop_summary": last_stop_summary,
@@ -502,7 +501,6 @@ class TrackingRuntime:
             "receiver": dict(status.get("receiver", {})),
             "metrics": dict(status.get("metrics", {})),
             "tracking": dict(status.get("tracking", {})),
-            "sync": dict(status.get("sync", {})),
             "triangulation_quality": _copy_triangulation_quality(
                 status.get("triangulation_quality", {})
             ),

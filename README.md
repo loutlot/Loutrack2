@@ -96,6 +96,8 @@ Current highlights:
 - live tracking start and stop feedback is surfaced in the GUI
 - camera health, latency, and stream diagnostics stay visible beside the scene
 - the epipolar gate is adjustable from Tracking Control
+- host tracking pairs frames with a fixed `4237us` half-frame window at `118fps`
+- the old host-side sync-quality dashboard is gone, keeping tracking focused on scene and camera health
 - custom rigid-body registration works directly from triangulated blobs
 
 ## Hardware Direction

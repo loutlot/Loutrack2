@@ -975,8 +975,8 @@ def test_get_settings_does_not_rewrite_existing_settings_file(tmp_path: Path) ->
                 "pose_log_path": "logs/extrinsics_pose_capture.jsonl",
                 "wand_metric_log_path": "logs/extrinsics_wand_metric.jsonl",
                 "output_path": "calibration/extrinsics_pose_v2.json",
-                "pair_window_us": 4166,
-                "wand_pair_window_us": 4166,
+                "pair_window_us": 4237,
+                "wand_pair_window_us": 4237,
                 "min_pairs": 8,
                 "wand_face": "front_up",
             },
@@ -985,8 +985,8 @@ def test_get_settings_does_not_rewrite_existing_settings_file(tmp_path: Path) ->
                 "pose_log_path": "logs/extrinsics_pose_capture.jsonl",
                 "wand_metric_log_path": "logs/extrinsics_wand_metric.jsonl",
                 "output_path": "calibration/extrinsics_pose_v2.json",
-                "pair_window_us": 4166,
-                "wand_pair_window_us": 4166,
+                "pair_window_us": 4237,
+                "wand_pair_window_us": 4237,
                 "min_pairs": 8,
                 "wand_face": "front_up",
             },
@@ -1743,8 +1743,10 @@ def test_tracking_viewer_uses_webgl_without_canvas_fallback() -> None:
     assert "new THREE.Spherical" not in HTML_PAGE
     assert "floor/metric wand origin" not in HTML_PAGE
     assert "triangulated blobs" in HTML_PAGE
-    assert "vertexColors: true" in HTML_PAGE
-    assert "size: 0.07" in HTML_PAGE
+    assert 'fill: "#ffffff"' in HTML_PAGE
+    assert 'stroke: "#22c55e"' in HTML_PAGE
+    assert "size: 0.09" in HTML_PAGE
+    assert "size: 0.13" in HTML_PAGE
     assert "camera_ids: selectedCameraIds()" in HTML_PAGE
     assert 'return createTrackingPlaceholderViewer();' in HTML_PAGE
     assert "Falling back to built-in tracking viewer" not in HTML_PAGE

@@ -32,7 +32,6 @@ from .rigid import (
 from .pipeline import TrackingPipeline, TrackingSession
 from .tracking_runtime import TrackingRuntime
 from .visualize import TrackingVisualizer, SimpleGraph
-from .sync_eval import SyncEvaluator
 from .wand_session import (
     WAND_NAME,
     WAND_MARKER_DIAMETER_MM,
@@ -109,7 +108,6 @@ __all__ = [
     "TrackingPipeline",
     "TrackingSession",
     "TrackingRuntime",
-    "SyncEvaluator",
     "send_request",
     "ping",
     "start",

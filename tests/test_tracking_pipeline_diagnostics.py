@@ -162,21 +162,12 @@ def test_tracking_pipeline_uses_half_frame_timestamp_pairing_window() -> None:
 
     assert pipeline.frame_processor.pairer.timestamp_tolerance_us == FIXED_PAIR_WINDOW_US
     assert pipeline.frame_processor.pairer.frame_index_fallback is False
-    assert tuple(pipeline.sync_evaluator.tolerance_windows_us) == (
-        500,
-        1000,
-        2000,
-        3000,
-        FIXED_PAIR_WINDOW_US,
-    )
-    assert pipeline.sync_evaluator.target_range_us == (1000, FIXED_PAIR_WINDOW_US)
 
 
-def test_tracking_pipeline_tightens_pair_window_after_warmup_and_reports_degraded_precision() -> None:
+def test_tracking_pipeline_keeps_fixed_pair_window_and_omits_sync_status() -> None:
     pipeline = TrackingPipeline(enable_logging=False)
     pipeline._running = True
     pipeline._calibration_loaded = True
-    pipeline._sync_policy_interval_s = 0.0
 
     min_inlier_view_calls: list[int] = []
 
@@ -207,8 +198,8 @@ def test_tracking_pipeline_tightens_pair_window_after_warmup_and_reports_degrade
     pipeline.rigid_estimator = _Rigid()  # type: ignore[assignment]
 
     now = time.time()
-    warmup_spreads = [200, 1500, 2200]
-    for index, spread in enumerate(warmup_spreads):
+    spreads = [200, 1500, 2200, 9000]
+    for index, spread in enumerate(spreads):
         pair = PairedFrames(
             timestamp=1_000_000 + index * 10_000,
             frames={
@@ -228,27 +219,13 @@ def test_tracking_pipeline_tightens_pair_window_after_warmup_and_reports_degrade
         )
         pipeline._on_paired_frames(pair)
 
-    assert pipeline.frame_processor.pairer.timestamp_tolerance_us == 3000
-    assert min_inlier_view_calls == [2, 2, 2]
-
-    degraded_pair = PairedFrames(
-        timestamp=2_000_000,
-        frames={
-            "pi-cam-01": _frame("pi-cam-01", 2_000_000, now + 0.1),
-            "pi-cam-02": _frame("pi-cam-02", 2_009_000, now + 0.101),
-            "pi-cam-03": _frame("pi-cam-03", 2_008_700, now + 0.102),
-        },
-        timestamp_range_us=9000,
-    )
-    pipeline._on_paired_frames(degraded_pair)
     status = pipeline.get_status()
     snapshot = pipeline.get_latest_triangulation_snapshot()
 
-    assert min_inlier_view_calls[-1] == 3
-    assert status["sync"]["degraded_precision"] is True
-    assert status["sync"]["precision_mode"] == "degraded_precision"
-    assert status["sync"]["active_window_us"] == FIXED_PAIR_WINDOW_US
+    assert pipeline.frame_processor.pairer.timestamp_tolerance_us == FIXED_PAIR_WINDOW_US
+    assert min_inlier_view_calls == [2, 2, 2, 2]
+    assert "sync" not in status
     assert status["triangulation_quality"]["reprojection_error_px_summary"]["count"] == 1
-    assert snapshot["sync_precision_mode"] == "degraded_precision"
+    assert "sync_precision_mode" not in snapshot
     assert "epipolar_error_px_summary" in snapshot
     assert "triangulation_angle_deg_summary" in snapshot

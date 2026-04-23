@@ -186,7 +186,7 @@ def apply_wand_metric_alignment(
     wand_observations_by_camera: Dict[str, Sequence[WandMetricObservation]],
     wand_points_mm: Sequence[Sequence[float]],
     up_axis: str = "Z",
-    pair_window_us: int = 4166,
+    pair_window_us: int = 4237,
     wand_face: str = WAND_FACE_FRONT_UP,
     assume_metric_scale: bool = False,
     focal_scales: Dict[str, float] | None = None,

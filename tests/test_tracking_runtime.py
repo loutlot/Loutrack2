@@ -169,7 +169,6 @@ def test_tracking_runtime_retries_once_for_address_in_use(monkeypatch) -> None:
                 "receiver": {},
                 "metrics": {},
                 "tracking": {},
-                "sync": {},
                 "uptime_seconds": 0.0,
             }
 
@@ -253,7 +252,6 @@ def test_tracking_runtime_scene_resets_after_stop(monkeypatch) -> None:
                 "receiver": {},
                 "metrics": {},
                 "tracking": {},
-                "sync": {},
                 "uptime_seconds": 0.1,
             }
 
@@ -316,7 +314,6 @@ def test_tracking_runtime_updates_scene_even_without_valid_rigid_body(monkeypatc
                 "receiver": {},
                 "metrics": {},
                 "tracking": {},
-                "sync": {},
                 "triangulation_quality": {
                     "accepted_points": 1,
                     "contributing_rays": {
@@ -408,7 +405,6 @@ def test_tracking_runtime_status_uses_short_lived_cache(monkeypatch) -> None:
                 "receiver": {},
                 "metrics": {},
                 "tracking": {},
-                "sync": {},
                 "uptime_seconds": 0.1,
             }
 
@@ -467,7 +463,6 @@ def test_tracking_runtime_reuses_cached_camera_scene_on_pose_updates(monkeypatch
                 "receiver": {},
                 "metrics": {},
                 "tracking": {},
-                "sync": {},
                 "uptime_seconds": 0.1,
             }
 
@@ -544,7 +539,6 @@ def test_tracking_runtime_ignores_duplicate_scene_timestamps(monkeypatch) -> Non
                 "receiver": {},
                 "metrics": {},
                 "tracking": {},
-                "sync": {},
                 "uptime_seconds": 0.1,
             }
 
@@ -665,7 +659,6 @@ def test_tracking_runtime_reuses_status_cache_and_camera_scene(monkeypatch) -> N
                 "receiver": {},
                 "metrics": {},
                 "tracking": {},
-                "sync": {},
                 "uptime_seconds": 0.1,
             }
 
@@ -739,7 +732,6 @@ def test_tracking_runtime_registers_custom_pattern_and_updates_running_pipeline(
                 "receiver": {},
                 "metrics": {},
                 "tracking": {},
-                "sync": {},
                 "uptime_seconds": 0.1,
             }
 
@@ -807,7 +799,6 @@ def test_tracking_runtime_removes_custom_pattern_and_updates_running_pipeline(mo
                 "receiver": {},
                 "metrics": {},
                 "tracking": {},
-                "sync": {},
                 "uptime_seconds": 0.1,
             }
 

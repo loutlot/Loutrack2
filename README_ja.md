@@ -96,6 +96,8 @@ Pi と GUI の起動、確認、停止の手順は [`docs/30_procedure/pi_gui_st
 - tracking の start / stop 状態が GUI 上で分かりやすく見える
 - camera health、latency、stream diagnostics を scene の横で追える
 - Tracking Control から epipolar gate を調整できる
+- host tracking は `118fps` 前提で half-frame の `4237us` 固定 pair window を使う
+- 以前の host 側 sync-quality dashboard は廃止し、scene と camera health に集中した表示にしている
 - triangulated blobs から custom rigid body をその場で登録できる
 
 ## ハードウェアの方向性

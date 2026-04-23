@@ -24,7 +24,6 @@ from .rigid import (
 )
 from .metrics import MetricsCollector
 from .logger import FrameLogger
-from .sync_eval import SyncEvaluator
 from .wand_session import FIXED_PAIR_WINDOW_US
 
 
@@ -121,21 +120,11 @@ class TrackingPipeline:
         self.enable_logging = enable_logging
         self.log_dir = log_dir
         self.configured_pair_window_us = int(timestamp_tolerance_us)
-        self.active_pair_window_us = int(timestamp_tolerance_us)
         self._epipolar_threshold_px_override = (
             normalize_epipolar_threshold_px(epipolar_threshold_px)
             if epipolar_threshold_px is not None
             else None
         )
-        self._sync_warmup_target = 3
-        self._sync_precision_mode = "warmup"
-        self._sync_degraded_precision = False
-        # get_status() does O(N log N) sorts on up to 2000-item deques; calling it
-        # per-pair at 120 Hz saturates a CPU core once deques fill (~17 s).  Cache
-        # the result and re-evaluate at most once per second.
-        self._sync_policy_interval_s: float = 1.0
-        self._sync_policy_last_monotonic: float = 0.0
-        self._sync_policy_cached_status: dict = {}
         
         # Initialize components
         self.frame_processor = FrameProcessor(
@@ -146,11 +135,6 @@ class TrackingPipeline:
         self.geometry = GeometryPipeline()
         self.rigid_estimator = RigidBodyEstimator(patterns=patterns or [WAIST_PATTERN])
         self.metrics = MetricsCollector()
-        self.sync_evaluator = SyncEvaluator(
-            tolerance_windows_us=(500, 1000, 2000, 3000, self.configured_pair_window_us),
-            target_range_us=(1000, self.configured_pair_window_us),
-            coverage_target=0.95,
-        )
         
         # Load calibration
         self._calibration_loaded = False
@@ -182,7 +166,6 @@ class TrackingPipeline:
             "triangulation_angle_deg_summary": {},
             "assignment_diagnostics": {},
             "pair_timestamp_range_us": 0,
-            "sync_precision_mode": self._sync_precision_mode,
         }
         
         # Statistics
@@ -256,13 +239,7 @@ class TrackingPipeline:
         
         self._running = True
         self.start_time = time.time()
-        self.sync_evaluator.reset()
-        self.active_pair_window_us = int(self.configured_pair_window_us)
-        self._sync_precision_mode = "warmup"
-        self._sync_degraded_precision = False
-        self._sync_policy_last_monotonic = 0.0
-        self._sync_policy_cached_status = {}
-        self.frame_processor.pairer.timestamp_tolerance_us = self.active_pair_window_us
+        self.frame_processor.pairer.timestamp_tolerance_us = int(self.configured_pair_window_us)
         
         # Start logging
         if self.logger:
@@ -292,72 +269,6 @@ class TrackingPipeline:
             "duration_seconds": time.time() - self.start_time if self.start_time else 0,
             "log_metadata": log_metadata
         }
-
-    def _sync_status_snapshot(self) -> Dict[str, Any]:
-        status = self.sync_evaluator.get_status()
-        result = dict(status)
-        result["configured_window_us"] = int(self.configured_pair_window_us)
-        result["active_window_us"] = int(self.active_pair_window_us)
-        result["precision_mode"] = str(self._sync_precision_mode)
-        result["degraded_precision"] = bool(self._sync_degraded_precision)
-        result["warmup_pairs"] = int(self._sync_warmup_target)
-        result["warmup_remaining"] = max(
-            0,
-            self._sync_warmup_target - int(status.get("pair_count", 0)),
-        )
-        return result
-
-    def _update_sync_precision_policy(self) -> Dict[str, Any]:
-        # get_status() is O(N log N) on 2000-item deques; at 120 Hz this saturates
-        # a CPU core once the deques fill (~17 s).  Throttle to once per second
-        # after warmup.  During warmup we must keep calling to detect the transition.
-        now = time.monotonic()
-        if self._sync_precision_mode != "warmup":
-            if now - self._sync_policy_last_monotonic < self._sync_policy_interval_s and self._sync_policy_cached_status:
-                return self._sync_status_snapshot()
-        self._sync_policy_last_monotonic = now
-        status = self.sync_evaluator.get_status()
-        self._sync_policy_cached_status = status
-        pair_count = int(status.get("pair_count", 0))
-        if pair_count < self._sync_warmup_target:
-            self.active_pair_window_us = int(self.configured_pair_window_us)
-            self._sync_precision_mode = "warmup"
-            self._sync_degraded_precision = False
-            self.frame_processor.pairer.timestamp_tolerance_us = self.active_pair_window_us
-            return self._sync_status_snapshot()
-
-        recommendation = status.get("recommendation", {})
-        recommended_window_us = recommendation.get("recommended_window_us")
-        if isinstance(recommended_window_us, (int, float)):
-            recommended_window = int(recommended_window_us)
-        else:
-            recommended_window = int(self.configured_pair_window_us)
-
-        tightened_window = min(
-            int(self.configured_pair_window_us),
-            max(2000, recommended_window),
-        )
-        self.active_pair_window_us = int(tightened_window)
-        self.frame_processor.pairer.timestamp_tolerance_us = self.active_pair_window_us
-
-        pair_spread = status.get("pair_spread_us", {})
-        p95_spread = float(pair_spread.get("p95", 0.0))
-        recommendation_status = str(recommendation.get("status", "insufficient_data"))
-        self._sync_degraded_precision = bool(
-            p95_spread > float(self.configured_pair_window_us)
-            or (
-                recommended_window == int(self.configured_pair_window_us)
-                and recommendation_status != "recommended"
-            )
-        )
-        if self._sync_degraded_precision:
-            self._sync_precision_mode = "degraded_precision"
-        elif self.active_pair_window_us < int(self.configured_pair_window_us):
-            self._sync_precision_mode = "tightened"
-        else:
-            self._sync_precision_mode = "configured"
-
-        return self._sync_status_snapshot()
     
     def _on_paired_frames(self, paired_frames: PairedFrames) -> None:
         """Process paired frames."""
@@ -367,8 +278,6 @@ class TrackingPipeline:
         pipeline_started_ns = time.perf_counter_ns()
         try:
             timestamp = paired_frames.timestamp
-            self.sync_evaluator.evaluate_pair(paired_frames)
-            sync_status = self._update_sync_precision_policy()
             
             # Log frames
             stage_started_ns = time.perf_counter_ns()
@@ -381,14 +290,9 @@ class TrackingPipeline:
             result: Dict[str, Any] = {"reprojection_errors": []}
             stage_started_ns = time.perf_counter_ns()
             if self._calibration_loaded:
-                min_inlier_views = (
-                    3
-                    if self._sync_degraded_precision and len(paired_frames.camera_ids) >= 3
-                    else 2
-                )
                 result = self.geometry.process_paired_frames(
                     paired_frames,
-                    min_inlier_views=min_inlier_views,
+                    min_inlier_views=2,
                 )
                 points_3d = result.get("points_3d", [])
             else:
@@ -422,7 +326,6 @@ class TrackingPipeline:
                     ),
                     "assignment_diagnostics": dict(result.get("assignment_diagnostics", {})),
                     "pair_timestamp_range_us": paired_frames.timestamp_range_us,
-                    "sync_precision_mode": str(self._sync_precision_mode),
                 }
             
             # Estimate rigid body poses
@@ -510,7 +413,6 @@ class TrackingPipeline:
             "pipeline_stage_ms": self._stage_diagnostics(),
             "logger": self._logger_diagnostics(),
             "metrics": self.metrics.get_summary(),
-            "sync": self._sync_status_snapshot(),
             "frames_processed": self.frames_processed,
             "poses_estimated": self.poses_estimated,
         }
@@ -536,7 +438,6 @@ class TrackingPipeline:
             "receiver": self.frame_processor.get_stats(),
             "metrics": self.metrics.get_summary(),
             "tracking": self.rigid_estimator.get_tracking_status(),
-            "sync": self._sync_status_snapshot(),
             "triangulation_quality": _copy_triangulation_quality(
                 triangulation.get("triangulation_quality", _empty_triangulation_quality())
             ),
@@ -598,12 +499,6 @@ class TrackingPipeline:
                 ),
                 "assignment_diagnostics": dict(self._latest_triangulation_snapshot.get("assignment_diagnostics", {})),
                 "pair_timestamp_range_us": self._latest_triangulation_snapshot["pair_timestamp_range_us"],
-                "sync_precision_mode": str(
-                    self._latest_triangulation_snapshot.get(
-                        "sync_precision_mode",
-                        self._sync_precision_mode,
-                    )
-                ),
             }
 
 

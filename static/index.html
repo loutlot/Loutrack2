@@ -51,14 +51,20 @@
       overflow: hidden;
     }
     .sidebar-logo {
-      padding: 16px 14px 12px;
-      font-size: 15px;
-      font-weight: 800;
-      color: var(--ink);
-      letter-spacing: -0.02em;
+      padding: 18px 14px 14px;
+      min-height: 58px;
       border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      overflow: hidden;
     }
-    .sidebar-logo span { color: var(--accent); }
+    .sidebar-logo-image {
+      display: block;
+      width: 100%;
+      height: auto;
+      max-height: 28px;
+      object-fit: contain;
+    }
     .sidebar-nav {
       flex: 1;
       overflow-y: auto;
@@ -762,7 +768,9 @@
 
     <!-- ── Sidebar ─────────────────────────────────────── -->
     <nav class="sidebar">
-      <div class="sidebar-logo">LT<span>2</span></div>
+      <div class="sidebar-logo" aria-label="LOUTRACK 2">
+        <img class="sidebar-logo-image" src="/static/loutrack-logo.png" alt="LOUTRACK 2">
+      </div>
       <div class="sidebar-nav" id="sidebarNav">
         <!-- populated by renderSidebar() -->
         <div class="nav-section-header">Status</div>
@@ -981,9 +989,9 @@
             <div class="panel">
               <div class="panel-title">Generation Parameters</div>
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 14px">
-                <label>Pair Window (us)<input id="pairWindowUs" type="number" min="1" max="4166" step="1" value="4166"></label>
+                <label>Pair Window (us)<input id="pairWindowUs" type="number" min="1" max="4237" step="1" value="4237"></label>
                 <label>Min Pairs<input id="minPairs" type="number" min="1" step="1" value="8"></label>
-                <label>Wand Pair Window (us)<input id="wandPairWindowUs" type="number" min="1" max="4166" step="1" value="4166"></label>
+                <label>Wand Pair Window (us)<input id="wandPairWindowUs" type="number" min="1" max="4237" step="1" value="4237"></label>
                 <label>Wand Face Up
                   <select id="wandFace">
                     <option value="front_up">Front side up (+X x +Y)</option>
@@ -1055,7 +1063,6 @@
           <div class="split-right" style="width:300px;min-width:240px;display:flex;flex-direction:column;gap:8px;overflow-y:auto">
             <div class="panel">
               <div class="panel-title">Tracking Control</div>
-              <div style="font-size:11px;color:var(--ink-muted);margin-bottom:8px" id="trackingExtrinsicsPath"></div>
               <label style="display:block;margin-bottom:8px">
                 <span>Epipolar Gate <span class="slider-value" id="trackingEpipolarThresholdValue">3.5</span> px</span>
                 <input id="trackingEpipolarThreshold" type="range" min="1" max="6" step="0.5" value="3.5">
@@ -1071,7 +1078,6 @@
             <div class="panel">
               <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
                 <div class="panel-title" style="margin-bottom:0">Camera Health</div>
-                <span style="font-size:11px;color:var(--ink-muted)" id="trackingSyncCoverage"></span>
               </div>
               <div id="trackingCameraHealth"></div>
             </div>
@@ -1198,7 +1204,7 @@
       return THREE;
     }
     const MAX_EXPOSURE_US = 8000;
-    const FIXED_PAIR_WINDOW_US = 4166;
+    const FIXED_PAIR_WINDOW_US = 4237;
     const sliders = ["exposure", "gain", "threshold", "blobMin", "blobMax", "maskThreshold", "maskSeconds"];
     const mainControlInputIds = [...sliders];
     const intrinsicsControlInputIds = ["intExposure", "intGain"];
@@ -1335,7 +1341,6 @@
       trackingSceneTimestamp: document.getElementById("trackingSceneTimestamp"),
       trackingSceneHint: document.getElementById("trackingSceneHint"),
       trackingLastUpdate: document.getElementById("trackingLastUpdate"),
-      trackingSyncCoverage: document.getElementById("trackingSyncCoverage"),
       trackingCameraHealth: document.getElementById("trackingCameraHealth"),
       trackingRigidList: document.getElementById("trackingRigidList"),
       trackingRigidCount: document.getElementById("trackingRigidCount"),
@@ -1715,11 +1720,6 @@
       scene.add(grid);
       const axisHelper = new THREE.AxesHelper(0.45);
       scene.add(axisHelper);
-      const originSphere = new THREE.Mesh(
-        new THREE.SphereGeometry(0.035, 14, 14),
-        new THREE.MeshBasicMaterial({ color: 0x22c55e })
-      );
-      scene.add(originSphere);
 
       function makeTextTexture(text, color = "#e2e8f0", background = "rgba(2,6,23,0.78)") {
         const labelCanvas = document.createElement("canvas");
@@ -1766,20 +1766,69 @@
         return sprite;
       }
 
+      function makePointSpriteTexture({ fill = null, stroke = null, strokeWidth = 0, size = 128 } = {}) {
+        const spriteCanvas = document.createElement("canvas");
+        spriteCanvas.width = size;
+        spriteCanvas.height = size;
+        const spriteCtx = spriteCanvas.getContext("2d");
+        if (!spriteCtx) {
+          return new THREE.CanvasTexture(spriteCanvas);
+        }
+        const center = size / 2;
+        const radius = center - Math.max(4, strokeWidth * 2);
+        spriteCtx.clearRect(0, 0, size, size);
+        spriteCtx.beginPath();
+        spriteCtx.arc(center, center, radius, 0, Math.PI * 2);
+        if (fill) {
+          spriteCtx.fillStyle = fill;
+          spriteCtx.fill();
+        }
+        if (stroke && strokeWidth > 0) {
+          spriteCtx.lineWidth = strokeWidth;
+          spriteCtx.strokeStyle = stroke;
+          spriteCtx.stroke();
+        }
+        const texture = new THREE.CanvasTexture(spriteCanvas);
+        texture.needsUpdate = true;
+        return texture;
+      }
+
+      const rawBlobTexture = makePointSpriteTexture({ fill: "#ffffff", size: 128 });
+      const rigidRingTexture = makePointSpriteTexture({
+        fill: "rgba(0,0,0,0)",
+        stroke: "#22c55e",
+        strokeWidth: 14,
+        size: 128,
+      });
+
       const rawPoints = new THREE.Points(
         new THREE.BufferGeometry(),
-        new THREE.PointsMaterial({ size: 0.07, vertexColors: true, transparent: true, opacity: 0.98 })
+        new THREE.PointsMaterial({
+          size: 0.09,
+          color: 0xffffff,
+          map: rawBlobTexture,
+          alphaTest: 0.4,
+          transparent: true,
+          opacity: 1.0,
+          depthWrite: false,
+        })
       );
       rawPoints.geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(0), 3));
-      rawPoints.geometry.setAttribute("color", new THREE.BufferAttribute(new Float32Array(0), 3));
       scene.add(rawPoints);
 
       const cameraHelpers = new Map();
       const rigidsContainer = new THREE.Group();
       scene.add(rigidsContainer);
       const rigidHelpers = new Map();
-      const markerGeometry = new THREE.SphereGeometry(0.011, 8, 8);
-      const markerMaterial = new THREE.MeshBasicMaterial({ color: 0xffc107 });
+      const rigidMarkerMaterial = new THREE.PointsMaterial({
+        size: 0.13,
+        color: 0x22c55e,
+        map: rigidRingTexture,
+        alphaTest: 0.4,
+        transparent: true,
+        opacity: 1.0,
+        depthWrite: false,
+      });
 
       function buildFrustumSegments(cameraData) {
         const corners = Array.isArray(cameraData.frustum_near_corners)
@@ -1901,15 +1950,20 @@
               new THREE.LineBasicMaterial({ color: 0x1f6b70, transparent: true, opacity: 0.8 })
             );
             trailLine.geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(0), 3));
-            const markerParent = new THREE.Group();
+            const markerPoints = new THREE.Points(
+              new THREE.BufferGeometry(),
+              rigidMarkerMaterial.clone()
+            );
+            markerPoints.geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(0), 3));
+            markerPoints.renderOrder = 5;
             group.add(axis);
             rigidsContainer.add(group);
             scene.add(trailLine);
-            scene.add(markerParent);
-            entry = { group, axis, trailLine, markerParent };
+            scene.add(markerPoints);
+            entry = { group, axis, trailLine, markerPoints };
             rigidHelpers.set(name, entry);
           }
-          const { group, axis, trailLine, markerParent } = entry;
+          const { group, axis, trailLine, markerPoints } = entry;
           const position = body.position || [0, 0, 0];
           group.position.set(position[0], position[1], position[2]);
           const quaternion = body.quaternion || [1, 0, 0, 0];
@@ -1918,23 +1972,14 @@
           const trailCount = updatePointGeometry(trailLine.geometry, body.trail || []);
           trailLine.visible = trailCount > 0;
           const markers = body.markers_world || [];
-          while (markerParent.children.length < markers.length) {
-            markerParent.add(new THREE.Mesh(markerGeometry, markerMaterial));
-          }
-          while (markerParent.children.length > markers.length) {
-            markerParent.remove(markerParent.children[markerParent.children.length - 1]);
-          }
-          markers.forEach((marker, markerIndex) => {
-            const sphere = markerParent.children[markerIndex];
-            sphere.position.set(marker[0], marker[1], marker[2]);
-            sphere.visible = true;
-          });
+          updatePointGeometry(markerPoints.geometry, markers);
+          markerPoints.visible = markers.length > 0;
         });
         rigidHelpers.forEach((entry, id) => {
           if (!seen.has(id)) {
             rigidsContainer.remove(entry.group);
             scene.remove(entry.trailLine);
-            scene.remove(entry.markerParent);
+            scene.remove(entry.markerPoints);
             rigidHelpers.delete(id);
           }
         });
@@ -1944,26 +1989,6 @@
         selectedRawPointIndices = Array.from(new Set(indices))
           .filter((index) => Number.isInteger(index) && index >= 0 && index < currentRawPoints.length)
           .sort((left, right) => left - right);
-        const colorAttribute = ensureFloat32Attribute(
-          rawPoints.geometry,
-          "color",
-          3,
-          currentRawPoints.length * 3
-        );
-        const selectedLookup = new Set(selectedRawPointIndices);
-        for (let index = 0; index < currentRawPoints.length; index += 1) {
-          const base = index * 3;
-          if (selectedLookup.has(index)) {
-            colorAttribute.array[base + 0] = 0.96;
-            colorAttribute.array[base + 1] = 0.98;
-            colorAttribute.array[base + 2] = 1.0;
-          } else {
-            colorAttribute.array[base + 0] = 0.984;
-            colorAttribute.array[base + 1] = 0.573;
-            colorAttribute.array[base + 2] = 0.235;
-          }
-        }
-        colorAttribute.needsUpdate = true;
       }
 
       function clearRawPointSelection() {
@@ -2574,10 +2599,6 @@
       elements.trackingRigidCount.textContent = customCount > 0
         ? `${rigidCount} tracked · ${customCount} custom`
         : `${rigidCount} tracked`;
-      const coverage = status.sync?.coverage_5000us ?? status.sync?.coverage_target ?? null;
-      elements.trackingSyncCoverage.textContent = coverage != null
-        ? `Sync coverage ${(coverage * 100).toFixed(1)}%`
-        : "";
     }
 
     function renderCameraHealth(status) {
@@ -3239,7 +3260,9 @@
       }
       elements.trackingStart.disabled = !status.start_allowed || Boolean(status.running);
       elements.trackingStop.disabled = false;
-      elements.trackingExtrinsicsPath.textContent = `Extrinsics: ${status.latest_extrinsics_path || "(none)"}`;
+      if (elements.trackingExtrinsicsPath) {
+        elements.trackingExtrinsicsPath.textContent = `Extrinsics: ${status.latest_extrinsics_path || "(none)"}`;
+      }
       if (elements.trackingStatus && elements.trackingStatus.offsetParent !== null) {
         elements.trackingStatus.textContent = JSON.stringify(status, null, 2);
       }
