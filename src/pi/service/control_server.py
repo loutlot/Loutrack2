@@ -268,6 +268,7 @@ class ControlServer:
             debug_preview=self._debug_preview,
             log_fn=self._log,
             mjpeg_has_clients=self._mjpeg_has_clients,
+            sync_role=self._config.sync_role,
         )
         pipeline.set_backend_controls(
             exposure_us=self._desired_exposure_us,

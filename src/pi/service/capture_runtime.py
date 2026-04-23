@@ -87,6 +87,12 @@ PMC_BINARY_CANDIDATES = ("/usr/sbin/pmc", "/usr/bin/pmc", "pmc")
 LINUXPTP_ROLE_PATH = "/etc/linuxptp/loutrack-role"
 LINUXPTP_TIMESTAMPING_MODE_PATH = "/etc/linuxptp/loutrack-timestamping-mode"
 
+SYNC_BEACON_PORT = 5001
+SYNC_BEACON_INTERVAL_N = 10
+SYNC_PLL_GAIN = 0.15
+SYNC_MAX_STEP_US = 200
+SYNC_LOCK_MIN_COUNT = 10
+
 MAX_LINE_BYTES = 65536
 LINE_TIMEOUT_SECONDS = 2.0
 
@@ -287,6 +293,205 @@ def _finalize_static_mask_from_hits(
 class _FramePacket:
     captured_frame: CapturedFrame
     captured_monotonic_ns: int
+
+
+@dataclass
+class _SyncState:
+    """Thread-safe state shared between _ProcessingWorker (writes frame ts) and _SyncBeaconClient (reads + writes corrections)."""
+
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+    last_frame_ts_us: int = 0
+    phase_error_us: float | None = None
+    correction_count: int = 0
+    locked: bool = False
+
+    def update_frame_ts(self, ts_us: int) -> None:
+        with self._lock:
+            self.last_frame_ts_us = ts_us
+
+    def get_frame_ts(self) -> int:
+        with self._lock:
+            return self.last_frame_ts_us
+
+    def record_correction(self, phase_error_us: float) -> None:
+        with self._lock:
+            self.phase_error_us = phase_error_us
+            self.correction_count += 1
+            if self.correction_count >= SYNC_LOCK_MIN_COUNT:
+                self.locked = True
+
+    def get_diagnostics(self) -> dict[str, object]:
+        with self._lock:
+            return {
+                "phase_error_us": self.phase_error_us,
+                "correction_count": self.correction_count,
+                "sync_locked": self.locked,
+            }
+
+
+class _SyncBeaconServer:
+    """Broadcasts frame timestamps for software camera sync (server role, PTP master)."""
+
+    def __init__(
+        self,
+        *,
+        camera_id: str,
+        broadcast_host: str,
+        beacon_port: int = SYNC_BEACON_PORT,
+        interval_n: int = SYNC_BEACON_INTERVAL_N,
+        log_fn: Callable[[str], None],
+    ) -> None:
+        self._camera_id = camera_id
+        self._broadcast_host = broadcast_host
+        self._beacon_port = beacon_port
+        self._interval_n = interval_n
+        self._log = log_fn
+        self._lock = threading.Lock()
+        self._sock: socket.socket | None = None
+        self._seq = 0
+        self._frame_counter = 0
+
+    def start(self) -> None:
+        with self._lock:
+            if self._sock is not None:
+                return
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            self._sock = sock
+        self._log(f"sync-server: beacon socket open → {self._broadcast_host}:{self._beacon_port}")
+
+    def stop(self) -> None:
+        with self._lock:
+            sock = self._sock
+            self._sock = None
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+    def maybe_broadcast(self, frame_ts_us: int, nominal_period_us: int) -> None:
+        """Called from _ProcessingWorker._loop() every frame; broadcasts every interval_n frames."""
+        with self._lock:
+            self._frame_counter += 1
+            if self._frame_counter % self._interval_n != 0:
+                return
+            sock = self._sock
+            seq = self._seq
+            self._seq += 1
+        if sock is None:
+            return
+        beacon: dict[str, object] = {
+            "type": "sync_beacon",
+            "camera_id": self._camera_id,
+            "frame_ts_us": int(frame_ts_us),
+            "period_us": int(nominal_period_us),
+            "seq": seq,
+        }
+        try:
+            payload = json.dumps(beacon, separators=(",", ":")).encode("utf-8")
+            sock.sendto(payload, (self._broadcast_host, self._beacon_port))
+        except OSError as exc:
+            self._log(f"sync-server: beacon send failed: {exc}")
+
+
+class _SyncBeaconClient:
+    """Receives sync beacons and adjusts FrameDurationLimits via PLL (client role)."""
+
+    def __init__(
+        self,
+        *,
+        beacon_port: int = SYNC_BEACON_PORT,
+        sync_state: _SyncState,
+        apply_sync_duration_us: Callable[[int], None],
+        get_nominal_period_us: Callable[[], int],
+        log_fn: Callable[[str], None],
+        pll_gain: float = SYNC_PLL_GAIN,
+        max_step_us: int = SYNC_MAX_STEP_US,
+    ) -> None:
+        self._beacon_port = beacon_port
+        self._sync_state = sync_state
+        self._apply_sync_duration_us = apply_sync_duration_us
+        self._get_nominal_period_us = get_nominal_period_us
+        self._log = log_fn
+        self._pll_gain = float(pll_gain)
+        self._max_step_us = int(max_step_us)
+        self._stop_event = threading.Event()
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+        self._sock: socket.socket | None = None
+
+    def start(self) -> None:
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._stop_event.clear()
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(("", self._beacon_port))
+            sock.settimeout(0.5)
+            self._sock = sock
+            thread = threading.Thread(target=self._loop, daemon=True, name="sync-beacon-client")
+            self._thread = thread
+        thread.start()
+        self._log(f"sync-client: listening on UDP port {self._beacon_port}")
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        with self._lock:
+            sock = self._sock
+            thread = self._thread
+            self._sock = None
+            self._thread = None
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
+        if thread is not None:
+            thread.join(timeout=1.0)
+
+    def _loop(self) -> None:
+        while not self._stop_event.is_set():
+            with self._lock:
+                sock = self._sock
+            if sock is None:
+                break
+            try:
+                data, _ = sock.recvfrom(1024)
+            except TimeoutError:
+                continue
+            except OSError:
+                break
+            try:
+                msg = json.loads(data.decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                continue
+            if not isinstance(msg, dict) or msg.get("type") != "sync_beacon":
+                continue
+            server_ts = msg.get("frame_ts_us")
+            beacon_period = msg.get("period_us")
+            if not isinstance(server_ts, (int, float)) or not isinstance(beacon_period, (int, float)):
+                continue
+            self._apply_correction(int(server_ts), int(beacon_period))
+
+    def _apply_correction(self, server_ts_us: int, beacon_period_us: int) -> None:
+        client_ts = self._sync_state.get_frame_ts()
+        if client_ts == 0:
+            return
+        nominal_period_us = self._get_nominal_period_us()
+        period = nominal_period_us if nominal_period_us > 0 else beacon_period_us
+        if period <= 0:
+            return
+        raw_err = (server_ts_us - client_ts) % period
+        if raw_err > period / 2:
+            raw_err -= period
+        phase_error_us = float(raw_err)
+        correction_us = phase_error_us * self._pll_gain
+        correction_us = max(-self._max_step_us, min(float(self._max_step_us), correction_us))
+        adjusted_us = max(1, period + int(round(correction_us)))
+        self._sync_state.record_correction(phase_error_us)
+        self._apply_sync_duration_us(adjusted_us)
 
 
 @dataclass(frozen=True)
@@ -1233,6 +1438,7 @@ class Picamera2Backend:
         self._gain: float | None = None
         self._fps: int | None = None
         self._focus: float | None = None
+        self._sync_duration_us: int | None = None
 
     def set_exposure_us(self, value_us: int) -> None:
         self._exposure_us = int(value_us)
@@ -1247,10 +1453,16 @@ class Picamera2Backend:
         if fps_value <= 0:
             return
         self._fps = fps_value
+        self._sync_duration_us = None  # clear PLL override on FPS change
         self._apply_controls_if_running()
 
     def set_focus(self, value: float) -> None:
         self._focus = float(value)
+        self._apply_controls_if_running()
+
+    def set_sync_duration_us(self, duration_us: int | None) -> None:
+        """Override FrameDurationLimits for PLL correction. Pass None to revert to nominal."""
+        self._sync_duration_us = int(duration_us) if duration_us is not None else None
         self._apply_controls_if_running()
 
     def start(self) -> None:
@@ -1409,7 +1621,8 @@ class Picamera2Backend:
         if self._gain is not None:
             controls["AnalogueGain"] = float(self._gain)
         if self._fps is not None and self._fps > 0:
-            frame_us = int(round(1_000_000 / float(self._fps)))
+            nominal_us = int(round(1_000_000 / float(self._fps)))
+            frame_us = self._sync_duration_us if self._sync_duration_us is not None else nominal_us
             controls["FrameDurationLimits"] = (frame_us, frame_us)
         if self._focus is not None:
             controls["AfMode"] = self._manual_focus_mode()
@@ -1835,6 +2048,22 @@ class _ProcessingWorker:
         self._udp_send_errors = 0
         self._stale_sensor_timestamp_frames = 0
         self._started_monotonic = 0.0
+        self._sync_beacon_server: _SyncBeaconServer | None = None
+        self._sync_state: _SyncState | None = None
+        self._fps_hint: int = DEFAULT_TARGET_FPS
+
+    def set_sync_components(
+        self,
+        server: _SyncBeaconServer | None,
+        sync_state: _SyncState | None,
+    ) -> None:
+        with self._lock:
+            self._sync_beacon_server = server
+            self._sync_state = sync_state
+
+    def set_fps_hint(self, fps: int) -> None:
+        with self._lock:
+            self._fps_hint = max(1, int(fps))
 
     def start(self) -> None:
         with self._lock:
@@ -1947,7 +2176,7 @@ class _ProcessingWorker:
         elapsed = max(1e-6, time.monotonic() - started_monotonic) if started_monotonic > 0.0 else 0.0
         processing_fps = float(frames_processed) / elapsed if elapsed > 0.0 else 0.0
         send_fps = float(frames_sent) / elapsed if elapsed > 0.0 else 0.0
-        return {
+        result: dict[str, object] = {
             "processing_fps": processing_fps,
             "send_fps": send_fps,
             "frames_processed": int(frames_processed),
@@ -1978,6 +2207,15 @@ class _ProcessingWorker:
             "udp_send_errors": int(udp_send_errors),
             "stale_sensor_timestamp_frames": int(stale_sensor_timestamp_frames),
         }
+        with self._lock:
+            sync_state = self._sync_state
+        if sync_state is not None:
+            result.update(sync_state.get_diagnostics())
+        else:
+            result["phase_error_us"] = None
+            result["correction_count"] = 0
+            result["sync_locked"] = False
+        return result
 
     def _has_preview_consumer(self) -> bool:
         with self._lock:
@@ -2028,6 +2266,16 @@ class _ProcessingWorker:
                 mask_build_request = self._mask_build_request
                 intrinsics_session = self._intrinsics_session
                 sock = self._socket
+                _sync_server = self._sync_beacon_server
+                _sync_state = self._sync_state
+                _fps_hint = self._fps_hint
+
+            _frame_ts_us = int(packet.captured_frame.timestamp_us or 0)
+            if _sync_state is not None and _frame_ts_us > 0:
+                _sync_state.update_frame_ts(_frame_ts_us)
+            if _sync_server is not None and _frame_ts_us > 0:
+                _nom_period = int(round(1_000_000 / max(1.0, float(_fps_hint))))
+                _sync_server.maybe_broadcast(_frame_ts_us, _nom_period)
 
             if mask_build_request is not None:
                 try:
@@ -2164,6 +2412,7 @@ class _CapturePipeline:
         debug_preview: DebugPreview | None,
         log_fn: Callable[[str], None],
         mjpeg_has_clients: Callable[[], bool] | None = None,
+        sync_role: str = "off",
     ) -> None:
         self._camera_id = camera_id
         self._backend_factory = backend_factory
@@ -2204,6 +2453,42 @@ class _CapturePipeline:
             get_loop_fps=self._get_loop_fps,
             log_fn=log_fn,
         )
+        self._sync_role = sync_role
+        self._sync_beacon_server: _SyncBeaconServer | None = None
+        self._sync_beacon_client: _SyncBeaconClient | None = None
+        if sync_role == "server":
+            self._sync_beacon_server = _SyncBeaconServer(
+                camera_id=camera_id,
+                broadcast_host=udp_host,
+                beacon_port=SYNC_BEACON_PORT,
+                interval_n=SYNC_BEACON_INTERVAL_N,
+                log_fn=log_fn,
+            )
+            self._processing_worker.set_sync_components(self._sync_beacon_server, None)
+            self._processing_worker.set_fps_hint(int(round(self._desired_fps)))
+        elif sync_role == "client":
+            _sync_state = _SyncState()
+            self._processing_worker.set_sync_components(None, _sync_state)
+            self._processing_worker.set_fps_hint(int(round(self._desired_fps)))
+            self._sync_beacon_client = _SyncBeaconClient(
+                beacon_port=SYNC_BEACON_PORT,
+                sync_state=_sync_state,
+                apply_sync_duration_us=self._apply_sync_duration_us,
+                get_nominal_period_us=self._get_nominal_period_us,
+                log_fn=log_fn,
+            )
+
+    def _apply_sync_duration_us(self, duration_us: int) -> None:
+        self._camera_worker.apply_control(
+            lambda backend: backend.set_sync_duration_us(duration_us)  # type: ignore[union-attr]
+            if hasattr(backend, "set_sync_duration_us")
+            else None
+        )
+
+    def _get_nominal_period_us(self) -> int:
+        with self._lock:
+            fps = max(1.0, float(self._desired_fps))
+        return int(round(1_000_000 / fps))
 
     def start(self) -> None:
         with self._lock:
@@ -2221,6 +2506,10 @@ class _CapturePipeline:
             raise
         with self._lock:
             self._started = True
+        if self._sync_beacon_server is not None:
+            self._sync_beacon_server.start()
+        if self._sync_beacon_client is not None:
+            self._sync_beacon_client.start()
         self._refresh_activity()
 
     def stop(self) -> None:
@@ -2229,6 +2518,10 @@ class _CapturePipeline:
                 return
             self._started = False
         self._active_event.set()
+        if self._sync_beacon_client is not None:
+            self._sync_beacon_client.stop()
+        if self._sync_beacon_server is not None:
+            self._sync_beacon_server.stop()
         self._camera_worker.stop()
         self._processing_worker.stop()
         if self._preview_worker is not None:
@@ -2359,6 +2652,7 @@ class _CapturePipeline:
             runtime["frames_dropped_preview"] = 0
             runtime["preview_queue_depth"] = 0
         runtime["processing_queue_depth"] = self._frame_queue.qsize()
+        runtime["sync_role"] = self._sync_role
         with self._lock:
             runtime["idle_throttled"] = bool(
                 self._started
@@ -2439,6 +2733,7 @@ class ControlServerConfig:
     mask_init_timeout_s: float = MASK_INIT_TIMEOUT_SECONDS
     debug_preview: bool = False
     mjpeg_port: int = DEFAULT_MJPEG_PORT
+    sync_role: str = "off"
 
 
 
@@ -2473,6 +2768,15 @@ def parse_args() -> ControlServerConfig:
         default=DEFAULT_MJPEG_PORT,
         help=f"Port for MJPEG preview stream (0 = disabled, default: {DEFAULT_MJPEG_PORT})",
     )
+    _ = parser.add_argument(
+        "--sync-role",
+        choices=("auto", "server", "client", "off"),
+        default="off",
+        help=(
+            "Frame-sync PLL role. 'auto' reads /etc/linuxptp/loutrack-role "
+            "(master→server, slave→client). Default: off"
+        ),
+    )
 
     namespace = parser.parse_args()
     camera_id = getattr(namespace, "camera_id", None)
@@ -2482,6 +2786,7 @@ def parse_args() -> ControlServerConfig:
     udp_dest = getattr(namespace, "udp_dest", "255.255.255.255:5000")
     debug_preview = getattr(namespace, "debug_preview", False)
     mjpeg_port = getattr(namespace, "mjpeg_port", DEFAULT_MJPEG_PORT)
+    sync_role_raw = str(getattr(namespace, "sync_role", "off"))
 
     if camera_id is None:
         camera_id = get_default_camera_id()
@@ -2510,6 +2815,18 @@ def parse_args() -> ControlServerConfig:
     except ValueError as exc:
         raise SystemExit(f"--udp-dest invalid: {exc}") from exc
 
+    def _resolve_sync_role(raw: str) -> str:
+        if raw == "auto":
+            ptp_role = _read_linuxptp_setting(LINUXPTP_ROLE_PATH, {"master", "slave"})
+            if ptp_role == "master":
+                return "server"
+            if ptp_role == "slave":
+                return "client"
+            return "off"
+        return raw if raw in ("server", "client", "off") else "off"
+
+    sync_role = _resolve_sync_role(sync_role_raw)
+
     return ControlServerConfig(
         camera_id=camera_id,
         tcp_host=tcp_host,
@@ -2520,6 +2837,7 @@ def parse_args() -> ControlServerConfig:
         backend=backend,
         debug_preview=resolve_debug_preview_enabled(debug_preview),
         mjpeg_port=int(mjpeg_port) if isinstance(mjpeg_port, int) else 0,
+        sync_role=sync_role,
     )
 
 

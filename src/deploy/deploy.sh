@@ -83,7 +83,7 @@ User=$REMOTE_USER
 WorkingDirectory=$CURRENT_LINK
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=/usr/bin/python3 $REMOTE_SRC_DIR/pi/service/capture_runtime.py --camera-id $camera_id --udp-dest 255.255.255.255:5000
+ExecStart=/usr/bin/python3 $REMOTE_SRC_DIR/pi/service/capture_runtime.py --camera-id $camera_id --udp-dest 255.255.255.255:5000 --sync-role auto
 Restart=always
 RestartSec=5
 
