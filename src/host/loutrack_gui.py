@@ -46,6 +46,7 @@ if __package__ in (None, ""):
     from host.gui_state_presenter import GuiStatePresenter
     from host.gui_calibration_config_service import GuiCalibrationConfigService
     from host.gui_command_service import GuiCommandService
+    from host.gui_tracking_rigid_store import GuiTrackingRigidStore
 else:
     from .receiver import UDPReceiver
     from .logger import FrameLogger
@@ -71,9 +72,11 @@ else:
     from .gui_state_presenter import GuiStatePresenter
     from .gui_calibration_config_service import GuiCalibrationConfigService
     from .gui_command_service import GuiCommandService
+    from .gui_tracking_rigid_store import GuiTrackingRigidStore
 
 
 DEFAULT_SETTINGS_PATH = Path("logs") / "loutrack_gui_settings.json"
+DEFAULT_TRACKING_RIGID_STORE_PATH = Path("calibration") / "tracking_rigids.json"
 OLD_SETTINGS_PATH = Path("logs") / "wand_gui_settings.json"
 DEFAULT_POSE_LOG_PATH = Path("logs") / "extrinsics_pose_capture.jsonl"
 DEFAULT_WAND_METRIC_LOG_PATH = Path("logs") / "extrinsics_wand_metric.jsonl"
@@ -133,6 +136,13 @@ class LoutrackGuiState:
         if not default_settings_path.is_absolute():
             default_settings_path = (PROJECT_ROOT / default_settings_path).resolve()
         self.settings_path = (settings_path or default_settings_path).resolve()
+        if settings_path is None:
+            default_tracking_rigid_store_path = DEFAULT_TRACKING_RIGID_STORE_PATH
+            if not default_tracking_rigid_store_path.is_absolute():
+                default_tracking_rigid_store_path = (PROJECT_ROOT / default_tracking_rigid_store_path).resolve()
+            self.tracking_rigid_store_path = default_tracking_rigid_store_path
+        else:
+            self.tracking_rigid_store_path = self.settings_path.with_name("tracking_rigids.json")
         old_settings_path = OLD_SETTINGS_PATH
         if not old_settings_path.is_absolute():
             old_settings_path = (PROJECT_ROOT / old_settings_path).resolve()
@@ -146,6 +156,7 @@ class LoutrackGuiState:
             default_extrinsics_output_path=self._default_extrinsics_output_path(),
             default_wand_metric_duration_s=DEFAULT_WAND_METRIC_DURATION_S,
         )
+        self._tracking_rigid_store = GuiTrackingRigidStore(store_path=self.tracking_rigid_store_path)
         self.settings_path = self._settings_store.settings_path
         self._migrate_settings_once()
         self.selected_camera_ids: List[str] = []
@@ -199,6 +210,7 @@ class LoutrackGuiState:
             selected_ids = ui_payload.get("selected_camera_ids", [])
             if isinstance(selected_ids, list):
                 self.selected_camera_ids = [str(item).strip() for item in selected_ids if str(item).strip()]
+        self.tracking_runtime.restore_custom_patterns(self._tracking_rigid_store.load())
 
     @staticmethod
     def _default_settings_payload() -> Dict[str, Any]:
@@ -338,6 +350,14 @@ class LoutrackGuiState:
 
     def _save_settings_bundle(self, bundle: Dict[str, Any]) -> None:
         self._settings_store.save_bundle(bundle)
+
+    def _load_tracking_settings(self) -> Dict[str, Any]:
+        return {"custom_rigids": self._tracking_rigid_store.load()}
+
+    def _persist_tracking_settings(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        custom_rigids = payload.get("custom_rigids", [])
+        saved = self._tracking_rigid_store.save(custom_rigids if isinstance(custom_rigids, list) else [])
+        return {"ok": True, "tracking": {"custom_rigids": saved}}
 
     def _validate_calibration(self, draft: Dict[str, Any], committed: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, str]]:
         return GuiSettingsStore.validate_calibration(draft, committed)
@@ -756,6 +776,12 @@ class LoutrackGuiState:
     def stop_tracking(self) -> Dict[str, Any]:
         return self._tracking_service.stop_tracking()
 
+    def create_tracking_rigid(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._tracking_service.create_tracking_rigid(payload)
+
+    def delete_tracking_rigid(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._tracking_service.delete_tracking_rigid(payload)
+
     def _pause_receiver_for_tracking(self) -> None:
         if self._receiver_paused_for_tracking:
             return
@@ -1152,6 +1178,14 @@ class LoutrackGuiHandler(BaseHTTPRequestHandler):
             if self.path == "/api/tracking/stop":
                 self._debug_log("POST /api/tracking/stop")
                 self._send_json(self.state.stop_tracking())
+                return
+            if self.path == "/api/tracking/rigids":
+                self._debug_log("POST /api/tracking/rigids")
+                self._send_json(self.state.create_tracking_rigid(payload))
+                return
+            if self.path == "/api/tracking/rigids/delete":
+                self._debug_log("POST /api/tracking/rigids/delete")
+                self._send_json(self.state.delete_tracking_rigid(payload))
                 return
             if self.path == "/api/intrinsics/start":
                 self._send_json(self.state.start_intrinsics_capture(payload))

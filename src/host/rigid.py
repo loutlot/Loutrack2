@@ -12,6 +12,7 @@ import numpy as np
 from typing import Optional, Dict, Any, List, Tuple
 from dataclasses import dataclass, field
 from collections import deque
+from itertools import permutations
 from scipy.optimize import linear_sum_assignment
 from scipy.spatial.transform import Rotation
 from scipy.spatial.distance import cdist
@@ -25,6 +26,7 @@ class MarkerPattern:
     name: str
     marker_positions: np.ndarray  # Nx3 array of marker positions in body frame
     marker_diameter: float = 0.014  # 14mm default
+    metadata: Dict[str, Any] = field(default_factory=dict)
     
     @property
     def num_markers(self) -> int:
@@ -33,6 +35,33 @@ class MarkerPattern:
     @property
     def centroid(self) -> np.ndarray:
         return np.mean(self.marker_positions, axis=0)
+
+
+def marker_pattern_from_points(
+    name: str,
+    points_world: np.ndarray,
+    *,
+    marker_diameter: float = 0.014,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> MarkerPattern:
+    """Build a rigid marker pattern from a sampled set of world-space points."""
+    points = np.asarray(points_world, dtype=np.float64)
+    if points.ndim != 2 or points.shape[1] != 3:
+        raise ValueError("points_world must be an Nx3 array")
+    if len(points) < 3:
+        raise ValueError("at least three points are required to define a rigid body")
+    if not np.isfinite(points).all():
+        raise ValueError("points_world must contain only finite coordinates")
+    if not np.isfinite(marker_diameter) or float(marker_diameter) <= 0.0:
+        raise ValueError("marker_diameter must be a finite positive value")
+    centroid = np.mean(points, axis=0)
+    local_points = points - centroid
+    return MarkerPattern(
+        name=str(name).strip(),
+        marker_positions=local_points,
+        marker_diameter=float(marker_diameter),
+        metadata=dict(metadata or {}),
+    )
 
 
 # Predefined rigid body patterns (from context/request.md)
@@ -280,10 +309,27 @@ class KabschEstimator:
         if len(observed_points) < 3 or len(reference_points) < 3:
             return np.array([]), np.array([]), float('inf')
         
-        # If same number, try direct matching with Kabsch
+        # If same number, solve correspondence via inter-point distance profiles.
+        # This is pose-invariant: distances between markers are unchanged by rotation
+        # and translation, so we can match them without knowing the current pose.
+        # Each point's "fingerprint" is its sorted distance profile to all other points;
+        # Hungarian assignment on these fingerprints finds the best one-to-one mapping.
+        # This correctly handles blob detection order changes across frames.
         if len(observed_points) == len(reference_points):
-            R, t, error = KabschEstimator.estimate(observed_points, reference_points)
-            return observed_points, reference_points, error
+            obs_dists = cdist(observed_points, observed_points)
+            ref_dists = cdist(reference_points, reference_points)
+            # Sort each row → permutation-invariant distance profile per point
+            obs_profiles = np.sort(obs_dists, axis=1)
+            ref_profiles = np.sort(ref_dists, axis=1)
+            # cost[i, j] = dissimilarity between obs point i and reference point j
+            cost = cdist(obs_profiles, ref_profiles)
+            row_ind, col_ind = linear_sum_assignment(cost)
+            # reordered_obs[ref_idx] = observed_points[obs_idx]
+            reordered_obs = np.empty_like(observed_points)
+            for obs_idx, ref_idx in zip(row_ind, col_ind):
+                reordered_obs[ref_idx] = observed_points[obs_idx]
+            R, t, error = KabschEstimator.estimate(reordered_obs, reference_points)
+            return reordered_obs, reference_points, error
         
         # For different counts, find best subset
         n_ref = len(reference_points)
@@ -307,17 +353,19 @@ class KabschEstimator:
             best_error = float('inf')
             best_obs = None
             
-            # For small datasets, try all combinations
+            # For small datasets, try all combinations AND permutations within each subset.
             if n_obs <= 10 and n_ref <= 5:
                 for combo in combinations(range(n_obs), n_ref):
                     obs_subset = observed_points[list(combo)]
-                    try:
-                        R, t, error = KabschEstimator.estimate(obs_subset, reference_points)
-                        if error < best_error:
-                            best_error = error
-                            best_obs = obs_subset
-                    except Exception:
-                        continue
+                    for perm in permutations(range(n_ref)):
+                        obs_perm = obs_subset[list(perm)]
+                        try:
+                            _, _, error = KabschEstimator.estimate(obs_perm, reference_points)
+                            if error < best_error:
+                                best_error = error
+                                best_obs = obs_perm
+                        except Exception:
+                            continue
                 
                 if best_obs is not None:
                     return best_obs, reference_points, best_error
@@ -511,6 +559,7 @@ class RigidBodyEstimator:
         patterns: Optional[List[MarkerPattern]] = None,
         marker_diameter: float = 0.014,
         cluster_radius_m: float = 0.08,
+        max_rms_error_m: float = 0.055,
     ):
         """
         Initialize estimator.
@@ -519,10 +568,14 @@ class RigidBodyEstimator:
             patterns: List of MarkerPatterns to track
             marker_diameter: Default marker diameter
             cluster_radius_m: Radius for grouping markers into rigid-body candidates
+            max_rms_error_m: Maximum allowed rigid-fit RMS error in meters
         """
+        if not np.isfinite(max_rms_error_m) or float(max_rms_error_m) <= 0.0:
+            raise ValueError("max_rms_error_m must be a finite positive value")
         self.patterns = patterns or [WAIST_PATTERN]
         self.marker_diameter = marker_diameter
         self.cluster_radius_m = float(cluster_radius_m)
+        self.max_rms_error_m = float(max_rms_error_m)
         
         self.clusterer = PointClusterer(
             marker_diameter=marker_diameter,
@@ -536,6 +589,20 @@ class RigidBodyEstimator:
         
         # Kabsch estimator
         self.kabsch = KabschEstimator()
+
+    def set_patterns(self, patterns: List[MarkerPattern]) -> None:
+        """Replace tracked rigid-body patterns while preserving existing trackers when possible."""
+        next_patterns = list(patterns or [])
+        next_trackers: Dict[str, RigidBodyTracker] = {}
+        for pattern in next_patterns:
+            tracker = self.trackers.get(pattern.name)
+            if tracker is None:
+                tracker = RigidBodyTracker(pattern)
+            else:
+                tracker.pattern = pattern
+            next_trackers[pattern.name] = tracker
+        self.patterns = next_patterns
+        self.trackers = next_trackers
     
     def estimate_pose(
         self,
@@ -651,7 +718,11 @@ class RigidBodyEstimator:
                 
                 pose = self.estimate_pose(cluster, pattern, timestamp)
                 
-                if pose.valid and pose.rms_error < best_error:
+                if (
+                    pose.valid
+                    and pose.rms_error <= self.max_rms_error_m
+                    and pose.rms_error < best_error
+                ):
                     best_pose = pose
                     best_error = pose.rms_error
                     best_cluster_idx = idx

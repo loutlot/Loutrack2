@@ -204,6 +204,11 @@ class TrackingPipeline:
     def set_pose_callback(self, callback: Callable[[Dict[str, RigidBodyPose]], None]) -> None:
         """Set callback for estimated poses."""
         self._pose_callback = callback
+
+    def set_patterns(self, patterns: List[MarkerPattern]) -> None:
+        """Update tracked rigid-body patterns without restarting the pipeline."""
+        next_patterns = list(patterns or [WAIST_PATTERN])
+        self.rigid_estimator.set_patterns(next_patterns)
     
     def set_error_callback(self, callback: Callable[[Exception], None]) -> None:
         """Set callback for errors."""

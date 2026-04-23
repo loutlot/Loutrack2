@@ -217,6 +217,7 @@ class _TrackingRuntime:
         self.running = False
         self.started_with = None
         self.started_epipolar_threshold_px = None
+        self.custom_rigids: list[Dict[str, Any]] = []
 
     def start(  # noqa: ANN001
         self,
@@ -237,6 +238,52 @@ class _TrackingRuntime:
 
     def status(self) -> Dict[str, Any]:
         return {"running": self.running, "calibration_loaded": self.running}
+
+    def pattern_catalog(self) -> list[Dict[str, Any]]:
+        return [
+            {"name": "waist", "marker_count": 4, "marker_diameter_m": 0.014, "is_custom": False, "selected": True}
+        ] + [
+            {
+                "name": item["name"],
+                "marker_count": item.get("marker_count", 0),
+                "marker_diameter_m": item.get("marker_diameter_m", 0.014),
+                "is_custom": True,
+                "selected": True,
+            }
+            for item in self.custom_rigids
+        ]
+
+    def registered_pattern_names(self) -> list[str]:
+        return ["waist"] + [item["name"] for item in self.custom_rigids]
+
+    def custom_pattern_definitions(self) -> list[Dict[str, Any]]:
+        return list(self.custom_rigids)
+
+    def register_custom_pattern(self, name: str, points_world, *, marker_diameter_m: float = 0.014, metadata=None):
+        entry = {
+            "name": name,
+            "marker_positions": [list(point) for point in points_world],
+            "marker_count": len(points_world),
+            "marker_diameter_m": marker_diameter_m,
+            "notes": (metadata or {}).get("notes", ""),
+            "created_at": (metadata or {}).get("created_at", 0),
+            "source": (metadata or {}).get("source", "custom_selection"),
+        }
+        self.custom_rigids.append(dict(entry))
+        return {
+            "name": name,
+            "marker_count": len(points_world),
+            "marker_diameter_m": marker_diameter_m,
+            "is_custom": True,
+            "selected": True,
+            "notes": entry["notes"],
+        }
+
+    def restore_custom_patterns(self, definitions) -> None:
+        self.custom_rigids = list(definitions or [])
+
+    def remove_custom_pattern(self, name: str) -> None:
+        self.custom_rigids = [item for item in self.custom_rigids if item["name"] != name]
 
     def scene_snapshot(self) -> Dict[str, Any]:
         return {
@@ -612,6 +659,60 @@ def test_gui_tracking_status_allows_start_when_preconditions_are_met(tmp_path: P
     assert status["start_allowed"] is True
     assert status["start_blockers"] == []
     assert status["stop_allowed"] is False
+
+
+def test_gui_tracking_service_persists_custom_rigid_selection(tmp_path: Path) -> None:
+    runtime = _TrackingRuntime()
+    state = _build_state(tmp_path, runtime=runtime)
+
+    response = state.create_tracking_rigid(
+        {
+            "name": "left_hand_cluster",
+            "marker_diameter_mm": 16,
+            "notes": "selected in viewer",
+            "points_world": [[0.0, 0.0, 0.0], [0.04, 0.0, 0.0], [0.0, 0.03, 0.02]],
+        }
+    )
+
+    tracking_settings = state._load_tracking_settings()
+    assert response["ok"] is True
+    assert response["rigid"]["name"] == "left_hand_cluster"
+    assert runtime.custom_rigids[0]["name"] == "left_hand_cluster"
+    assert tracking_settings["custom_rigids"][0]["name"] == "left_hand_cluster"
+    assert tracking_settings["custom_rigids"][0]["notes"] == "selected in viewer"
+
+
+def test_gui_tracking_service_deletes_custom_rigid_from_dedicated_store(tmp_path: Path) -> None:
+    runtime = _TrackingRuntime()
+    state = _build_state(tmp_path, runtime=runtime)
+    state.create_tracking_rigid(
+        {
+            "name": "left_hand_cluster",
+            "marker_diameter_mm": 16,
+            "points_world": [[0.0, 0.0, 0.0], [0.04, 0.0, 0.0], [0.0, 0.03, 0.02]],
+        }
+    )
+
+    response = state.delete_tracking_rigid({"name": "left_hand_cluster"})
+
+    assert response["ok"] is True
+    assert response["deleted_name"] == "left_hand_cluster"
+    assert runtime.custom_rigids == []
+    assert state._load_tracking_settings()["custom_rigids"] == []
+
+
+def test_gui_tracking_service_rejects_too_few_selected_points(tmp_path: Path) -> None:
+    state = _build_state(tmp_path, runtime=_TrackingRuntime())
+
+    with pytest.raises(ValueError, match="at least three selected points"):
+        state.create_tracking_rigid(
+            {
+                "name": "bad_cluster",
+                "points_world": [[0.0, 0.0, 0.0], [0.01, 0.0, 0.0]],
+            }
+        )
+
+
 
 
 def test_tracking_stop_is_idempotent_when_idle(tmp_path: Path) -> None:

@@ -4,10 +4,11 @@ import os
 import sys
 
 import numpy as np
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from host.rigid import PointClusterer, RigidBodyEstimator, WAIST_PATTERN
+from host.rigid import PointClusterer, RigidBodyEstimator, RigidBodyPose, WAIST_PATTERN
 
 
 def test_point_clusterer_defaults_to_80mm_radius() -> None:
@@ -41,6 +42,7 @@ def test_rigid_body_estimator_passes_80mm_radius_to_clusterer() -> None:
 
     assert estimator.cluster_radius_m == 0.08
     assert estimator.clusterer.eps == 0.08
+    assert estimator.max_rms_error_m == 0.055
 
 
 def test_single_pattern_estimator_falls_back_to_full_points_when_80mm_clusters_split() -> None:
@@ -51,3 +53,25 @@ def test_single_pattern_estimator_falls_back_to_full_points_when_80mm_clusters_s
 
     assert pose.valid is True
     assert pose.observed_markers == WAIST_PATTERN.num_markers
+
+
+def test_rigid_body_estimator_rejects_pose_over_max_rms(monkeypatch: pytest.MonkeyPatch) -> None:
+    estimator = RigidBodyEstimator(patterns=[WAIST_PATTERN], max_rms_error_m=0.05)
+    points = WAIST_PATTERN.marker_positions + np.array([1.0, 2.0, 3.0], dtype=np.float64)
+
+    def _fake_estimate_pose(_points, _pattern, timestamp):  # noqa: ANN001
+        return RigidBodyPose(
+            timestamp=timestamp,
+            position=np.array([1.0, 2.0, 3.0], dtype=np.float64),
+            rotation=np.eye(3, dtype=np.float64),
+            quaternion=np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64),
+            rms_error=0.08,
+            observed_markers=4,
+            valid=True,
+        )
+
+    monkeypatch.setattr(estimator, "estimate_pose", _fake_estimate_pose)
+    pose = estimator.process_points(points, timestamp=123)["waist"]
+
+    assert pose.valid is False
+    assert pose.observed_markers == 0

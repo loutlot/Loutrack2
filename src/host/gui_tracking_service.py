@@ -34,6 +34,9 @@ class GuiTrackingService:
             "empty_state": None if start_allowed else self._tracking_blocker_message(start_blockers),
             "latest_extrinsics_path": str(owner.latest_extrinsics_path) if owner.latest_extrinsics_path else None,
             "latest_extrinsics_quality": owner.latest_extrinsics_quality,
+            "pattern_catalog": owner.tracking_runtime.pattern_catalog(),
+            "registered_pattern_names": owner.tracking_runtime.registered_pattern_names(),
+            "custom_rigid_count": len(owner.tracking_runtime.custom_pattern_definitions()),
             "sse": owner.get_tracking_sse_diagnostics()
             if hasattr(owner, "get_tracking_sse_diagnostics")
             else {},
@@ -70,9 +73,9 @@ class GuiTrackingService:
     def start_tracking(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         owner = self._owner
         resolved = owner._resolve_tracking_calibration_path(str(payload.get("calibration_path") or ""))
-        patterns = payload.get("patterns", ["waist"])
+        patterns = payload.get("patterns", owner.tracking_runtime.registered_pattern_names())
         if not isinstance(patterns, list):
-            patterns = ["waist"]
+            patterns = owner.tracking_runtime.registered_pattern_names()
         epipolar_threshold_px = normalize_epipolar_threshold_px(
             payload.get("epipolar_threshold_px")
         )
@@ -142,6 +145,64 @@ class GuiTrackingService:
         owner._tracking_camera_ids = []
         response = {"ok": True, "summary": summary, **status, "running": False, "pi_stream_stop": stream_stop}
         owner.last_result = {"tracking_stop": response}
+        return response
+
+    def create_tracking_rigid(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        owner = self._owner
+        name = str(payload.get("name") or "").strip()
+        if not name:
+            raise ValueError("rigid body name is required")
+        points = payload.get("points_world", [])
+        if not isinstance(points, list) or len(points) < 3:
+            raise ValueError("at least three selected points are required")
+        marker_diameter_mm = payload.get("marker_diameter_mm", 14.0)
+        try:
+            marker_diameter_m = float(marker_diameter_mm) * 0.001
+        except Exception as exc:
+            raise ValueError("marker_diameter_mm must be numeric") from exc
+        if marker_diameter_m <= 0.0:
+            raise ValueError("marker_diameter_mm must be > 0")
+        metadata = {
+            "notes": str(payload.get("notes") or "").strip(),
+            "created_at": int(time.time()),
+            "source": "custom_selection",
+        }
+        rigid_entry = owner.tracking_runtime.register_custom_pattern(
+            name,
+            points,
+            marker_diameter_m=marker_diameter_m,
+            metadata=metadata,
+        )
+        owner._persist_tracking_settings(
+            {
+                "custom_rigids": owner.tracking_runtime.custom_pattern_definitions(),
+            }
+        )
+        response = {
+            "ok": True,
+            "rigid": rigid_entry,
+            "pattern_catalog": owner.tracking_runtime.pattern_catalog(),
+        }
+        owner.last_result = {"tracking_rigid_create": response}
+        return response
+
+    def delete_tracking_rigid(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        owner = self._owner
+        name = str(payload.get("name") or "").strip()
+        if not name:
+            raise ValueError("rigid body name is required")
+        owner.tracking_runtime.remove_custom_pattern(name)
+        owner._persist_tracking_settings(
+            {
+                "custom_rigids": owner.tracking_runtime.custom_pattern_definitions(),
+            }
+        )
+        response = {
+            "ok": True,
+            "deleted_name": name,
+            "pattern_catalog": owner.tracking_runtime.pattern_catalog(),
+        }
+        owner.last_result = {"tracking_rigid_delete": response}
         return response
 
     def _resolve_tracking_targets(self, payload: Dict[str, Any]) -> List[Any]:

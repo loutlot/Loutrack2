@@ -20,6 +20,7 @@ from .rigid import (
     RIGHT_FOOT_PATTERN,
     RigidBodyPose,
     WAIST_PATTERN,
+    marker_pattern_from_points,
 )
 
 AVAILABLE_PATTERNS: Dict[str, MarkerPattern] = {
@@ -29,6 +30,19 @@ AVAILABLE_PATTERNS: Dict[str, MarkerPattern] = {
     LEFT_FOOT_PATTERN.name: LEFT_FOOT_PATTERN,
     RIGHT_FOOT_PATTERN.name: RIGHT_FOOT_PATTERN,
 }
+
+
+def _pattern_catalog_entry(pattern: MarkerPattern, *, is_custom: bool) -> Dict[str, Any]:
+    metadata = dict(pattern.metadata or {})
+    return {
+        "name": pattern.name,
+        "marker_count": int(pattern.num_markers),
+        "marker_diameter_m": float(pattern.marker_diameter),
+        "is_custom": bool(is_custom),
+        "notes": str(metadata.get("notes") or ""),
+        "created_at": int(metadata.get("created_at", 0) or 0),
+        "source": str(metadata.get("source") or ("custom_selection" if is_custom else "builtin")),
+    }
 
 
 def _copy_triangulation_quality(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -93,6 +107,7 @@ class TrackingRuntime:
 
         self._pipeline: Optional[TrackingPipeline] = None
         self._patterns_by_name: Dict[str, MarkerPattern] = {}
+        self._custom_patterns_by_name: Dict[str, MarkerPattern] = {}
         self._trail_by_name: Dict[str, Deque[List[float]]] = defaultdict(
             lambda: deque(maxlen=self.trail_length)
         )
@@ -118,12 +133,15 @@ class TrackingRuntime:
         """Start tracking runtime and attach pose callback."""
         self.stop()
 
-        selected_names = patterns or [WAIST_PATTERN.name]
-        missing = [name for name in selected_names if name not in AVAILABLE_PATTERNS]
+        selected_names = patterns or self.registered_pattern_names()
+        if not selected_names:
+            selected_names = [WAIST_PATTERN.name]
+        available_patterns = self._available_patterns_by_name()
+        missing = [name for name in selected_names if name not in available_patterns]
         if missing:
             raise ValueError(f"unknown pattern names: {missing}")
 
-        selected_patterns = [AVAILABLE_PATTERNS[name] for name in selected_names]
+        selected_patterns = [available_patterns[name] for name in selected_names]
 
         pipeline = TrackingPipeline(
             udp_port=self.udp_port,
@@ -210,6 +228,126 @@ class TrackingRuntime:
                 ),
             )
         return summary
+
+    def register_custom_pattern(
+        self,
+        name: str,
+        points_world: List[List[float]] | np.ndarray,
+        *,
+        marker_diameter_m: float = 0.014,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        pattern_name = str(name or "").strip()
+        if not pattern_name:
+            raise ValueError("rigid body name is required")
+        with self._lock:
+            if pattern_name in AVAILABLE_PATTERNS:
+                raise ValueError(f"rigid body name already exists: {pattern_name}")
+            if pattern_name in self._custom_patterns_by_name:
+                raise ValueError(f"rigid body name already exists: {pattern_name}")
+        pattern = marker_pattern_from_points(
+            pattern_name,
+            np.asarray(points_world, dtype=np.float64),
+            marker_diameter=marker_diameter_m,
+            metadata=metadata,
+        )
+        with self._lock:
+            self._custom_patterns_by_name[pattern.name] = pattern
+            pipeline = self._pipeline
+            self._status_cache = {}
+            self._status_cache_monotonic = 0.0
+            if pipeline is not None:
+                next_selected = list(self._selected_pattern_names)
+                if pattern.name not in next_selected:
+                    next_selected.append(pattern.name)
+                next_patterns = [self._available_patterns_by_name()[item] for item in next_selected]
+                pipeline.set_patterns(next_patterns)
+                self._selected_pattern_names = next_selected
+                self._patterns_by_name = {item.name: item for item in next_patterns}
+        return self.pattern_catalog_by_name().get(pattern.name, {})
+
+    def restore_custom_patterns(self, definitions: List[Dict[str, Any]] | None) -> None:
+        restored: Dict[str, MarkerPattern] = {}
+        for definition in definitions or []:
+            if not isinstance(definition, dict):
+                continue
+            name = str(definition.get("name") or "").strip()
+            marker_positions = definition.get("marker_positions", [])
+            if not name or name in AVAILABLE_PATTERNS:
+                continue
+            points = np.asarray(marker_positions, dtype=np.float64)
+            if points.ndim != 2 or points.shape[1] != 3 or len(points) < 3:
+                continue
+            try:
+                marker_diameter = float(definition.get("marker_diameter_m", 0.014) or 0.014)
+            except Exception:
+                marker_diameter = 0.014
+            restored[name] = MarkerPattern(
+                name=name,
+                marker_positions=points,
+                marker_diameter=marker_diameter,
+                metadata={
+                    "notes": str(definition.get("notes") or ""),
+                    "created_at": int(definition.get("created_at", 0) or 0),
+                    "source": str(definition.get("source") or "custom_selection"),
+                },
+            )
+        with self._lock:
+            self._custom_patterns_by_name = restored
+            self._status_cache = {}
+            self._status_cache_monotonic = 0.0
+
+    def remove_custom_pattern(self, name: str) -> None:
+        pattern_name = str(name or "").strip()
+        if not pattern_name:
+            raise ValueError("rigid body name is required")
+        with self._lock:
+            if pattern_name not in self._custom_patterns_by_name:
+                raise ValueError(f"unknown custom rigid body: {pattern_name}")
+            del self._custom_patterns_by_name[pattern_name]
+            self._trail_by_name.pop(pattern_name, None)
+            pipeline = self._pipeline
+            self._selected_pattern_names = [item for item in self._selected_pattern_names if item != pattern_name]
+            self._patterns_by_name.pop(pattern_name, None)
+            self._status_cache = {}
+            self._status_cache_monotonic = 0.0
+            if pipeline is not None:
+                next_names = list(self._selected_pattern_names) or [WAIST_PATTERN.name]
+                next_patterns = [self._available_patterns_by_name()[item] for item in next_names]
+                pipeline.set_patterns(next_patterns)
+                self._patterns_by_name = {item.name: item for item in next_patterns}
+
+    def custom_pattern_definitions(self) -> List[Dict[str, Any]]:
+        with self._lock:
+            patterns = list(self._custom_patterns_by_name.values())
+        definitions: List[Dict[str, Any]] = []
+        for pattern in patterns:
+            metadata = dict(pattern.metadata or {})
+            definitions.append(
+                {
+                    "name": pattern.name,
+                    "marker_positions": pattern.marker_positions.tolist(),
+                    "marker_diameter_m": float(pattern.marker_diameter),
+                    "notes": str(metadata.get("notes") or ""),
+                    "created_at": int(metadata.get("created_at", 0) or 0),
+                    "source": str(metadata.get("source") or "custom_selection"),
+                }
+            )
+        return definitions
+
+    def registered_pattern_names(self) -> List[str]:
+        with self._lock:
+            if self._selected_pattern_names:
+                return list(self._selected_pattern_names)
+            custom_names = list(self._custom_patterns_by_name.keys())
+        return [WAIST_PATTERN.name] + custom_names
+
+    def pattern_catalog(self) -> List[Dict[str, Any]]:
+        with self._lock:
+            return self._pattern_catalog_locked()
+
+    def pattern_catalog_by_name(self) -> Dict[str, Dict[str, Any]]:
+        return {item["name"]: item for item in self.pattern_catalog()}
 
     def status(self) -> Dict[str, Any]:
         """Return current runtime status."""
@@ -323,6 +461,7 @@ class TrackingRuntime:
         status["active_calibration_path"] = calibration_path
         status["patterns"] = pattern_names
         status["last_stop_summary"] = last_stop_summary
+        status["pattern_catalog"] = self.pattern_catalog()
         with self._lock:
             if self._pipeline is pipeline:
                 self._status_cache = self._copy_status_payload(status)
@@ -340,6 +479,7 @@ class TrackingRuntime:
             "active_calibration_path": calibration_path,
             "calibration_path": calibration_path,
             "patterns": pattern_names,
+            "pattern_catalog": self._pattern_catalog_locked(),
             "frames_processed": 0,
             "poses_estimated": 0,
             "receiver": {"frames_received": 0, "cameras_discovered": 0},
@@ -368,6 +508,7 @@ class TrackingRuntime:
             ),
             "patterns": list(status.get("patterns", [])),
             "last_stop_summary": dict(status.get("last_stop_summary", {})),
+            "pattern_catalog": list(status.get("pattern_catalog", [])),
         }
 
     @staticmethod
@@ -382,6 +523,22 @@ class TrackingRuntime:
             "frames_processed": max(int(status.get("frames_processed", 0)), pipeline_frames),
             "poses_estimated": max(int(status.get("poses_estimated", 0)), pipeline_poses),
         }
+
+    def _available_patterns_by_name(self) -> Dict[str, MarkerPattern]:
+        return {**AVAILABLE_PATTERNS, **self._custom_patterns_by_name}
+
+    def _pattern_catalog_locked(self) -> List[Dict[str, Any]]:
+        selected = set(self._selected_pattern_names)
+        custom_patterns = list(self._custom_patterns_by_name.values())
+        catalog = [
+            {**_pattern_catalog_entry(pattern, is_custom=False), "selected": pattern.name in selected}
+            for pattern in AVAILABLE_PATTERNS.values()
+        ]
+        catalog.extend(
+            {**_pattern_catalog_entry(pattern, is_custom=True), "selected": pattern.name in selected}
+            for pattern in custom_patterns
+        )
+        return catalog
 
     def _set_latest_scene_locked(self, scene: Dict[str, Any]) -> None:
         next_timestamp = int(scene.get("timestamp_us", 0))

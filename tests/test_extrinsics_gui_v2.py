@@ -181,6 +181,7 @@ class _FakeTrackingRuntime:
         self.started_with = None
         self.started_epipolar_threshold_px = None
         self.start_count = 0
+        self.custom_rigids: list[Dict[str, Any]] = []
 
     def start(self, calibration_path: str, patterns, epipolar_threshold_px=None):
         self.running = True
@@ -195,6 +196,49 @@ class _FakeTrackingRuntime:
 
     def status(self) -> Dict[str, Any]:
         return {"running": self.running, "calibration_loaded": self.running}
+
+    def pattern_catalog(self) -> list[Dict[str, Any]]:
+        return [
+            {"name": "waist", "marker_count": 4, "marker_diameter_m": 0.014, "is_custom": False, "selected": True}
+        ] + [
+            {
+                "name": item["name"],
+                "marker_count": item.get("marker_count", 0),
+                "marker_diameter_m": item.get("marker_diameter_m", 0.014),
+                "is_custom": True,
+                "selected": True,
+            }
+            for item in self.custom_rigids
+        ]
+
+    def registered_pattern_names(self) -> list[str]:
+        return ["waist"] + [item["name"] for item in self.custom_rigids]
+
+    def custom_pattern_definitions(self) -> list[Dict[str, Any]]:
+        return list(self.custom_rigids)
+
+    def register_custom_pattern(self, name: str, points_world, *, marker_diameter_m: float = 0.014, metadata=None):
+        entry = {
+            "name": name,
+            "marker_positions": [list(point) for point in points_world],
+            "marker_count": len(points_world),
+            "marker_diameter_m": marker_diameter_m,
+            "notes": (metadata or {}).get("notes", ""),
+            "created_at": (metadata or {}).get("created_at", 0),
+            "source": (metadata or {}).get("source", "custom_selection"),
+        }
+        self.custom_rigids.append(dict(entry))
+        return {
+            "name": name,
+            "marker_count": len(points_world),
+            "marker_diameter_m": marker_diameter_m,
+            "is_custom": True,
+            "selected": True,
+            "notes": entry["notes"],
+        }
+
+    def restore_custom_patterns(self, definitions) -> None:
+        self.custom_rigids = list(definitions or [])
 
     def scene_snapshot(self) -> Dict[str, Any]:
         return {
@@ -1699,7 +1743,8 @@ def test_tracking_viewer_uses_webgl_without_canvas_fallback() -> None:
     assert "new THREE.Spherical" not in HTML_PAGE
     assert "floor/metric wand origin" not in HTML_PAGE
     assert "triangulated blobs" in HTML_PAGE
-    assert "0xfb923c, size: 0.065" in HTML_PAGE
+    assert "vertexColors: true" in HTML_PAGE
+    assert "size: 0.07" in HTML_PAGE
     assert "camera_ids: selectedCameraIds()" in HTML_PAGE
     assert 'return createTrackingPlaceholderViewer();' in HTML_PAGE
     assert "Falling back to built-in tracking viewer" not in HTML_PAGE

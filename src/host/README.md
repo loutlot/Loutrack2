@@ -144,6 +144,7 @@ error = triangulator.compute_reprojection_error(image_points, points_3d, camera_
 ### rigid.py - 剛体推定
 
 DBSCANクラスタリング + Kabschアルゴリズムによる剛体姿勢推定。
+`max_rms_error_m=0.055` を超える rigid-fit は tracking の valid pose として採用しません。
 
 ```python
 from host import RigidBodyEstimator, WAIST_PATTERN

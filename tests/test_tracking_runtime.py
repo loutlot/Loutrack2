@@ -699,3 +699,140 @@ def test_tracking_runtime_reuses_status_cache_and_camera_scene(monkeypatch) -> N
     assert _FakePipeline.last_instance is not None
     assert _FakePipeline.last_instance.status_calls == 1
     assert status["frames_processed"] == 5
+
+
+def test_tracking_runtime_registers_custom_pattern_and_updates_running_pipeline(monkeypatch) -> None:
+    class _FakePipeline:
+        last_instance = None
+
+        def __init__(self, udp_port=5000, calibration_path=None, patterns=None, **kwargs):
+            self._running = False
+            self.frames_processed = 0
+            self.poses_estimated = 0
+            self.geometry = type("_Geometry", (), {"camera_params": {}})()
+            self.pattern_updates: list[list[str]] = []
+            _FakePipeline.last_instance = self
+
+        def set_pose_callback(self, callback):
+            self._pose_callback = callback
+
+        def set_patterns(self, patterns):
+            self.pattern_updates.append([pattern.name for pattern in patterns])
+
+        def start(self, session_name=None):
+            self._running = True
+
+        def stop(self):
+            self._running = False
+            return {}
+
+        @property
+        def is_running(self):
+            return self._running
+
+        def get_status(self):
+            return {
+                "running": self._running,
+                "calibration_loaded": True,
+                "frames_processed": self.frames_processed,
+                "poses_estimated": self.poses_estimated,
+                "receiver": {},
+                "metrics": {},
+                "tracking": {},
+                "sync": {},
+                "uptime_seconds": 0.1,
+            }
+
+        def get_latest_triangulation_snapshot(self):
+            return {
+                "timestamp": 0,
+                "points_3d": [],
+                "reprojection_errors": [],
+                "pair_timestamp_range_us": 0,
+            }
+
+    monkeypatch.setattr("host.tracking_runtime.TrackingPipeline", _FakePipeline)
+
+    runtime = TrackingRuntime()
+    runtime.start(calibration_path="calibration", patterns=["waist"])
+    created = runtime.register_custom_pattern(
+        "left_hand_cluster",
+        [[0.0, 0.0, 0.0], [0.04, 0.0, 0.0], [0.0, 0.03, 0.01]],
+        metadata={"notes": "manual selection", "created_at": 123},
+    )
+
+    assert created["name"] == "left_hand_cluster"
+    assert created["is_custom"] is True
+    assert _FakePipeline.last_instance is not None
+    assert _FakePipeline.last_instance.pattern_updates == [["waist", "left_hand_cluster"]]
+    assert "left_hand_cluster" in runtime.registered_pattern_names()
+    assert any(item["name"] == "left_hand_cluster" for item in runtime.status()["pattern_catalog"])
+
+
+def test_tracking_runtime_removes_custom_pattern_and_updates_running_pipeline(monkeypatch) -> None:
+    class _FakePipeline:
+        last_instance = None
+
+        def __init__(self, udp_port=5000, calibration_path=None, patterns=None, **kwargs):
+            self._running = False
+            self.frames_processed = 0
+            self.poses_estimated = 0
+            self.geometry = type("_Geometry", (), {"camera_params": {}})()
+            self.pattern_updates: list[list[str]] = []
+            _FakePipeline.last_instance = self
+
+        def set_pose_callback(self, callback):
+            self._pose_callback = callback
+
+        def set_patterns(self, patterns):
+            self.pattern_updates.append([pattern.name for pattern in patterns])
+
+        def start(self, session_name=None):
+            self._running = True
+
+        def stop(self):
+            self._running = False
+            return {}
+
+        @property
+        def is_running(self):
+            return self._running
+
+        def get_status(self):
+            return {
+                "running": self._running,
+                "calibration_loaded": True,
+                "frames_processed": self.frames_processed,
+                "poses_estimated": self.poses_estimated,
+                "receiver": {},
+                "metrics": {},
+                "tracking": {},
+                "sync": {},
+                "uptime_seconds": 0.1,
+            }
+
+        def get_latest_triangulation_snapshot(self):
+            return {
+                "timestamp": 0,
+                "points_3d": [],
+                "reprojection_errors": [],
+                "pair_timestamp_range_us": 0,
+            }
+
+    monkeypatch.setattr("host.tracking_runtime.TrackingPipeline", _FakePipeline)
+
+    runtime = TrackingRuntime()
+    runtime.start(calibration_path="calibration", patterns=["waist"])
+    runtime.register_custom_pattern(
+        "left_hand_cluster",
+        [[0.0, 0.0, 0.0], [0.04, 0.0, 0.0], [0.0, 0.03, 0.01]],
+    )
+
+    runtime.remove_custom_pattern("left_hand_cluster")
+
+    assert _FakePipeline.last_instance is not None
+    assert _FakePipeline.last_instance.pattern_updates == [
+        ["waist", "left_hand_cluster"],
+        ["waist"],
+    ]
+    assert "left_hand_cluster" not in runtime.registered_pattern_names()

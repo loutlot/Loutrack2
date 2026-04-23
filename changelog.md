@@ -1,3 +1,4 @@
+- the tracking viewer can now use Ctrl/Cmd-drag rectangle selection to register or delete custom rigid bodies from triangulated blobs, persisting them in `calibration/tracking_rigids.json` and applying them live via `static/index.html` and `src/host/gui_tracking_service.py`
 - Raspberry Pi capture nodes can detect reflective blobs and stream observations to the host
 - the host GUI can drive blob tuning, mask building, pose capture, floor or metric capture, and extrinsics generation
 - the host GUI now keeps selected-camera targeting strict for camera commands and settings application

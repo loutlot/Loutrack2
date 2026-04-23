@@ -425,6 +425,28 @@
       pointer-events: none;
       font-size: 14px;
     }
+    .tracking-selection-rect {
+      position: absolute;
+      border: 1px solid rgba(191,219,254,0.95);
+      background: rgba(59,130,246,0.16);
+      box-shadow: inset 0 0 0 1px rgba(147,197,253,0.4);
+      pointer-events: none;
+      display: none;
+    }
+    .tracking-viewer-hint {
+      position: absolute;
+      left: 12px;
+      bottom: 12px;
+      z-index: 2;
+      padding: 6px 9px;
+      border-radius: 999px;
+      background: rgba(2,6,23,0.74);
+      border: 1px solid rgba(148,163,184,0.22);
+      color: #cbd5e1;
+      font-size: 11px;
+      letter-spacing: 0.02em;
+      pointer-events: none;
+    }
 
     /* ── Tracking cards ───────────────────────────────── */
     .tracking-camera-card {
@@ -452,6 +474,8 @@
     }
     .tracking-card-badge.ok { background: rgba(34,197,94,0.15); color: var(--accent); }
     .tracking-card-badge.warn { background: rgba(249,115,22,0.15); color: var(--warm); }
+    .tracking-card-badge.info { background: rgba(59,130,246,0.16); color: #93c5fd; }
+    .tracking-card-badge.muted { background: rgba(148,163,184,0.1); color: var(--ink-muted); }
     .tracking-card-metrics { display: flex; gap: 10px; font-size: 11px; color: var(--ink-muted); flex-wrap: wrap; }
     .tracking-rigid-row {
       background: rgba(15,23,42,0.6);
@@ -468,6 +492,24 @@
       font-size: 12px;
       font-weight: 700;
       margin-bottom: 4px;
+    }
+    .tracking-rigid-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .tracking-rigid-delete {
+      border: 1px solid rgba(239,68,68,0.26);
+      background: rgba(127,29,29,0.18);
+      color: #fecaca;
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 10px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .tracking-rigid-delete:hover {
+      background: rgba(127,29,29,0.28);
     }
     .tracking-state-badge {
       padding: 3px 10px;
@@ -486,6 +528,66 @@
       text-align: center;
       color: var(--ink-muted);
       font-size: 12px;
+    }
+    .tracking-modal-shell {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(2, 6, 23, 0.72);
+      backdrop-filter: blur(5px);
+      z-index: 40;
+      padding: 18px;
+    }
+    .tracking-modal-shell.open { display: flex; }
+    .tracking-modal-card {
+      width: min(460px, 100%);
+      background: #0f172a;
+      border: 1px solid rgba(148,163,184,0.18);
+      border-radius: 16px;
+      box-shadow: 0 24px 60px rgba(0,0,0,0.45);
+      padding: 18px;
+    }
+    .tracking-modal-title {
+      font-size: 18px;
+      font-weight: 800;
+      color: var(--ink);
+      margin: 0 0 6px;
+    }
+    .tracking-modal-copy {
+      color: var(--ink-muted);
+      font-size: 12px;
+      margin: 0 0 14px;
+      line-height: 1.5;
+    }
+    .tracking-modal-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px 12px;
+      margin-bottom: 12px;
+    }
+    .tracking-modal-grid label:last-child {
+      grid-column: 1 / -1;
+    }
+    .tracking-modal-grid textarea {
+      min-height: 84px;
+      resize: vertical;
+    }
+    .tracking-modal-summary {
+      font-size: 12px;
+      color: var(--ink-muted);
+      margin-bottom: 12px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: rgba(15,23,42,0.7);
+      border: 1px solid rgba(148,163,184,0.12);
+    }
+    .tracking-modal-error {
+      min-height: 18px;
+      color: #fca5a5;
+      font-size: 12px;
+      margin-bottom: 12px;
     }
 
     /* ── Intrinsics ───────────────────────────────────── */
@@ -942,6 +1044,8 @@
             <div class="tracking-viewer-inner" style="flex:1;min-height:0">
               <canvas id="trackingViewerCanvas" aria-label="Tracking scene viewport"></canvas>
               <div class="tracking-viewer-empty" id="trackingViewerEmpty">Waiting for scene data</div>
+              <div class="tracking-selection-rect" id="trackingSelectionRect" aria-hidden="true"></div>
+              <div class="tracking-viewer-hint" id="trackingViewerHint">Ctrl/Cmd + drag to select triangulated blobs</div>
             </div>
             <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--ink-muted);margin-top:6px;padding:0 2px">
               <span id="trackingSceneTimestamp">Last scene: --</span>
@@ -1056,6 +1160,33 @@
 
     </div><!-- /.main-area -->
   </div><!-- /.app-shell -->
+
+  <div class="tracking-modal-shell" id="trackingRigidModal" aria-hidden="true">
+    <div class="tracking-modal-card" role="dialog" aria-modal="true" aria-labelledby="trackingRigidModalTitle">
+      <h2 class="tracking-modal-title" id="trackingRigidModalTitle">Create Custom Rigid</h2>
+      <p class="tracking-modal-copy">The selected triangulated points will be saved as a reusable rigid pattern and added to tracking immediately.</p>
+      <div class="tracking-modal-summary" id="trackingRigidModalSummary">0 points selected</div>
+      <div class="tracking-modal-grid">
+        <label>
+          <span>Rigid Name</span>
+          <input id="trackingRigidName" type="text" placeholder="left_hand_cluster">
+        </label>
+        <label>
+          <span>Marker Diameter (mm)</span>
+          <input id="trackingRigidMarkerDiameter" type="number" min="1" max="100" step="0.5" value="14">
+        </label>
+        <label>
+          <span>Notes</span>
+          <textarea id="trackingRigidNotes" placeholder="Optional memo for this rigid"></textarea>
+        </label>
+      </div>
+      <div class="tracking-modal-error" id="trackingRigidModalError"></div>
+      <div class="btn-row" style="margin-top:0">
+        <button id="trackingRigidCancel" class="btn-ghost btn-sm" type="button">Cancel</button>
+        <button id="trackingRigidSubmit" class="btn-teal btn-sm" type="button">Add to Tracking</button>
+      </div>
+    </div>
+  </div>
 
   <script type="module">
     let THREE = null;
@@ -1198,6 +1329,8 @@
       intFrameEmpty: document.getElementById("intFrameEmpty"),
       trackingViewerCanvas: document.getElementById("trackingViewerCanvas"),
       trackingViewerEmpty: document.getElementById("trackingViewerEmpty"),
+      trackingSelectionRect: document.getElementById("trackingSelectionRect"),
+      trackingViewerHint: document.getElementById("trackingViewerHint"),
       trackingStatusBadge: document.getElementById("trackingStatusBadge"),
       trackingSceneTimestamp: document.getElementById("trackingSceneTimestamp"),
       trackingSceneHint: document.getElementById("trackingSceneHint"),
@@ -1216,6 +1349,14 @@
       trackingStatus: document.getElementById("trackingStatus"),
       trackingScene: document.getElementById("trackingScene"),
       trackingExtrinsicsPath: document.getElementById("trackingExtrinsicsPath"),
+      trackingRigidModal: document.getElementById("trackingRigidModal"),
+      trackingRigidModalSummary: document.getElementById("trackingRigidModalSummary"),
+      trackingRigidModalError: document.getElementById("trackingRigidModalError"),
+      trackingRigidName: document.getElementById("trackingRigidName"),
+      trackingRigidMarkerDiameter: document.getElementById("trackingRigidMarkerDiameter"),
+      trackingRigidNotes: document.getElementById("trackingRigidNotes"),
+      trackingRigidCancel: document.getElementById("trackingRigidCancel"),
+      trackingRigidSubmit: document.getElementById("trackingRigidSubmit"),
     };
     const trackingClientDiagnostics = {
       sseInterArrivalMs: [],
@@ -1255,7 +1396,7 @@
     function createTrackingPlaceholderViewer(message = "3D viewer loading...") {
       const overlay = elements.trackingViewerEmpty;
       if (!overlay) {
-        return { update: () => {}, setEmpty: () => {}, resize: () => {} };
+        return { update: () => {}, setEmpty: () => {}, resize: () => {}, clearSelection: () => {} };
       }
       overlay.textContent = message;
       overlay.style.display = "flex";
@@ -1266,6 +1407,7 @@
           overlay.style.display = "flex";
         },
         resize: () => {},
+        clearSelection: () => {},
       };
     }
 
@@ -1273,7 +1415,7 @@
       const canvas = elements.trackingViewerCanvas;
       const overlay = elements.trackingViewerEmpty;
       if (!canvas || !overlay) {
-        return { update: () => {}, setEmpty: () => {}, resize: () => {} };
+        return { update: () => {}, setEmpty: () => {}, resize: () => {}, clearSelection: () => {} };
       }
       if (!THREE) {
         return createTrackingPlaceholderViewer();
@@ -1315,6 +1457,16 @@
       let pendingSceneEmptyMessage = "";
       let pendingSceneReceivedAtMs = 0;
       const cursor = { x: 0, y: 0 };
+      let dragMode = "orbit";
+      let currentRawPoints = [];
+      let selectedRawPointIndices = [];
+      const selectionState = {
+        active: false,
+        startX: 0,
+        startY: 0,
+        endX: 0,
+        endY: 0,
+      };
 
       function updateCameraPosition() {
         const horizontalDistance = distance * Math.cos(elevation);
@@ -1324,6 +1476,57 @@
           target.z + distance * Math.sin(elevation)
         );
         camera.lookAt(target);
+      }
+
+      function selectionModifierActive(event) {
+        return Boolean(event?.ctrlKey || event?.metaKey);
+      }
+
+      function eventToCanvasPoint(event) {
+        const rect = canvas.getBoundingClientRect();
+        return {
+          x: event.clientX - rect.left,
+          y: event.clientY - rect.top,
+        };
+      }
+
+      function projectedCanvasPoint(point) {
+        const width = canvas.clientWidth;
+        const height = canvas.clientHeight;
+        if (!width || !height) {
+          return null;
+        }
+        const projected = new THREE.Vector3(point[0], point[1], point[2]).project(camera);
+        if (!Number.isFinite(projected.x) || !Number.isFinite(projected.y) || projected.z < -1 || projected.z > 1) {
+          return null;
+        }
+        return {
+          x: (projected.x * 0.5 + 0.5) * width,
+          y: (-projected.y * 0.5 + 0.5) * height,
+        };
+      }
+
+      function selectionBounds() {
+        const left = Math.min(selectionState.startX, selectionState.endX);
+        const right = Math.max(selectionState.startX, selectionState.endX);
+        const top = Math.min(selectionState.startY, selectionState.endY);
+        const bottom = Math.max(selectionState.startY, selectionState.endY);
+        return { left, right, top, bottom };
+      }
+
+      function updateSelectionRect() {
+        const rect = elements.trackingSelectionRect;
+        if (!rect) return;
+        if (!selectionState.active) {
+          rect.style.display = "none";
+          return;
+        }
+        const bounds = selectionBounds();
+        rect.style.display = "block";
+        rect.style.left = `${bounds.left}px`;
+        rect.style.top = `${bounds.top}px`;
+        rect.style.width = `${Math.max(0, bounds.right - bounds.left)}px`;
+        rect.style.height = `${Math.max(0, bounds.bottom - bounds.top)}px`;
       }
 
       function shouldRenderNow() {
@@ -1404,15 +1607,58 @@
       }
 
       function handlePointerDown(event) {
+        if (event.button !== 0) {
+          return;
+        }
         dragging = true;
         cursor.x = event.clientX;
         cursor.y = event.clientY;
+        dragMode = selectionModifierActive(event) ? "selection" : "orbit";
+        if (dragMode === "selection") {
+          const point = eventToCanvasPoint(event);
+          selectionState.active = true;
+          selectionState.startX = point.x;
+          selectionState.startY = point.y;
+          selectionState.endX = point.x;
+          selectionState.endY = point.y;
+          updateSelectionRect();
+        }
         canvas.setPointerCapture?.(event.pointerId);
         markDirty();
       }
 
       function handlePointerMove(event) {
         if (!dragging) {
+          return;
+        }
+        if (dragMode === "selection") {
+          const point = eventToCanvasPoint(event);
+          selectionState.endX = point.x;
+          selectionState.endY = point.y;
+          updateSelectionRect();
+          const indices = [];
+          if (
+            Math.abs(selectionState.endX - selectionState.startX) >= 2
+            || Math.abs(selectionState.endY - selectionState.startY) >= 2
+          ) {
+            const bounds = selectionBounds();
+            currentRawPoints.forEach((rawPoint, index) => {
+              const projected = projectedCanvasPoint(rawPoint);
+              if (!projected) {
+                return;
+              }
+              if (
+                projected.x >= bounds.left
+                && projected.x <= bounds.right
+                && projected.y >= bounds.top
+                && projected.y <= bounds.bottom
+              ) {
+                indices.push(index);
+              }
+            });
+          }
+          setRawPointSelection(indices);
+          markDirty();
           return;
         }
         const deltaX = event.clientX - cursor.x;
@@ -1426,6 +1672,17 @@
 
       function handlePointerUp(event) {
         dragging = false;
+        const wasSelection = dragMode === "selection";
+        if (wasSelection) {
+          selectionState.active = false;
+          updateSelectionRect();
+          if (selectedRawPointIndices.length >= 3) {
+            openTrackingRigidModal();
+          } else {
+            clearRawPointSelection();
+          }
+          dragMode = "orbit";
+        }
         canvas.releasePointerCapture?.(event.pointerId);
         markDirty();
       }
@@ -1435,6 +1692,9 @@
       canvas.addEventListener("pointerup", handlePointerUp);
       canvas.addEventListener("pointerleave", () => {
         dragging = false;
+        dragMode = "orbit";
+        selectionState.active = false;
+        updateSelectionRect();
         markDirty();
       });
       canvas.addEventListener(
@@ -1508,9 +1768,10 @@
 
       const rawPoints = new THREE.Points(
         new THREE.BufferGeometry(),
-        new THREE.PointsMaterial({ color: 0xfb923c, size: 0.065, transparent: true, opacity: 0.95 })
+        new THREE.PointsMaterial({ size: 0.07, vertexColors: true, transparent: true, opacity: 0.98 })
       );
       rawPoints.geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(0), 3));
+      rawPoints.geometry.setAttribute("color", new THREE.BufferAttribute(new Float32Array(0), 3));
       scene.add(rawPoints);
 
       const cameraHelpers = new Map();
@@ -1539,22 +1800,22 @@
         return positions;
       }
 
-      function ensureFloat32Attribute(geometry, itemSize, minFloatCount) {
+      function ensureFloat32Attribute(geometry, name, itemSize, minFloatCount) {
         const required = Math.max(0, Number(minFloatCount) || 0);
-        let attribute = geometry.getAttribute("position");
+        let attribute = geometry.getAttribute(name);
         if (!attribute || attribute.itemSize !== itemSize || attribute.array.length < required) {
           let nextLength = Math.max(required, itemSize * 3);
           if (attribute && attribute.itemSize === itemSize && attribute.array.length > 0) {
             nextLength = Math.max(nextLength, attribute.array.length * 2);
           }
           attribute = new THREE.BufferAttribute(new Float32Array(nextLength), itemSize);
-          geometry.setAttribute("position", attribute);
+          geometry.setAttribute(name, attribute);
         }
         return attribute;
       }
 
       function updateLineGeometry(geometry, values) {
-        const attribute = ensureFloat32Attribute(geometry, 3, values.length);
+        const attribute = ensureFloat32Attribute(geometry, "position", 3, values.length);
         if (values.length > 0) {
           attribute.array.set(values, 0);
         }
@@ -1564,7 +1825,7 @@
 
       function updatePointGeometry(geometry, points) {
         const pointCount = Array.isArray(points) ? points.length : 0;
-        const attribute = ensureFloat32Attribute(geometry, 3, pointCount * 3);
+        const attribute = ensureFloat32Attribute(geometry, "position", 3, pointCount * 3);
         for (let index = 0; index < pointCount; index += 1) {
           const point = points[index] || [0, 0, 0];
           const base = index * 3;
@@ -1679,8 +1940,48 @@
         });
       }
 
+      function setRawPointSelection(indices = []) {
+        selectedRawPointIndices = Array.from(new Set(indices))
+          .filter((index) => Number.isInteger(index) && index >= 0 && index < currentRawPoints.length)
+          .sort((left, right) => left - right);
+        const colorAttribute = ensureFloat32Attribute(
+          rawPoints.geometry,
+          "color",
+          3,
+          currentRawPoints.length * 3
+        );
+        const selectedLookup = new Set(selectedRawPointIndices);
+        for (let index = 0; index < currentRawPoints.length; index += 1) {
+          const base = index * 3;
+          if (selectedLookup.has(index)) {
+            colorAttribute.array[base + 0] = 0.96;
+            colorAttribute.array[base + 1] = 0.98;
+            colorAttribute.array[base + 2] = 1.0;
+          } else {
+            colorAttribute.array[base + 0] = 0.984;
+            colorAttribute.array[base + 1] = 0.573;
+            colorAttribute.array[base + 2] = 0.235;
+          }
+        }
+        colorAttribute.needsUpdate = true;
+      }
+
+      function clearRawPointSelection() {
+        selectionState.active = false;
+        updateSelectionRect();
+        setRawPointSelection([]);
+      }
+
+      function selectedRawPoints() {
+        return selectedRawPointIndices.map((index) => currentRawPoints[index]).filter(Boolean);
+      }
+
       function updateRawPoints(points = []) {
+        currentRawPoints = Array.isArray(points)
+          ? points.map((point) => [Number(point[0] || 0), Number(point[1] || 0), Number(point[2] || 0)])
+          : [];
         const pointCount = updatePointGeometry(rawPoints.geometry, points);
+        setRawPointSelection([]);
         rawPoints.visible = pointCount > 0;
       }
 
@@ -1717,6 +2018,29 @@
         return true;
       }
 
+      function openTrackingRigidModal() {
+        const points = selectedRawPoints();
+        if (points.length < 3 || !elements.trackingRigidModal) {
+          clearRawPointSelection();
+          return;
+        }
+        pendingRigidSelectionPoints = points.map((point) => [...point]);
+        const centroid = points.reduce(
+          (acc, point) => [acc[0] + point[0], acc[1] + point[1], acc[2] + point[2]],
+          [0, 0, 0]
+        ).map((value) => value / points.length);
+        elements.trackingRigidModalSummary.textContent =
+          `${points.length} points selected · centroid ${centroid.map((value) => value.toFixed(3)).join(", ")} m`;
+        elements.trackingRigidModalError.textContent = "";
+        if (!elements.trackingRigidName.value.trim()) {
+          elements.trackingRigidName.value = `rigid_${Date.now().toString().slice(-6)}`;
+        }
+        elements.trackingRigidModal.classList.add("open");
+        elements.trackingRigidModal.setAttribute("aria-hidden", "false");
+        elements.trackingRigidName.focus();
+        elements.trackingRigidName.select();
+      }
+
       function showOverlay(message) {
         overlay.textContent = message || "";
         overlay.style.display = message ? "flex" : "none";
@@ -1734,6 +2058,10 @@
           resizeViewer();
           markDirty();
         },
+        clearSelection() {
+          clearRawPointSelection();
+          markDirty();
+        },
       };
     }
     const SLIDER_DEBOUNCE_MS = 200;
@@ -1747,6 +2075,7 @@
     let trackingUiState = { phase: "idle", error: "" };
     let latestTrackingSceneSequence = null;
     let trackingSceneBootstrapped = false;
+    let pendingRigidSelectionPoints = [];
     let pendingTrackingSceneRaw = null;
     let pendingTrackingSceneReceivedAtMs = 0;
     let trackingScenePayloadQueued = false;
@@ -2239,7 +2568,12 @@
       const rigidCount = (scene.rigid_bodies || []).length;
       const rawPointCount = (scene.raw_points || []).length;
       elements.trackingSceneHint.textContent = `${cameraCount} cameras · ${rawPointCount} triangulated blobs · ${rigidCount} bodies`;
-      elements.trackingRigidCount.textContent = `${rigidCount} tracked`;
+      const customCount = Array.isArray(status?.pattern_catalog)
+        ? status.pattern_catalog.filter((item) => item?.is_custom).length
+        : 0;
+      elements.trackingRigidCount.textContent = customCount > 0
+        ? `${rigidCount} tracked · ${customCount} custom`
+        : `${rigidCount} tracked`;
       const coverage = status.sync?.coverage_5000us ?? status.sync?.coverage_target ?? null;
       elements.trackingSyncCoverage.textContent = coverage != null
         ? `Sync coverage ${(coverage * 100).toFixed(1)}%`
@@ -2277,29 +2611,59 @@
         .join("");
     }
 
-    function renderRigidHealth(scene) {
-      const rigids = scene.rigid_bodies || [];
-      if (!rigids.length) {
-        elements.trackingRigidList.innerHTML = '<div class="tracking-empty-sm">Waiting for rigid body data</div>';
+    function renderRigidHealth(scene, status = latestTrackingStatus) {
+      const rigids = Array.isArray(scene?.rigid_bodies) ? scene.rigid_bodies : [];
+      const catalog = Array.isArray(status?.pattern_catalog) ? status.pattern_catalog : [];
+      const catalogByName = new Map(catalog.map((item) => [item.name, item]));
+      const rigidByName = new Map(rigids.map((body) => [body.name, body]));
+      const names = [];
+      catalog.forEach((item) => {
+        if (item?.name && (item.is_custom || item.selected || rigidByName.has(item.name))) {
+          names.push(item.name);
+        }
+      });
+      rigids.forEach((body) => {
+        if (body?.name && !catalogByName.has(body.name)) {
+          names.push(body.name);
+        }
+      });
+      if (!names.length) {
+        elements.trackingRigidList.innerHTML = '<div class="tracking-empty-sm">Ctrl/Cmd + drag on the viewer to register a custom rigid.</div>';
         return;
       }
-      elements.trackingRigidList.innerHTML = rigids
-        .map((body) => {
-          const validClass = body.valid ? "" : " invalid";
-          const badgeClass = body.valid ? "ok" : "warn";
-          const rms = Number(body.rms_error ?? 0).toFixed(3);
-          const trailLength = (body.trail || []).length;
+      elements.trackingRigidList.innerHTML = names
+        .map((name) => {
+          const body = rigidByName.get(name);
+          const definition = catalogByName.get(name) || {};
+          const tracked = Boolean(body);
+          const validClass = body && body.valid === false ? " invalid" : "";
+          const statusLabel = tracked ? (body.valid ? "Valid" : "Lost") : "Defined";
+          const badgeClass = tracked ? (body.valid ? "ok" : "warn") : "info";
+          const rms = tracked ? Number(body.rms_error ?? 0).toFixed(3) : "—";
+          const trailLength = tracked ? (body.trail || []).length : 0;
+          const markerCount = tracked
+            ? body.observed_markers ?? definition.marker_count ?? 0
+            : definition.marker_count ?? 0;
+          const deleteButton = definition.is_custom
+            ? `<button class="tracking-rigid-delete" type="button" data-delete-rigid="${escapeHtml(name)}">Delete</button>`
+            : "";
+          const notes = definition.notes ? `<div style="font-size:11px;color:var(--ink-muted);margin-top:6px">${escapeHtml(definition.notes)}</div>` : "";
           return `
             <article class="tracking-rigid-row${validClass}">
               <header>
-                <strong>${escapeHtml(body.name)}</strong>
-                <span class="tracking-card-badge ${badgeClass}">${body.valid ? "Valid" : "Lost"}</span>
+                <strong>${escapeHtml(name)}</strong>
+                <span class="tracking-rigid-header-actions">
+                  ${deleteButton}
+                  <span class="tracking-card-badge ${badgeClass}">${statusLabel}</span>
+                </span>
               </header>
               <div class="tracking-card-metrics">
-                <span>Observed ${body.observed_markers ?? 0}</span>
+                <span>${definition.is_custom ? "Custom" : "Built-in"}</span>
+                <span>Markers ${markerCount}</span>
                 <span>RMS ${rms}</span>
                 <span>Trail ${trailLength}</span>
               </div>
+              ${notes}
             </article>
           `;
         })
@@ -2772,7 +3136,7 @@
           elements.trackingScene.textContent = JSON.stringify(scene, null, 2);
         }
         renderTrackingFooter(latestTrackingStatus, scene);
-        renderRigidHealth(scene);
+        renderRigidHealth(scene, latestTrackingStatus);
         renderTrackingClientDiagnostics();
       }
     }
@@ -2893,7 +3257,7 @@
       renderTrackingControlState(status);
       renderTrackingFooter(status, latestTrackingScene);
       renderCameraHealth(status);
-      renderRigidHealth(latestTrackingScene);
+      renderRigidHealth(latestTrackingScene, status);
       renderTrackingClientDiagnostics();
       if (!trackingSceneBootstrapped && includeScene) {
         trackingViewer.update(scene, emptyText);
@@ -2972,6 +3336,66 @@
         return await response.json();
       } catch (error) {
         throw new Error(`invalid_json_response url=${url} status=${response.status}`);
+      }
+    }
+
+    function closeTrackingRigidModal() {
+      pendingRigidSelectionPoints = [];
+      elements.trackingRigidModal.classList.remove("open");
+      elements.trackingRigidModal.setAttribute("aria-hidden", "true");
+      elements.trackingRigidModalError.textContent = "";
+      trackingViewer.clearSelection();
+    }
+
+    async function submitTrackingRigidModal() {
+      const name = elements.trackingRigidName.value.trim();
+      const markerDiameter = Number(elements.trackingRigidMarkerDiameter.value || 14);
+      const notes = elements.trackingRigidNotes.value.trim();
+      if (!name) {
+        elements.trackingRigidModalError.textContent = "Rigid name is required.";
+        elements.trackingRigidName.focus();
+        return;
+      }
+      if (!Number.isFinite(markerDiameter) || markerDiameter <= 0) {
+        elements.trackingRigidModalError.textContent = "Marker diameter must be a positive number.";
+        elements.trackingRigidMarkerDiameter.focus();
+        return;
+      }
+      if (!Array.isArray(pendingRigidSelectionPoints) || pendingRigidSelectionPoints.length < 3) {
+        elements.trackingRigidModalError.textContent = "Select at least three triangulated blobs first.";
+        return;
+      }
+      elements.trackingRigidModalError.textContent = "";
+      elements.trackingRigidSubmit.disabled = true;
+      elements.trackingRigidCancel.disabled = true;
+      try {
+        await postJson("/api/tracking/rigids", {
+          name,
+          marker_diameter_mm: markerDiameter,
+          notes,
+          points_world: pendingRigidSelectionPoints,
+        });
+        closeTrackingRigidModal();
+        await loadTracking({ includeScene: false });
+        showStatus(`Custom rigid '${name}' added.`, "success");
+      } catch (error) {
+        elements.trackingRigidModalError.textContent = error instanceof Error ? error.message : String(error);
+      } finally {
+        elements.trackingRigidSubmit.disabled = false;
+        elements.trackingRigidCancel.disabled = false;
+      }
+    }
+
+    async function deleteTrackingRigid(name) {
+      if (!name) {
+        return;
+      }
+      try {
+        await postJson("/api/tracking/rigids/delete", { name });
+        await loadTracking({ includeScene: false });
+        showStatus(`Custom rigid '${name}' deleted.`, "success");
+      } catch (error) {
+        reportUiError("tracking_rigid_delete", error);
       }
     }
 
@@ -3175,6 +3599,20 @@
       }
     });
 
+    document.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) {
+        return;
+      }
+      const deleteName = target.dataset.deleteRigid;
+      if (!deleteName) {
+        return;
+      }
+      deleteTrackingRigid(deleteName).catch((error) => {
+        reportUiError("tracking_rigid_delete", error);
+      });
+    });
+
     document.getElementById("captureWandMetric").addEventListener("click", async () => {
       showStatus("Starting floor / metric capture...", "info");
       try {
@@ -3278,7 +3716,9 @@
       renderTrackingControlState(latestTrackingStatus);
       try {
         await postJson("/api/tracking/start", {
-          patterns: ["waist"],
+          patterns: Array.isArray(latestTrackingStatus?.registered_pattern_names) && latestTrackingStatus.registered_pattern_names.length
+            ? latestTrackingStatus.registered_pattern_names
+            : ["waist"],
           camera_ids: selectedCameraIds(),
           epipolar_threshold_px: Number(elements.trackingEpipolarThreshold?.value || 3.5),
         });
@@ -3319,6 +3759,36 @@
         renderTrackingBadge(latestTrackingStatus);
         renderTrackingControlState(latestTrackingStatus);
         reportUiError("tracking_stop", error);
+      }
+    });
+
+    elements.trackingRigidCancel?.addEventListener("click", () => {
+      closeTrackingRigidModal();
+    });
+
+    elements.trackingRigidSubmit?.addEventListener("click", async () => {
+      await submitTrackingRigidModal();
+    });
+
+    elements.trackingRigidModal?.addEventListener("click", (event) => {
+      if (event.target === elements.trackingRigidModal) {
+        closeTrackingRigidModal();
+      }
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && elements.trackingRigidModal?.classList.contains("open")) {
+        closeTrackingRigidModal();
+      }
+      if (
+        event.key === "Enter"
+        && elements.trackingRigidModal?.classList.contains("open")
+        && document.activeElement !== elements.trackingRigidNotes
+      ) {
+        event.preventDefault();
+        submitTrackingRigidModal().catch((error) => {
+          elements.trackingRigidModalError.textContent = error instanceof Error ? error.message : String(error);
+        });
       }
     });
 

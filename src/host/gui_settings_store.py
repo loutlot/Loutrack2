@@ -684,3 +684,49 @@ class GuiSettingsStore:
             "min_pairs": 8,
             "wand_face": "front_up",
         }
+
+    @classmethod
+    def _normalize_custom_rigids(cls, values: Any) -> List[Dict[str, Any]]:
+        if not isinstance(values, list):
+            return []
+        normalized: List[Dict[str, Any]] = []
+        seen_names: set[str] = set()
+        for item in values:
+            if not isinstance(item, dict):
+                continue
+            name = cls._to_string(item.get("name"))
+            if not name or name in seen_names:
+                continue
+            marker_positions = item.get("marker_positions", [])
+            if not isinstance(marker_positions, list):
+                continue
+            cleaned_positions: List[List[float]] = []
+            for point in marker_positions:
+                if not isinstance(point, (list, tuple)) or len(point) != 3:
+                    cleaned_positions = []
+                    break
+                try:
+                    cleaned_positions.append([cls._to_float(point[0]), cls._to_float(point[1]), cls._to_float(point[2])])
+                except Exception:
+                    cleaned_positions = []
+                    break
+            if len(cleaned_positions) < 3:
+                continue
+            try:
+                marker_diameter_m = cls._to_float(item.get("marker_diameter_m", 0.014))
+            except Exception:
+                marker_diameter_m = 0.014
+            if marker_diameter_m <= 0.0:
+                marker_diameter_m = 0.014
+            normalized.append(
+                {
+                    "name": name,
+                    "marker_positions": cleaned_positions,
+                    "marker_diameter_m": marker_diameter_m,
+                    "notes": cls._to_string(item.get("notes")),
+                    "created_at": int(item.get("created_at", 0) or 0),
+                    "source": cls._to_string(item.get("source")) or "custom_selection",
+                }
+            )
+            seen_names.add(name)
+        return normalized
