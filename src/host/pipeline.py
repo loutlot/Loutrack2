@@ -158,6 +158,8 @@ class TrackingPipeline:
         self._latest_triangulation_snapshot: Dict[str, Any] = {
             "timestamp": 0,
             "points_3d": [],
+            "observations_by_camera": {},
+            "triangulated_points": [],
             "reprojection_errors": [],
             "triangulation_quality": _empty_triangulation_quality(),
             "contributing_rays": {"per_point": [], "summary": {}},
@@ -312,6 +314,8 @@ class TrackingPipeline:
                         point.tolist() if hasattr(point, "tolist") else list(point)
                         for point in points_3d_list
                     ],
+                    "observations_by_camera": dict(result.get("observations_by_camera", {})),
+                    "triangulated_points": list(result.get("triangulated_points", [])),
                     "reprojection_errors": list(result.get("reprojection_errors", [])),
                     "triangulation_quality": triangulation_quality,
                     "contributing_rays": dict(triangulation_quality.get("contributing_rays", {})),
@@ -410,6 +414,7 @@ class TrackingPipeline:
         return {
             "receiver": self.frame_processor.get_stats(),
             "geometry": self._geometry_diagnostics(),
+            "tracking": self.rigid_estimator.get_tracking_status(),
             "pipeline_stage_ms": self._stage_diagnostics(),
             "logger": self._logger_diagnostics(),
             "metrics": self.metrics.get_summary(),
@@ -443,6 +448,7 @@ class TrackingPipeline:
             ),
             "diagnostics": {
                 "geometry": self._geometry_diagnostics(),
+                "tracking": self.rigid_estimator.get_tracking_status(),
                 "pipeline_stage_ms": self._stage_diagnostics(),
                 "logger": self._logger_diagnostics(),
             },
@@ -458,6 +464,20 @@ class TrackingPipeline:
             return {
                 "timestamp": self._latest_triangulation_snapshot["timestamp"],
                 "points_3d": [list(point) for point in self._latest_triangulation_snapshot["points_3d"]],
+                "observations_by_camera": {
+                    camera_id: [dict(observation) for observation in observations]
+                    for camera_id, observations in self._latest_triangulation_snapshot.get(
+                        "observations_by_camera",
+                        {},
+                    ).items()
+                },
+                "triangulated_points": [
+                    dict(point)
+                    for point in self._latest_triangulation_snapshot.get(
+                        "triangulated_points",
+                        [],
+                    )
+                ],
                 "reprojection_errors": list(self._latest_triangulation_snapshot["reprojection_errors"]),
                 "triangulation_quality": _copy_triangulation_quality(
                     self._latest_triangulation_snapshot.get(

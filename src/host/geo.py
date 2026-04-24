@@ -361,11 +361,60 @@ def normalize_epipolar_threshold_px(value: Optional[Any]) -> float:
 
 
 @dataclass(frozen=True)
-class _BlobObservation:
+class BlobObservation2D:
+    """A 2D blob observation with both raw and undistorted pixel coordinates."""
+
     camera_id: str
     raw_uv: Tuple[float, float]
     undistorted_uv: Tuple[float, float]
     area: float = 0.0
+    blob_index: int = -1
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "camera_id": self.camera_id,
+            "blob_index": int(self.blob_index),
+            "raw_uv": [float(self.raw_uv[0]), float(self.raw_uv[1])],
+            "undistorted_uv": [
+                float(self.undistorted_uv[0]),
+                float(self.undistorted_uv[1]),
+            ],
+            "area": float(self.area),
+        }
+
+
+@dataclass(frozen=True)
+class TriangulatedPoint:
+    """A 3D point plus the 2D observations and quality metrics that created it."""
+
+    point: np.ndarray
+    observations: Tuple[BlobObservation2D, ...]
+    reprojection_errors_px: Tuple[float, ...]
+    epipolar_errors_px: Tuple[float, ...]
+    triangulation_angles_deg: Tuple[float, ...]
+    source: str = "generic"
+    rigid_name: Optional[str] = None
+    marker_idx: Optional[int] = None
+    is_virtual: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "point": [float(value) for value in np.asarray(self.point, dtype=np.float64).reshape(3)],
+            "observations": [observation.to_dict() for observation in self.observations],
+            "camera_ids": [observation.camera_id for observation in self.observations],
+            "blob_indices": [int(observation.blob_index) for observation in self.observations],
+            "contributing_rays": int(len(self.observations)),
+            "reprojection_errors_px": [float(value) for value in self.reprojection_errors_px],
+            "epipolar_errors_px": [float(value) for value in self.epipolar_errors_px],
+            "triangulation_angles_deg": [float(value) for value in self.triangulation_angles_deg],
+            "source": self.source,
+            "rigid_name": self.rigid_name,
+            "marker_idx": self.marker_idx,
+            "is_virtual": bool(self.is_virtual),
+        }
+
+
+_BlobObservation = BlobObservation2D
 
 
 def _metric_summary(values: List[float]) -> Dict[str, float]:
@@ -439,6 +488,8 @@ class Triangulator:
         self._last_quality_metrics: Dict[str, Any] = self._empty_quality_metrics(
             self._last_assignment_diagnostics
         )
+        self._last_observations_by_camera: Dict[str, List[BlobObservation2D]] = {}
+        self._last_triangulated_points: List[TriangulatedPoint] = []
         self._refresh_cached_matrices()
 
     @property
@@ -470,6 +521,19 @@ class Triangulator:
                 metrics.get("assignment_diagnostics", {})
             ),
         }
+
+    @property
+    def last_observations_by_camera(self) -> Dict[str, List[Dict[str, Any]]]:
+        """Return serialized 2D observations from the most recent frame pair."""
+        return {
+            camera_id: [observation.to_dict() for observation in observations]
+            for camera_id, observations in self._last_observations_by_camera.items()
+        }
+
+    @property
+    def last_triangulated_points(self) -> List[Dict[str, Any]]:
+        """Return serialized triangulated points with observation provenance."""
+        return [point.to_dict() for point in self._last_triangulated_points]
 
     @staticmethod
     def _empty_quality_metrics(assignment_diagnostics: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
@@ -516,7 +580,7 @@ class Triangulator:
 
     def _build_observations(self, cam_id: str, blobs: List[Dict[str, Any]]) -> List[_BlobObservation]:
         observations: List[_BlobObservation] = []
-        for blob in blobs:
+        for blob_index, blob in enumerate(blobs):
             raw_uv = (float(blob["x"]), float(blob["y"]))
             observations.append(
                 _BlobObservation(
@@ -524,6 +588,7 @@ class Triangulator:
                     raw_uv=raw_uv,
                     undistorted_uv=self._undistort_point(cam_id, raw_uv),
                     area=float(blob.get("area", 0.0)),
+                    blob_index=int(blob_index),
                 )
             )
         return observations
@@ -1019,9 +1084,12 @@ class Triangulator:
         _ = blob_matcher
         points_3d: List[np.ndarray] = []
         errors: List[float] = []
+        triangulated_points: List[TriangulatedPoint] = []
         diagnostics = _empty_assignment_diagnostics()
         self._last_assignment_diagnostics = dict(diagnostics)
         self._last_quality_metrics = self._empty_quality_metrics(diagnostics)
+        self._last_observations_by_camera = {}
+        self._last_triangulated_points = []
 
         camera_ids = [cid for cid in paired_frames.camera_ids if cid in self.camera_params]
         if len(camera_ids) < 2:
@@ -1034,6 +1102,10 @@ class Triangulator:
             frame = paired_frames.frames.get(cam_id)
             if frame is not None and frame.blobs:
                 observations_by_camera[cam_id] = self._build_observations(cam_id, frame.blobs)
+        self._last_observations_by_camera = {
+            camera_id: list(observations)
+            for camera_id, observations in observations_by_camera.items()
+        }
 
         active_cams = [camera_id for camera_id in camera_ids if observations_by_camera.get(camera_id)]
         if len(active_cams) < 2:
@@ -1096,8 +1168,21 @@ class Triangulator:
             angle_summary = candidate["triangulation_angle_deg_summary"]
             if angle_summary.get("count", 0) > 0:
                 accepted_triangulation_angles.append(float(angle_summary["max"]))
+            triangulated_points.append(
+                TriangulatedPoint(
+                    point=candidate_point,
+                    observations=tuple(candidate["inlier_observations"]),
+                    reprojection_errors_px=tuple(float(v) for v in candidate_reprojection),
+                    epipolar_errors_px=tuple(float(v) for v in candidate["epipolar_errors"]),
+                    triangulation_angles_deg=tuple(
+                        float(v) for v in candidate["triangulation_angles_deg"]
+                    ),
+                    source="generic",
+                )
+            )
 
         self._last_assignment_diagnostics = dict(diagnostics)
+        self._last_triangulated_points = list(triangulated_points)
         self._last_quality_metrics = {
             "accepted_points": len(points_3d),
             "contributing_rays": {
@@ -1264,12 +1349,16 @@ class GeometryPipeline:
         )
         assignment_diagnostics = self.triangulator.last_assignment_diagnostics
         quality_metrics = self.triangulator.last_quality_metrics
+        observations_by_camera = self.triangulator.last_observations_by_camera
+        triangulated_points = self.triangulator.last_triangulated_points
         self._latest_quality_metrics = quality_metrics
 
         return {
             "timestamp": paired_frames.timestamp,
             "camera_ids": paired_frames.camera_ids,
             "points_3d": points_3d,
+            "observations_by_camera": observations_by_camera,
+            "triangulated_points": triangulated_points,
             "reprojection_errors": errors,
             "assignment_diagnostics": assignment_diagnostics,
             "triangulation_quality": quality_metrics,

@@ -1,3 +1,7 @@
+- Phase 0.5 rigid stabilization provenance now carries per-camera 2D observations and per-point triangulation sources through `src/host/geo.py` and `src/host/pipeline.py`
+- rigid body stabilization progress notes now record Phase 0 replay results and Phase 0.5 expectations in `docs/10_in_progress/rigid_body_stabilization_log.md`
+- Phase 0 rigid stabilization diagnostics now track valid/lost runs and add a same-path tracking replay harness for `logs/tracking_gui.jsonl`
+- rigid body stabilization planning now includes same-path log replay, observation provenance, pattern ambiguity evaluation, and safer 2D-gated tracking phases in `docs/10_in_progress/rigid_body_stabilization_plan.md`
 - the tracking viewer now hides the green origin dot while keeping the standard world-axis lines in `static/index.html`
 - the Tracking Control card no longer shows the raw extrinsics file path banner in `static/index.html`
 - sidebar logo in `static/index.html` now uses the `static/loutrack-logo.png` wordmark image instead of the compact `LT2` badge

@@ -146,6 +146,128 @@ class RigidBodyPose:
         }
 
 
+@dataclass
+class TrackingStats:
+    """Rolling rigid-body tracking diagnostics for stabilization work."""
+
+    valid_runs: List[int] = field(default_factory=list)
+    lost_runs: List[int] = field(default_factory=list)
+    current_valid_run: int = 0
+    current_lost_run: int = 0
+    total_valid_frames: int = 0
+    total_invalid_frames: int = 0
+    reacquire_count: int = 0
+    short_valid_count: int = 0
+    pose_jump_count: int = 0
+    last_pose_jump_m: float = 0.0
+    max_pose_jump_m: float = 0.0
+    last_pose_flip_deg: float = 0.0
+    max_pose_flip_deg: float = 0.0
+    last_commit_position: Optional[np.ndarray] = None
+    last_commit_quaternion: Optional[np.ndarray] = None
+    invalid_reason: str = ""
+    hypothesis_margin: float = 0.0
+
+    def record(self, pose: RigidBodyPose, *, previous_valid: bool) -> None:
+        """Record a valid/lost transition without changing tracking behavior."""
+        if pose.valid:
+            was_reacquire = not previous_valid and self.total_valid_frames > 0
+            if previous_valid:
+                self.current_valid_run += 1
+            else:
+                if self.current_lost_run > 0:
+                    self.lost_runs.append(self.current_lost_run)
+                self.current_valid_run = 1
+                self.current_lost_run = 0
+                if was_reacquire:
+                    self.reacquire_count += 1
+                    self._record_reacquire_jump(pose)
+                    self._record_reacquire_flip(pose)
+
+            self.total_valid_frames += 1
+            self.last_commit_position = pose.position.copy()
+            self.last_commit_quaternion = _normalize_quaternion(pose.quaternion)
+            self.invalid_reason = ""
+            return
+
+        if previous_valid:
+            if self.current_valid_run > 0:
+                self.valid_runs.append(self.current_valid_run)
+                if self.current_valid_run <= 5:
+                    self.short_valid_count += 1
+            self.current_valid_run = 0
+            self.current_lost_run = 1
+        else:
+            self.current_lost_run += 1
+        self.total_invalid_frames += 1
+        self.invalid_reason = "no_valid_candidate"
+
+    def snapshot(self) -> Dict[str, Any]:
+        valid_runs = list(self.valid_runs)
+        if self.current_valid_run > 0:
+            valid_runs.append(self.current_valid_run)
+        lost_runs = list(self.lost_runs)
+        if self.current_lost_run > 0:
+            lost_runs.append(self.current_lost_run)
+
+        completed_valid_run_count = len(self.valid_runs)
+        short_valid_count = self.short_valid_count
+
+        return {
+            "mean_valid_run_frames": float(np.mean(valid_runs)) if valid_runs else 0.0,
+            "max_valid_run_frames": int(max(valid_runs)) if valid_runs else 0,
+            "current_valid_run_frames": int(self.current_valid_run),
+            "current_lost_run_frames": int(self.current_lost_run),
+            "mean_lost_run_frames": float(np.mean(lost_runs)) if lost_runs else 0.0,
+            "reacquire_count": int(self.reacquire_count),
+            "short_valid_count": int(short_valid_count),
+            "short_valid_ratio": (
+                float(short_valid_count / completed_valid_run_count)
+                if completed_valid_run_count
+                else 0.0
+            ),
+            "pose_jump_count": int(self.pose_jump_count),
+            "last_pose_jump_m": float(self.last_pose_jump_m),
+            "max_pose_jump_m": float(self.max_pose_jump_m),
+            "last_pose_flip_deg": float(self.last_pose_flip_deg),
+            "max_pose_flip_deg": float(self.max_pose_flip_deg),
+            "invalid_reason": self.invalid_reason,
+            "hypothesis_margin": float(self.hypothesis_margin),
+        }
+
+    def _record_reacquire_jump(self, pose: RigidBodyPose) -> None:
+        if self.last_commit_position is None:
+            return
+        jump = float(np.linalg.norm(pose.position - self.last_commit_position))
+        self.last_pose_jump_m = jump
+        self.max_pose_jump_m = max(self.max_pose_jump_m, jump)
+        if jump > 0.10:
+            self.pose_jump_count += 1
+
+    def _record_reacquire_flip(self, pose: RigidBodyPose) -> None:
+        if self.last_commit_quaternion is None:
+            return
+        angle_deg = _quaternion_angle_deg(self.last_commit_quaternion, pose.quaternion)
+        self.last_pose_flip_deg = angle_deg
+        self.max_pose_flip_deg = max(self.max_pose_flip_deg, angle_deg)
+
+
+def _normalize_quaternion(quaternion: np.ndarray) -> np.ndarray:
+    quat = np.asarray(quaternion, dtype=np.float64).reshape(4)
+    norm = float(np.linalg.norm(quat))
+    if norm <= 1e-12:
+        return np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
+    return quat / norm
+
+
+def _quaternion_angle_deg(previous: np.ndarray, current: np.ndarray) -> float:
+    q_prev = _normalize_quaternion(previous)
+    q_curr = _normalize_quaternion(current)
+    dot = abs(float(np.dot(q_prev, q_curr)))
+    dot = min(1.0, max(-1.0, dot))
+    return float(np.degrees(2.0 * np.arccos(dot)))
+
+
 class PointClusterer:
     """
     Cluster 3D points using DBSCAN algorithm.
@@ -476,12 +598,15 @@ class RigidBodyTracker:
         self.track_count = 0
         self.lost_frames = 0
         self.total_frames = 0
+        self.stats = TrackingStats()
     
     def update(self, pose: RigidBodyPose) -> None:
         """Update tracker with new pose estimate, including velocity estimation."""
         with self._lock:
+            previous_valid = self._pose_history[-1].valid if self._pose_history else False
             self._pose_history.append(pose)
             self.total_frames += 1
+            self.stats.record(pose, previous_valid=previous_valid)
 
             if pose.valid:
                 if self.track_count > 0 and self._last_valid_timestamp > 0:
@@ -545,6 +670,26 @@ class RigidBodyTracker:
         if self.total_frames == 0:
             return 0.0
         return self.track_count / self.total_frames
+
+    def get_diagnostics(self) -> Dict[str, Any]:
+        """Return diagnostics used by tracking logs and replay summaries."""
+        latest = self._pose_history[-1] if self._pose_history else None
+        latest_valid = bool(latest.valid) if latest is not None else False
+        latest_rms = float(latest.rms_error) if latest is not None else 0.0
+        latest_observed = int(latest.observed_markers) if latest is not None else 0
+        return {
+            "valid": latest_valid,
+            "mode": "tracking" if self.is_tracking else "lost",
+            "confidence": float(self.confidence),
+            "lost_frames": int(self.lost_frames),
+            "track_count": int(self.track_count),
+            "total_frames": int(self.total_frames),
+            "rms_error_m": latest_rms,
+            "observed_markers": latest_observed,
+            "real_ray_count": latest_observed,
+            "virtual_marker_count": 0,
+            **self.stats.snapshot(),
+        }
 
 
 class RigidBodyEstimator:
@@ -745,9 +890,7 @@ class RigidBodyEstimator:
         return {
             name: {
                 "is_tracking": tracker.is_tracking,
-                "confidence": tracker.confidence,
-                "lost_frames": tracker.lost_frames,
-                "track_count": tracker.track_count
+                **tracker.get_diagnostics(),
             }
             for name, tracker in self.trackers.items()
         }

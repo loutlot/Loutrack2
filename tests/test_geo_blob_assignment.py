@@ -181,6 +181,39 @@ def test_process_paired_frames_triangulates_shuffled_blobs_with_one_to_one_assig
         assert np.min(np.linalg.norm(reconstructed - expected, axis=1)) < 1e-6
 
 
+def test_process_paired_frames_exposes_observation_provenance() -> None:
+    pipeline = _geometry_pipeline()
+    params = pipeline.camera_params
+    points_world = np.array(
+        [
+            [-0.10, -0.12, 2.5],
+            [0.05, -0.04, 2.5],
+        ],
+        dtype=np.float64,
+    )
+    blobs_a = [_blob(_project(params["cam0"], point)) for point in points_world]
+    blobs_b = [_blob(_project(params["cam1"], point)) for point in points_world]
+
+    result = pipeline.process_paired_frames(_paired(blobs_a, blobs_b))
+
+    assert len(result["points_3d"]) == 2
+    assert set(result["observations_by_camera"]) == {"cam0", "cam1"}
+    assert [obs["blob_index"] for obs in result["observations_by_camera"]["cam0"]] == [0, 1]
+    assert "raw_uv" in result["observations_by_camera"]["cam0"][0]
+    assert "undistorted_uv" in result["observations_by_camera"]["cam0"][0]
+
+    triangulated_points = result["triangulated_points"]
+    assert len(triangulated_points) == len(result["points_3d"])
+    for point_payload, point_3d in zip(triangulated_points, result["points_3d"]):
+        assert np.allclose(point_payload["point"], point_3d)
+        assert point_payload["source"] == "generic"
+        assert point_payload["is_virtual"] is False
+        assert point_payload["contributing_rays"] == 2
+        assert set(point_payload["camera_ids"]) == {"cam0", "cam1"}
+        assert len(point_payload["observations"]) == 2
+        assert len(point_payload["reprojection_errors_px"]) == 2
+
+
 def test_process_paired_frames_does_not_force_unmatched_blob_into_3d_point() -> None:
     pipeline = _geometry_pipeline()
     params = pipeline.camera_params

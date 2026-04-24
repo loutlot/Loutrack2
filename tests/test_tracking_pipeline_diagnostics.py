@@ -89,6 +89,33 @@ def test_tracking_pipeline_reports_stage_and_logger_diagnostics(tmp_path: Path) 
             _ = min_inlier_views
             return {
                 "points_3d": [np.array([1.0, 2.0, 3.0])],
+                "observations_by_camera": {
+                    "pi-cam-01": [
+                        {
+                            "camera_id": "pi-cam-01",
+                            "blob_index": 0,
+                            "raw_uv": [10.0, 20.0],
+                            "undistorted_uv": [10.0, 20.0],
+                            "area": 4.0,
+                        }
+                    ]
+                },
+                "triangulated_points": [
+                    {
+                        "point": [1.0, 2.0, 3.0],
+                        "camera_ids": ["pi-cam-01", "pi-cam-02"],
+                        "blob_indices": [0, 0],
+                        "contributing_rays": 2,
+                        "observations": [],
+                        "reprojection_errors_px": [0.25, 0.25],
+                        "epipolar_errors_px": [0.1],
+                        "triangulation_angles_deg": [3.0],
+                        "source": "generic",
+                        "rigid_name": None,
+                        "marker_idx": None,
+                        "is_virtual": False,
+                    }
+                ],
                 "reprojection_errors": [0.25],
                 "assignment_diagnostics": {"assignment_matches": 1},
                 "triangulation_quality": _triangulation_quality(),
@@ -142,8 +169,12 @@ def test_tracking_pipeline_reports_stage_and_logger_diagnostics(tmp_path: Path) 
     assert stage_ms["pose_callback_ms"]["max"] >= 0.0
     assert stage_ms["pipeline_pair_ms"]["max"] >= 0.0
     assert status["diagnostics"]["logger"]["recording"] is True
+    assert status["diagnostics"]["tracking"] == {"ok": True}
     assert callbacks
     assert status["triangulation_quality"]["accepted_points"] == 1
+    snapshot = pipeline.get_latest_triangulation_snapshot()
+    assert snapshot["observations_by_camera"]["pi-cam-01"][0]["blob_index"] == 0
+    assert snapshot["triangulated_points"][0]["point"] == [1.0, 2.0, 3.0]
     assert metadata["total_frames"] == 2
 
     events = [
@@ -155,6 +186,12 @@ def test_tracking_pipeline_reports_stage_and_logger_diagnostics(tmp_path: Path) 
         entry.get("_type") == "event" and entry.get("event_type") == "tracking_diagnostics"
         for entry in events
     )
+    diagnostics_events = [
+        entry
+        for entry in events
+        if entry.get("_type") == "event" and entry.get("event_type") == "tracking_diagnostics"
+    ]
+    assert diagnostics_events[-1]["data"]["tracking"] == {"ok": True}
 
 
 def test_tracking_pipeline_uses_half_frame_timestamp_pairing_window() -> None:
