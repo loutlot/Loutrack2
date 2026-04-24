@@ -1,3 +1,5 @@
+- Phase 4.5 rigid stabilization now adds shadow-first reacquire candidate guard diagnostics with optional enforcement hooks
+- rigid body stabilization planning now includes Phase 4.5 shadow-first reacquire candidate guard before object-conditioned gating
 - Phase 4 rigid stabilization now adds 2D reprojection scoring diagnostics from observation provenance while preserving existing pose acceptance
 - Phase 3 rigid stabilization now reports boot/continue/reacquire/lost mode transitions and pose innovation diagnostics without changing pose acceptance
 - Phase 2 rigid stabilization now exposes side-effect-free pose prediction and rolling confidence diagnostics for tracked rigid bodies

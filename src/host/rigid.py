@@ -210,6 +210,32 @@ class TrackModeConfig:
     continue_rotation_gate_deg: float = 120.0
 
 
+@dataclass(frozen=True)
+class ReacquireGuardConfig:
+    """2D score guard used to evaluate reacquire candidates."""
+
+    shadow_enabled: bool = True
+    enforced: bool = False
+    min_matched_marker_views: int = 6
+    max_missing_marker_views: int = 2
+    max_mean_reprojection_error_px: float = 4.0
+    max_p95_reprojection_error_px: float = 8.0
+    allow_duplicate_assignment: bool = False
+    max_position_innovation_m: float = 0.25
+    max_rotation_innovation_deg: float = 120.0
+
+    def thresholds_dict(self) -> Dict[str, Any]:
+        return {
+            "min_matched_marker_views": int(self.min_matched_marker_views),
+            "max_missing_marker_views": int(self.max_missing_marker_views),
+            "max_mean_reprojection_error_px": float(self.max_mean_reprojection_error_px),
+            "max_p95_reprojection_error_px": float(self.max_p95_reprojection_error_px),
+            "allow_duplicate_assignment": bool(self.allow_duplicate_assignment),
+            "max_position_innovation_m": float(self.max_position_innovation_m),
+            "max_rotation_innovation_deg": float(self.max_rotation_innovation_deg),
+        }
+
+
 def _empty_reprojection_score(reason: str = "not_scored") -> Dict[str, Any]:
     return {
         "scored": False,
@@ -226,6 +252,33 @@ def _empty_reprojection_score(reason: str = "not_scored") -> Dict[str, Any]:
         "unexpected_blob_count": 0,
         "camera_count": 0,
         "match_gate_px": 0.0,
+    }
+
+
+def _empty_reacquire_guard(
+    *,
+    enabled: bool = True,
+    enforced: bool = False,
+    rejected_count: int = 0,
+    evaluated_count: int = 0,
+    would_reject_count: int = 0,
+    reason: str = "not_evaluated",
+    thresholds: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    return {
+        "enabled": bool(enabled),
+        "enforced": bool(enforced),
+        "evaluated": False,
+        "passed": True,
+        "would_reject": False,
+        "reason": reason,
+        "thresholds": dict(thresholds or {}),
+        "score": {},
+        "position_innovation_m": 0.0,
+        "rotation_innovation_deg": 0.0,
+        "evaluated_count": int(evaluated_count),
+        "would_reject_count": int(would_reject_count),
+        "rejected_count": int(rejected_count),
     }
 
 
@@ -251,7 +304,13 @@ class TrackingStats:
     invalid_reason: str = ""
     hypothesis_margin: float = 0.0
 
-    def record(self, pose: RigidBodyPose, *, previous_valid: bool) -> None:
+    def record(
+        self,
+        pose: RigidBodyPose,
+        *,
+        previous_valid: bool,
+        invalid_reason: Optional[str] = None,
+    ) -> None:
         """Record a valid/lost transition without changing tracking behavior."""
         if pose.valid:
             was_reacquire = not previous_valid and self.total_valid_frames > 0
@@ -283,7 +342,7 @@ class TrackingStats:
         else:
             self.current_lost_run += 1
         self.total_invalid_frames += 1
-        self.invalid_reason = "no_valid_candidate"
+        self.invalid_reason = invalid_reason or "no_valid_candidate"
 
     def snapshot(self) -> Dict[str, Any]:
         valid_runs = list(self.valid_runs)
@@ -705,15 +764,23 @@ class RigidBodyTracker:
         self._max_rotation_innovation_deg = 0.0
         self._last_mode_reason = "initializing"
         self._last_reprojection_score: Dict[str, Any] = _empty_reprojection_score()
+        self._reacquire_guard_evaluated_count = 0
+        self._reacquire_guard_would_reject_count = 0
+        self._reacquire_guard_rejected_count = 0
+        self._last_reacquire_guard: Dict[str, Any] = _empty_reacquire_guard()
     
-    def update(self, pose: RigidBodyPose) -> None:
+    def update(self, pose: RigidBodyPose, *, invalid_reason: Optional[str] = None) -> None:
         """Update tracker with new pose estimate, including velocity estimation."""
         with self._lock:
             previous_valid = self._pose_history[-1].valid if self._pose_history else False
             self._update_mode_locked(pose)
             self._pose_history.append(pose)
             self.total_frames += 1
-            self.stats.record(pose, previous_valid=previous_valid)
+            self.stats.record(
+                pose,
+                previous_valid=previous_valid,
+                invalid_reason=invalid_reason,
+            )
 
             if pose.valid:
                 if self.track_count > 0 and self._last_valid_timestamp > 0:
@@ -837,6 +904,27 @@ class RigidBodyTracker:
         with self._lock:
             self._last_reprojection_score = dict(score or _empty_reprojection_score())
 
+    @property
+    def mode(self) -> TrackMode:
+        """Return the current lifecycle mode."""
+        with self._lock:
+            return self._mode
+
+    def record_reacquire_guard(self, guard: Dict[str, Any]) -> None:
+        """Attach latest reacquire guard diagnostics without affecting tracking state."""
+        with self._lock:
+            payload = dict(guard or _empty_reacquire_guard())
+            if payload.get("evaluated"):
+                self._reacquire_guard_evaluated_count += 1
+            if payload.get("would_reject"):
+                self._reacquire_guard_would_reject_count += 1
+            if payload.get("enforced") and payload.get("would_reject"):
+                self._reacquire_guard_rejected_count += 1
+            payload["evaluated_count"] = int(self._reacquire_guard_evaluated_count)
+            payload["would_reject_count"] = int(self._reacquire_guard_would_reject_count)
+            payload["rejected_count"] = int(self._reacquire_guard_rejected_count)
+            self._last_reacquire_guard = payload
+
     def get_diagnostics(self) -> Dict[str, Any]:
         """Return diagnostics used by tracking logs and replay summaries."""
         latest = self._pose_history[-1] if self._pose_history else None
@@ -866,6 +954,7 @@ class RigidBodyTracker:
             "last_rotation_innovation_deg": float(self._last_rotation_innovation_deg),
             "max_rotation_innovation_deg": float(self._max_rotation_innovation_deg),
             "reprojection_score": dict(self._last_reprojection_score),
+            "reacquire_guard": dict(self._last_reacquire_guard),
             "rms_error_m": latest_rms,
             "observed_markers": latest_observed,
             "real_ray_count": latest_observed,
@@ -1028,6 +1117,7 @@ class RigidBodyEstimator:
         cluster_radius_m: float = 0.08,
         max_rms_error_m: float = 0.055,
         reprojection_match_gate_px: float = 12.0,
+        reacquire_guard_config: ReacquireGuardConfig = ReacquireGuardConfig(),
     ):
         """
         Initialize estimator.
@@ -1047,6 +1137,7 @@ class RigidBodyEstimator:
         self.cluster_radius_m = float(cluster_radius_m)
         self.max_rms_error_m = float(max_rms_error_m)
         self.reprojection_match_gate_px = float(reprojection_match_gate_px)
+        self.reacquire_guard_config = reacquire_guard_config
         
         self.clusterer = PointClusterer(
             marker_diameter=marker_diameter,
@@ -1237,8 +1328,7 @@ class RigidBodyEstimator:
                     best_cluster_idx = idx
             
             if best_pose is not None:
-                poses[pattern.name] = best_pose
-                used_clusters.add(best_cluster_idx)
+                tracker = self.trackers[pattern.name]
                 score = self._score_pose_reprojection(
                     best_pose,
                     pattern,
@@ -1246,8 +1336,20 @@ class RigidBodyEstimator:
                     observations_by_camera,
                     coordinate_space=coordinate_space,
                 )
-                self.trackers[pattern.name].record_reprojection_score(score)
-                self.trackers[pattern.name].update(best_pose)
+                guard = self._evaluate_reacquire_guard(tracker, best_pose, score)
+                tracker.record_reprojection_score(score)
+                tracker.record_reacquire_guard(guard)
+                if guard.get("enforced") and guard.get("would_reject"):
+                    rejected_pose = self._invalid_pose(timestamp)
+                    poses[pattern.name] = rejected_pose
+                    tracker.update(
+                        rejected_pose,
+                        invalid_reason="reprojection_guard_rejected",
+                    )
+                else:
+                    poses[pattern.name] = best_pose
+                    used_clusters.add(best_cluster_idx)
+                    tracker.update(best_pose)
             else:
                 # Use prediction
                 predicted = self.trackers[pattern.name].predict()
@@ -1256,9 +1358,105 @@ class RigidBodyEstimator:
                 self.trackers[pattern.name].record_reprojection_score(
                     _empty_reprojection_score("no_valid_pose")
                 )
+                self.trackers[pattern.name].record_reacquire_guard(
+                    _empty_reacquire_guard(
+                        enabled=self.reacquire_guard_config.shadow_enabled,
+                        enforced=self.reacquire_guard_config.enforced,
+                        reason="no_valid_pose",
+                        thresholds=self.reacquire_guard_config.thresholds_dict(),
+                    )
+                )
                 self.trackers[pattern.name].update(predicted)
         
         return poses
+
+    @staticmethod
+    def _invalid_pose(timestamp: int) -> RigidBodyPose:
+        return RigidBodyPose(
+            timestamp=timestamp,
+            position=np.zeros(3, dtype=np.float64),
+            rotation=np.eye(3, dtype=np.float64),
+            quaternion=np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64),
+            valid=False,
+        )
+
+    def _evaluate_reacquire_guard(
+        self,
+        tracker: RigidBodyTracker,
+        pose: RigidBodyPose,
+        score: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        config = self.reacquire_guard_config
+        thresholds = config.thresholds_dict()
+        if not config.shadow_enabled and not config.enforced:
+            return _empty_reacquire_guard(
+                enabled=False,
+                enforced=False,
+                reason="disabled",
+                thresholds=thresholds,
+            )
+        if tracker.mode != TrackMode.REACQUIRE:
+            return _empty_reacquire_guard(
+                enabled=config.shadow_enabled,
+                enforced=config.enforced,
+                reason="not_reacquire_mode",
+                thresholds=thresholds,
+            )
+        if not pose.valid:
+            return _empty_reacquire_guard(
+                enabled=config.shadow_enabled,
+                enforced=config.enforced,
+                reason="invalid_pose",
+                thresholds=thresholds,
+            )
+
+        prediction = tracker.peek_prediction(pose.timestamp)
+        position_innovation_m = (
+            float(np.linalg.norm(pose.position - prediction.position))
+            if prediction.valid
+            else 0.0
+        )
+        rotation_innovation_deg = (
+            _quaternion_angle_deg(prediction.quaternion, pose.quaternion)
+            if prediction.valid
+            else 0.0
+        )
+
+        reasons: List[str] = []
+        if not score.get("scored", False):
+            reasons.append(f"score_not_available:{score.get('reason', 'unknown')}")
+        if int(score.get("matched_marker_views", 0)) < config.min_matched_marker_views:
+            reasons.append("insufficient_matched_marker_views")
+        if int(score.get("missing_marker_views", 0)) > config.max_missing_marker_views:
+            reasons.append("too_many_missing_marker_views")
+        if float(score.get("mean_error_px", 0.0)) > config.max_mean_reprojection_error_px:
+            reasons.append("mean_reprojection_error_too_high")
+        if float(score.get("p95_error_px", 0.0)) > config.max_p95_reprojection_error_px:
+            reasons.append("p95_reprojection_error_too_high")
+        if (
+            not config.allow_duplicate_assignment
+            and int(score.get("duplicate_assignment_count", 0)) > 0
+        ):
+            reasons.append("duplicate_assignment")
+        if position_innovation_m > config.max_position_innovation_m:
+            reasons.append("position_innovation_too_high")
+        if rotation_innovation_deg > config.max_rotation_innovation_deg:
+            reasons.append("rotation_innovation_too_high")
+
+        passed = not reasons
+        return {
+            "enabled": bool(config.shadow_enabled or config.enforced),
+            "enforced": bool(config.enforced),
+            "evaluated": True,
+            "passed": bool(passed),
+            "would_reject": bool(not passed),
+            "reason": "ok" if passed else ",".join(reasons),
+            "thresholds": thresholds,
+            "score": dict(score),
+            "position_innovation_m": float(position_innovation_m),
+            "rotation_innovation_deg": float(rotation_innovation_deg),
+            "rejected_count": 0,
+        }
 
     def _score_pose_reprojection(
         self,
