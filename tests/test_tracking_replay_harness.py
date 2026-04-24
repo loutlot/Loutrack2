@@ -106,3 +106,26 @@ def test_replay_tracking_log_injects_frames_through_frame_processor(
     assert summary["frames_processed"] == 1
     assert summary["poses_estimated"] == 1
     assert summary["tracking"]["waist"]["valid"] is True
+    assert "reacquire_guard_summary" in summary
+    assert summary["phase45_go_no_go"]["decision"] in {
+        "no_reacquire_reject_signal",
+        "pending_enforcement_replay",
+    }
+
+
+def test_compare_reacquire_guard_enforcement_returns_go_no_go(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(harness, "FrameReplay", _FakeReplay)
+    monkeypatch.setattr(harness, "TrackingPipeline", _FakePipeline)
+
+    comparison = harness.compare_reacquire_guard_enforcement(
+        log_path=tmp_path / "tracking_gui.jsonl",
+        calibration_path=tmp_path,
+        patterns=["waist"],
+    )
+
+    assert set(comparison) == {"shadow", "enforced", "phase45_go_no_go"}
+    assert comparison["shadow"]["poses_estimated"] == 1
+    assert comparison["enforced"]["poses_estimated"] == 1
+    assert "decision" in comparison["phase45_go_no_go"]

@@ -20,7 +20,7 @@ from .geo import (
 )
 from .rigid import (
     RigidBodyEstimator, RigidBodyPose, 
-    MarkerPattern, WAIST_PATTERN
+    MarkerPattern, WAIST_PATTERN, ReacquireGuardConfig
 )
 from .metrics import MetricsCollector
 from .logger import FrameLogger
@@ -105,6 +105,8 @@ class TrackingPipeline:
         log_dir: str = "./logs",
         timestamp_tolerance_us: int = FIXED_PAIR_WINDOW_US,
         epipolar_threshold_px: Optional[float] = None,
+        reacquire_guard_config: Optional[ReacquireGuardConfig] = None,
+        reacquire_guard_event_logging: bool = False,
     ):
         """
         Initialize tracking pipeline.
@@ -125,6 +127,7 @@ class TrackingPipeline:
             if epipolar_threshold_px is not None
             else None
         )
+        self.reacquire_guard_event_logging = bool(reacquire_guard_event_logging)
         
         # Initialize components
         self.frame_processor = FrameProcessor(
@@ -133,7 +136,10 @@ class TrackingPipeline:
             frame_index_fallback=False,
         )
         self.geometry = GeometryPipeline()
-        self.rigid_estimator = RigidBodyEstimator(patterns=patterns or [WAIST_PATTERN])
+        self.rigid_estimator = RigidBodyEstimator(
+            patterns=patterns or [WAIST_PATTERN],
+            reacquire_guard_config=reacquire_guard_config or ReacquireGuardConfig(),
+        )
         self.metrics = MetricsCollector()
         
         # Load calibration
@@ -185,6 +191,7 @@ class TrackingPipeline:
         }
         self._last_diagnostics_event_monotonic = 0.0
         self._diagnostics_event_interval_s = 1.0
+        self._reacquire_guard_events: Deque[Dict[str, Any]] = deque(maxlen=2000)
     
     def set_pose_callback(self, callback: Callable[[Dict[str, RigidBodyPose]], None]) -> None:
         """Set callback for estimated poses."""
@@ -351,6 +358,7 @@ class TrackingPipeline:
             else:
                 poses = self.rigid_estimator.process_points(points_array, timestamp)
             self._record_stage("rigid_ms", self._elapsed_ms(stage_started_ns))
+            self._record_reacquire_guard_events(timestamp)
             
             # Update metrics
             stage_started_ns = time.perf_counter_ns()
@@ -424,12 +432,51 @@ class TrackingPipeline:
             "receiver": self.frame_processor.get_stats(),
             "geometry": self._geometry_diagnostics(),
             "tracking": self.rigid_estimator.get_tracking_status(),
+            "reacquire_guard_events": self.get_reacquire_guard_events(limit=20),
             "pipeline_stage_ms": self._stage_diagnostics(),
             "logger": self._logger_diagnostics(),
             "metrics": self.metrics.get_summary(),
             "frames_processed": self.frames_processed,
             "poses_estimated": self.poses_estimated,
         }
+
+    def _record_reacquire_guard_events(self, timestamp: int) -> None:
+        tracking = self.rigid_estimator.get_tracking_status()
+        for rigid_name, status in tracking.items():
+            if not isinstance(status, dict):
+                continue
+            guard = status.get("reacquire_guard")
+            if not isinstance(guard, dict):
+                continue
+            if not (guard.get("evaluated") or guard.get("would_reject")):
+                continue
+            event = {
+                "timestamp": int(timestamp),
+                "rigid_name": str(rigid_name),
+                "mode": str(status.get("mode", "")),
+                "valid": bool(status.get("valid", False)),
+                "would_reject": bool(guard.get("would_reject", False)),
+                "passed": bool(guard.get("passed", True)),
+                "reason": str(guard.get("reason", "")),
+                "reprojection_score": dict(guard.get("score", {})),
+                "position_innovation_m": float(guard.get("position_innovation_m", 0.0)),
+                "rotation_innovation_deg": float(guard.get("rotation_innovation_deg", 0.0)),
+                "enforced": bool(guard.get("enforced", False)),
+                "rejected_count": int(guard.get("rejected_count", 0)),
+            }
+            self._reacquire_guard_events.append(event)
+            if (
+                self.reacquire_guard_event_logging
+                and self.logger is not None
+                and self.logger.is_recording
+            ):
+                self.logger.log_event("reacquire_guard", event)
+
+    def get_reacquire_guard_events(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        events = list(self._reacquire_guard_events)
+        if limit is not None:
+            events = events[-max(0, int(limit)):]
+        return [dict(event) for event in events]
 
     def _maybe_log_diagnostics_event(self) -> None:
         if self.logger is None or not self.logger.is_recording:
@@ -458,6 +505,7 @@ class TrackingPipeline:
             "diagnostics": {
                 "geometry": self._geometry_diagnostics(),
                 "tracking": self.rigid_estimator.get_tracking_status(),
+                "reacquire_guard_events": self.get_reacquire_guard_events(limit=20),
                 "pipeline_stage_ms": self._stage_diagnostics(),
                 "logger": self._logger_diagnostics(),
             },

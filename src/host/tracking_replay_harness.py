@@ -26,6 +26,7 @@ from .rigid import (
     RIGHT_FOOT_PATTERN,
     WAIST_PATTERN,
     MarkerPattern,
+    ReacquireGuardConfig,
 )
 from .pipeline import TrackingPipeline
 
@@ -57,6 +58,9 @@ class TrackingReplaySummary:
     receiver: Dict[str, Any]
     geometry: Dict[str, Any]
     pipeline_stage_ms: Dict[str, Any]
+    reacquire_guard_events: List[Dict[str, Any]]
+    reacquire_guard_summary: Dict[str, Any]
+    phase45_go_no_go: Dict[str, Any]
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -71,6 +75,9 @@ class TrackingReplaySummary:
             "receiver": self.receiver,
             "geometry": self.geometry,
             "pipeline_stage_ms": self.pipeline_stage_ms,
+            "reacquire_guard_events": self.reacquire_guard_events,
+            "reacquire_guard_summary": self.reacquire_guard_summary,
+            "phase45_go_no_go": self.phase45_go_no_go,
         }
 
 
@@ -81,6 +88,9 @@ def replay_tracking_log(
     patterns: Optional[Iterable[str]] = None,
     rigids_path: str | Path | None = None,
     epipolar_threshold_px: Optional[float] = None,
+    reacquire_guard_enforced: bool = False,
+    reacquire_guard_shadow_enabled: bool = True,
+    reacquire_guard_event_logging: bool = False,
 ) -> TrackingReplaySummary:
     """Replay a tracking log through the existing host pipeline path."""
     log_path = Path(log_path)
@@ -93,6 +103,11 @@ def replay_tracking_log(
         patterns=selected_patterns,
         enable_logging=False,
         epipolar_threshold_px=epipolar_threshold_px,
+        reacquire_guard_config=ReacquireGuardConfig(
+            shadow_enabled=bool(reacquire_guard_shadow_enabled),
+            enforced=bool(reacquire_guard_enforced),
+        ),
+        reacquire_guard_event_logging=bool(reacquire_guard_event_logging),
     )
     if not pipeline._calibration_loaded:
         raise RuntimeError(f"calibration could not be loaded: {calibration_path}")
@@ -118,9 +133,16 @@ def replay_tracking_log(
     status = pipeline.get_status()
     diagnostics = status.get("diagnostics", {})
     receiver = status.get("receiver", {})
+    tracking = dict(status.get("tracking", {}))
+    guard_events = (
+        pipeline.get_reacquire_guard_events()
+        if hasattr(pipeline, "get_reacquire_guard_events")
+        else []
+    )
     pair_count = int(
         receiver.get("pairer", {}).get("pairs_emitted", pipeline.frames_processed)
     )
+    guard_summary = _summarize_reacquire_guard(tracking, guard_events)
 
     return TrackingReplaySummary(
         log_path=str(log_path),
@@ -130,11 +152,52 @@ def replay_tracking_log(
         frames_processed=int(status.get("frames_processed", pipeline.frames_processed)),
         poses_estimated=int(status.get("poses_estimated", pipeline.poses_estimated)),
         patterns=[pattern.name for pattern in selected_patterns],
-        tracking=dict(status.get("tracking", {})),
+        tracking=tracking,
         receiver=dict(receiver),
         geometry=dict(diagnostics.get("geometry", {})),
         pipeline_stage_ms=dict(diagnostics.get("pipeline_stage_ms", {})),
+        reacquire_guard_events=guard_events,
+        reacquire_guard_summary=guard_summary,
+        phase45_go_no_go=_single_run_phase45_decision(
+            tracking,
+            guard_summary,
+            enforced=bool(reacquire_guard_enforced),
+        ),
     )
+
+
+def compare_reacquire_guard_enforcement(
+    *,
+    log_path: str | Path,
+    calibration_path: str | Path,
+    patterns: Optional[Iterable[str]] = None,
+    rigids_path: str | Path | None = None,
+    epipolar_threshold_px: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Run shadow and enforced guard replays and compare Phase 4.5 go/no-go."""
+    shadow = replay_tracking_log(
+        log_path=log_path,
+        calibration_path=calibration_path,
+        patterns=patterns,
+        rigids_path=rigids_path,
+        epipolar_threshold_px=epipolar_threshold_px,
+        reacquire_guard_enforced=False,
+        reacquire_guard_shadow_enabled=True,
+    ).to_dict()
+    enforced = replay_tracking_log(
+        log_path=log_path,
+        calibration_path=calibration_path,
+        patterns=patterns,
+        rigids_path=rigids_path,
+        epipolar_threshold_px=epipolar_threshold_px,
+        reacquire_guard_enforced=True,
+        reacquire_guard_shadow_enabled=True,
+    ).to_dict()
+    return {
+        "shadow": shadow,
+        "enforced": enforced,
+        "phase45_go_no_go": _compare_phase45_go_no_go(shadow, enforced),
+    }
 
 
 def _frame_from_log_entry(entry: Any) -> Frame:
@@ -158,6 +221,129 @@ def _frame_from_log_entry(entry: Any) -> Frame:
         capture_to_process_ms=float(data["capture_to_process_ms"]) if data.get("capture_to_process_ms") is not None else None,
         capture_to_send_ms=float(data["capture_to_send_ms"]) if data.get("capture_to_send_ms") is not None else None,
     )
+
+
+def _summarize_reacquire_guard(
+    tracking: Dict[str, Dict[str, Any]],
+    events: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    reason_counts: Dict[str, int] = {}
+    for event in events:
+        reason = str(event.get("reason") or "")
+        for part in reason.split(","):
+            item = part.strip()
+            if not item:
+                continue
+            reason_counts[item] = reason_counts.get(item, 0) + 1
+
+    by_rigid: Dict[str, Dict[str, Any]] = {}
+    for name, status in tracking.items():
+        guard = status.get("reacquire_guard", {}) if isinstance(status, dict) else {}
+        by_rigid[str(name)] = {
+            "enabled": bool(guard.get("enabled", False)),
+            "enforced": bool(guard.get("enforced", False)),
+            "evaluated_count": int(guard.get("evaluated_count", 0)),
+            "would_reject_count": int(guard.get("would_reject_count", 0)),
+            "rejected_count": int(guard.get("rejected_count", 0)),
+        }
+
+    return {
+        "event_count": int(len(events)),
+        "would_reject_event_count": int(sum(1 for event in events if event.get("would_reject"))),
+        "enforced_reject_event_count": int(
+            sum(1 for event in events if event.get("enforced") and event.get("would_reject"))
+        ),
+        "reason_counts": reason_counts,
+        "by_rigid": by_rigid,
+    }
+
+
+def _single_run_phase45_decision(
+    tracking: Dict[str, Dict[str, Any]],
+    guard_summary: Dict[str, Any],
+    *,
+    enforced: bool,
+) -> Dict[str, Any]:
+    would_reject_count = int(guard_summary.get("would_reject_event_count", 0))
+    rejected_count = int(guard_summary.get("enforced_reject_event_count", 0))
+    if not enforced:
+        decision = "pending_enforcement_replay" if would_reject_count else "no_reacquire_reject_signal"
+        return {
+            "decision": decision,
+            "reason": "shadow replay does not change acceptance",
+            "needs_enforcement_replay": bool(would_reject_count),
+            "would_reject_event_count": would_reject_count,
+            "rejected_count": rejected_count,
+        }
+    return {
+        "decision": "needs_shadow_comparison",
+        "reason": "single enforced replay cannot determine go/no-go without shadow baseline",
+        "needs_enforcement_replay": False,
+        "would_reject_event_count": would_reject_count,
+        "rejected_count": rejected_count,
+    }
+
+
+def _tracking_metric(summary: Dict[str, Any], key: str, default: float = 0.0) -> float:
+    tracking = summary.get("tracking", {})
+    if not isinstance(tracking, dict) or not tracking:
+        return float(default)
+    first = next(iter(tracking.values()))
+    if not isinstance(first, dict):
+        return float(default)
+    try:
+        return float(first.get(key, default))
+    except Exception:
+        return float(default)
+
+
+def _compare_phase45_go_no_go(shadow: Dict[str, Any], enforced: Dict[str, Any]) -> Dict[str, Any]:
+    shadow_valid = float(shadow.get("poses_estimated", 0) or 0)
+    enforced_valid = float(enforced.get("poses_estimated", 0) or 0)
+    valid_drop_ratio = (
+        max(0.0, shadow_valid - enforced_valid) / shadow_valid
+        if shadow_valid > 0.0
+        else 0.0
+    )
+    shadow_flip = _tracking_metric(shadow, "max_pose_flip_deg")
+    enforced_flip = _tracking_metric(enforced, "max_pose_flip_deg")
+    shadow_jumps = _tracking_metric(shadow, "pose_jump_count")
+    enforced_jumps = _tracking_metric(enforced, "pose_jump_count")
+    rejected_count = int(
+        enforced.get("reacquire_guard_summary", {})
+        .get("enforced_reject_event_count", 0)
+    )
+    flip_not_worse = enforced_flip <= shadow_flip + 1e-9
+    jumps_not_worse = enforced_jumps <= shadow_jumps + 1e-9
+    valid_ok = valid_drop_ratio <= 0.02
+    go_candidate = bool(valid_ok and flip_not_worse and jumps_not_worse)
+    if not rejected_count:
+        decision = "keep_shadow_only"
+        reason = "enforcement did not reject any candidate in this replay"
+    elif go_candidate:
+        decision = "go_candidate"
+        reason = "enforcement did not worsen replay metrics beyond configured thresholds"
+    else:
+        decision = "no_go_adjust_thresholds"
+        reason = "enforcement worsened valid frames, pose flips, or pose jumps"
+    return {
+        "decision": decision,
+        "reason": reason,
+        "valid_drop_ratio": float(valid_drop_ratio),
+        "valid_drop_frames": int(max(0.0, shadow_valid - enforced_valid)),
+        "shadow_valid_frames": int(shadow_valid),
+        "enforced_valid_frames": int(enforced_valid),
+        "shadow_max_pose_flip_deg": float(shadow_flip),
+        "enforced_max_pose_flip_deg": float(enforced_flip),
+        "shadow_pose_jump_count": int(shadow_jumps),
+        "enforced_pose_jump_count": int(enforced_jumps),
+        "enforced_rejected_count": int(rejected_count),
+        "criteria": {
+            "max_valid_drop_ratio": 0.02,
+            "pose_flip_not_worse": bool(flip_not_worse),
+            "pose_jump_not_worse": bool(jumps_not_worse),
+        },
+    }
 
 
 def _timestamp_to_seconds(value: str) -> float:
@@ -241,16 +427,32 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--rigids", default="calibration/tracking_rigids.json", help="Custom rigid-body JSON path.")
     parser.add_argument("--patterns", default=WAIST_PATTERN.name, help="Comma-separated rigid-body pattern names.")
     parser.add_argument("--epipolar-threshold-px", type=float, default=None)
+    parser.add_argument("--reacquire-guard-enforced", action="store_true", help="Replay with Phase 4.5 guard enforcement enabled.")
+    parser.add_argument("--disable-reacquire-guard-shadow", action="store_true", help="Disable Phase 4.5 shadow guard diagnostics.")
+    parser.add_argument("--reacquire-guard-event-logging", action="store_true", help="Enable live logger guard events during replay.")
+    parser.add_argument("--compare-reacquire-guard-enforcement", action="store_true", help="Run both shadow and enforced Phase 4.5 replays and compare go/no-go.")
     parser.add_argument("--out", default=None, help="Optional summary JSON output path.")
     args = parser.parse_args(argv)
 
-    summary = replay_tracking_log(
-        log_path=args.log,
-        calibration_path=args.calibration,
-        patterns=_parse_pattern_names(args.patterns),
-        rigids_path=args.rigids,
-        epipolar_threshold_px=args.epipolar_threshold_px,
-    ).to_dict()
+    if args.compare_reacquire_guard_enforcement:
+        summary = compare_reacquire_guard_enforcement(
+            log_path=args.log,
+            calibration_path=args.calibration,
+            patterns=_parse_pattern_names(args.patterns),
+            rigids_path=args.rigids,
+            epipolar_threshold_px=args.epipolar_threshold_px,
+        )
+    else:
+        summary = replay_tracking_log(
+            log_path=args.log,
+            calibration_path=args.calibration,
+            patterns=_parse_pattern_names(args.patterns),
+            rigids_path=args.rigids,
+            epipolar_threshold_px=args.epipolar_threshold_px,
+            reacquire_guard_enforced=bool(args.reacquire_guard_enforced),
+            reacquire_guard_shadow_enabled=not bool(args.disable_reacquire_guard_shadow),
+            reacquire_guard_event_logging=bool(args.reacquire_guard_event_logging),
+        ).to_dict()
 
     text = json.dumps(summary, ensure_ascii=False, indent=2)
     if args.out:

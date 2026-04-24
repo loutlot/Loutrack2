@@ -794,3 +794,154 @@ Phase 4.5 の default は shadow mode なので、Phase 4 と同じ `493 / 497` 
 - 現時点の `would_reject_count = 5` は有望だが、どの frame を reject するかの時系列がまだ見えていない。enforcement を本番 default にする前に per-frame guard event が必要。
 - `rejected_count` は enforcement on のときだけ増える。shadow mode では `would_reject_count` を見る。
 - enforcement は当面 `REACQUIRE` mode のみに限定する。`BOOT` や `CONTINUE` に広げるのは、stress log で安定性を確認してから。
+
+## 2026-04-24 - Phase 4.5A-D Guard Replay / Event Logging / Go-No-Go
+
+### 実装結果
+
+- Phase 4.5A-D をまとめて実装した。独立した Phase 4.6 は作らず、Phase 4.5 の完了条件として扱う。
+- `TrackingPipeline` に per-frame `reacquire_guard` event collection を追加した。
+- `reacquire_guard_event_logging=True` のとき、live / replay logger に `event_type = "reacquire_guard"` を出せるようにした。
+- `TrackingPipeline.get_reacquire_guard_events()` を追加し、replay summary が bounded event list を取り出せるようにした。
+- `TrackingReplaySummary` に `reacquire_guard_events`, `reacquire_guard_summary`, `phase45_go_no_go` を追加した。
+- `replay_tracking_log()` に `reacquire_guard_enforced`, `reacquire_guard_shadow_enabled`, `reacquire_guard_event_logging` を追加した。
+- `compare_reacquire_guard_enforcement()` を追加し、同一ログで shadow replay と enforcement replay を連続実行して go/no-go 判定を返せるようにした。
+- CLI に `--reacquire-guard-enforced`, `--disable-reacquire-guard-shadow`, `--reacquire-guard-event-logging`, `--compare-reacquire-guard-enforcement` を追加した。
+- `tests/test_tracking_pipeline_diagnostics.py` に per-frame guard event logging の integration test を追加した。
+- `tests/test_tracking_replay_harness.py` に Phase 4.5 summary と shadow/enforced comparison の test を追加した。
+- `changelog.md` に Phase 4.5 replay / event logging / comparison の進捗を記録した。
+
+### Replay summary contract
+
+通常 replay summary には以下が追加される。
+
+```json
+{
+  "reacquire_guard_events": [],
+  "reacquire_guard_summary": {
+    "event_count": 6,
+    "would_reject_event_count": 5,
+    "enforced_reject_event_count": 0,
+    "reason_counts": {
+      "insufficient_matched_marker_views": 4,
+      "too_many_missing_marker_views": 4,
+      "mean_reprojection_error_too_high": 4,
+      "p95_reprojection_error_too_high": 4,
+      "rotation_innovation_too_high": 3,
+      "duplicate_assignment": 2,
+      "ok": 1
+    }
+  },
+  "phase45_go_no_go": {
+    "decision": "pending_enforcement_replay"
+  }
+}
+```
+
+`--compare-reacquire-guard-enforcement` または `compare_reacquire_guard_enforcement()` では以下の形になる。
+
+```json
+{
+  "shadow": {},
+  "enforced": {},
+  "phase45_go_no_go": {
+    "decision": "no_go_adjust_thresholds",
+    "valid_drop_ratio": 0.02231237322515213,
+    "shadow_valid_frames": 493,
+    "enforced_valid_frames": 482,
+    "shadow_max_pose_flip_deg": 138.43282502436344,
+    "enforced_max_pose_flip_deg": 132.52457336011963
+  }
+}
+```
+
+### 検証
+
+OpenCV が入っている Python 3.13 の一時 venv で検証した。
+
+```bash
+/tmp/loutrack-py313-test/bin/python -m pytest \
+  tests/test_rigid_reprojection_scoring.py \
+  tests/test_rigid_body_tracker_stats.py \
+  tests/test_pattern_evaluator.py \
+  tests/test_geo_blob_assignment.py \
+  tests/test_tracking_pipeline_diagnostics.py \
+  tests/test_tracking_replay_harness.py
+```
+
+結果: `34 passed`
+
+実ログで shadow / enforcement 比較も実行した。
+
+```bash
+/tmp/loutrack-py313-test/bin/python - <<'PY'
+from src.host.tracking_replay_harness import compare_reacquire_guard_enforcement
+comparison = compare_reacquire_guard_enforcement(
+    log_path='logs/tracking_gui.jsonl',
+    calibration_path='calibration',
+    patterns=['waist'],
+    rigids_path='calibration/tracking_rigids.json',
+)
+print(comparison['phase45_go_no_go'])
+PY
+```
+
+Shadow replay:
+
+- frames processed: `497`
+- valid poses: `493`
+- reacquire count: `3`
+- max pose flip candidate: `138.43282502436344 deg`
+- pose jump count: `0`
+- guard event count: `6`
+- guard would reject event count: `5`
+- enforced reject event count: `0`
+
+Enforcement replay:
+
+- frames processed: `497`
+- valid poses: `482`
+- reacquire count: `3`
+- max pose flip candidate: `132.52457336011963 deg`
+- pose jump count: `0`
+- guard event count: `11`
+- guard would reject event count: `11`
+- enforced reject event count: `11`
+
+Go / no-go:
+
+- decision: `no_go_adjust_thresholds`
+- valid drop frames: `11`
+- valid drop ratio: `0.02231237322515213`
+- max valid drop criterion: `0.02`
+- pose flip not worse: `true`
+- pose jump not worse: `true`
+
+### 読み取り
+
+Enforcement は max pose flip candidate を `138.43 deg` から `132.52 deg` へ少し改善した。一方、valid poses が `493` から `482` に落ち、低下率が `2.23%` になった。設定した暫定基準 `2%` を少し超えるため、現閾値のまま runtime default にするのはまだ早い。
+
+ただし、guard が全く効いていないわけではない。shadow では `6` 件評価中 `5` 件が `would_reject`、enforcement では `11` 件 reject しており、reacquire 中の怪しい candidate を検出する力はある。次は落としすぎを避けるために、reason ごとの閾値調整が必要。
+
+特に enforcement replay では `rotation_innovation_too_high` が `10` 件、`mean_reprojection_error_too_high` が `7` 件出ている。現 pattern は Phase 1 で自己対称性が強いと分かっているので、rotation innovation の単独 hard reject は少し強すぎる可能性がある。
+
+### 次に期待すること
+
+- 次は Phase 4.5 の閾値調整を小さく行う。新しい phase は作らず、Phase 4.5 の tuning として扱う。
+- まず `rotation_innovation_too_high` を hard reject から warning / penalty に弱めるか、閾値を `120 deg` から `150-170 deg` へ緩める候補を replay 比較する。
+- `matched_marker_views >= 6` と `missing_marker_views <= 2` は維持する。ここを緩めすぎると 2D score guard の意味が薄れる。
+- `mean_error_px <= 4.0`, `p95_error_px <= 8.0` は、per-frame event を見て `5-6 px` / `10-12 px` 程度までの緩和候補を比較する。
+- Go 条件は当面 `valid_drop_ratio <= 2%`, `pose_flip_deg not worse`, `pose_jump_count not worse` のままにする。
+- 閾値調整後も go 判定が出ない場合、guard enforcement は default off / shadow-only のまま Phase 5 に進む。
+
+### 次フェーズの実装可否
+
+Phase 5 の実装には進める。ただし、Phase 4.5 enforcement を default on にする判断はまだ保留。
+
+現状のおすすめ:
+
+- Phase 4.5 guard は shadow/event logging を残す。
+- Runtime default は shadow-only。
+- Phase 5 に入る前に、1 回だけ threshold tuning replay を試す。
+- tuning で `valid_drop_ratio <= 2%` に収まれば enforcement candidate として残す。
+- 収まらなければ enforcement は off のまま、Phase 5 の object-conditioned gating で改善を狙う。

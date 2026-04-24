@@ -194,6 +194,95 @@ def test_tracking_pipeline_reports_stage_and_logger_diagnostics(tmp_path: Path) 
     assert diagnostics_events[-1]["data"]["tracking"] == {"ok": True}
 
 
+def test_tracking_pipeline_logs_reacquire_guard_events(tmp_path: Path) -> None:
+    pipeline = TrackingPipeline(
+        enable_logging=True,
+        log_dir=str(tmp_path),
+        reacquire_guard_event_logging=True,
+    )
+    pipeline._running = True
+    pipeline._calibration_loaded = True
+    assert pipeline.logger is not None
+    log_path = Path(pipeline.logger.start_recording(session_name="guard_events"))
+
+    class _Geometry:
+        camera_params = {}
+
+        def process_paired_frames(self, _paired_frames, *, min_inlier_views=2):
+            _ = min_inlier_views
+            return {
+                "points_3d": [np.array([1.0, 2.0, 3.0])],
+                "reprojection_errors": [0.25],
+                "assignment_diagnostics": {"assignment_matches": 1},
+                "triangulation_quality": _triangulation_quality(),
+            }
+
+        def get_diagnostics(self):
+            return {"quality": _triangulation_quality()}
+
+    class _Rigid:
+        def process_points(self, _points, timestamp):
+            return {
+                "waist": RigidBodyPose(
+                    timestamp=timestamp,
+                    position=np.array([1.0, 2.0, 3.0]),
+                    rotation=np.eye(3),
+                    quaternion=np.array([1.0, 0.0, 0.0, 0.0]),
+                    valid=True,
+                )
+            }
+
+        def get_tracking_status(self):
+            return {
+                "waist": {
+                    "valid": True,
+                    "mode": "reacquire",
+                    "reacquire_guard": {
+                        "evaluated": True,
+                        "would_reject": True,
+                        "passed": False,
+                        "reason": "mean_reprojection_error_too_high",
+                        "score": {"mean_error_px": 9.0},
+                        "position_innovation_m": 0.01,
+                        "rotation_innovation_deg": 2.0,
+                        "enforced": False,
+                        "rejected_count": 0,
+                    },
+                }
+            }
+
+    pipeline.geometry = _Geometry()  # type: ignore[assignment]
+    pipeline.rigid_estimator = _Rigid()  # type: ignore[assignment]
+
+    now = time.time()
+    pair = PairedFrames(
+        timestamp=1_000_000,
+        frames={
+            "pi-cam-01": _frame("pi-cam-01", 1_000_000, now),
+            "pi-cam-02": _frame("pi-cam-02", 1_000_100, now + 0.001),
+        },
+        timestamp_range_us=100,
+    )
+    pipeline._on_paired_frames(pair)
+    metadata = pipeline.logger.stop_recording()
+    pipeline._running = False
+
+    assert metadata["total_frames"] == 2
+    guard_events = pipeline.get_reacquire_guard_events()
+    assert len(guard_events) == 1
+    assert guard_events[0]["would_reject"] is True
+
+    events = [
+        json.loads(line)
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert any(
+        entry.get("_type") == "event" and entry.get("event_type") == "reacquire_guard"
+        for entry in events
+    )
+
+
 def test_tracking_pipeline_uses_half_frame_timestamp_pairing_window() -> None:
     pipeline = TrackingPipeline(enable_logging=False)
 

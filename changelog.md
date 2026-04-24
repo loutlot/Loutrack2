@@ -1,3 +1,5 @@
+- Phase 4.5 rigid stabilization replay now records per-frame reacquire guard events and compares shadow versus enforced guard outcomes before Phase 5
+- rigid body stabilization planning now folds Phase 5 prerequisites into Phase 4.5 sub-steps instead of adding a separate Phase 4.6
 - Phase 4.5 rigid stabilization now adds shadow-first reacquire candidate guard diagnostics with optional enforcement hooks
 - rigid body stabilization planning now includes Phase 4.5 shadow-first reacquire candidate guard before object-conditioned gating
 - Phase 4 rigid stabilization now adds 2D reprojection scoring diagnostics from observation provenance while preserving existing pose acceptance
