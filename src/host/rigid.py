@@ -13,7 +13,7 @@ from typing import Optional, Dict, Any, List, Tuple
 from dataclasses import dataclass, field
 from collections import deque
 from enum import Enum
-from itertools import permutations
+from itertools import combinations, permutations
 from scipy.optimize import linear_sum_assignment
 from scipy.spatial.transform import Rotation
 from scipy.spatial.distance import cdist
@@ -255,6 +255,50 @@ class ObjectGatingConfig:
         }
 
 
+@dataclass(frozen=True)
+class SubsetSolveConfig:
+    """Phase 6 subset hypothesis diagnostics and weighted rigid solve settings."""
+
+    enabled: bool = True
+    diagnostics_only: bool = True
+    subset_sizes: Tuple[int, ...] = (3, 4)
+    max_observed_points: int = 10
+    max_hypotheses: int = 4096
+    max_generic_observed_subsets: int = 24
+    min_score: float = 0.65
+    max_p95_error_px: float = 8.0
+    min_margin: float = 0.02
+    ambiguous_subset_delta_m: float = 0.005
+    prediction_gate_m: float = 0.08
+    max_rotation_delta_deg: float = 90.0
+    source_priority_bonus: float = 0.04
+    coverage_weight: float = 0.08
+    temporal_penalty_weight: float = 0.18
+    flip_penalty: float = 0.25
+    adoption_min_valid_ratio: float = 0.98
+
+    def thresholds_dict(self) -> Dict[str, Any]:
+        return {
+            "enabled": bool(self.enabled),
+            "diagnostics_only": bool(self.diagnostics_only),
+            "subset_sizes": [int(value) for value in self.subset_sizes],
+            "max_observed_points": int(self.max_observed_points),
+            "max_hypotheses": int(self.max_hypotheses),
+            "max_generic_observed_subsets": int(self.max_generic_observed_subsets),
+            "min_score": float(self.min_score),
+            "max_p95_error_px": float(self.max_p95_error_px),
+            "min_margin": float(self.min_margin),
+            "ambiguous_subset_delta_m": float(self.ambiguous_subset_delta_m),
+            "prediction_gate_m": float(self.prediction_gate_m),
+            "max_rotation_delta_deg": float(self.max_rotation_delta_deg),
+            "source_priority_bonus": float(self.source_priority_bonus),
+            "coverage_weight": float(self.coverage_weight),
+            "temporal_penalty_weight": float(self.temporal_penalty_weight),
+            "flip_penalty": float(self.flip_penalty),
+            "adoption_min_valid_ratio": float(self.adoption_min_valid_ratio),
+        }
+
+
 def _empty_reprojection_score(reason: str = "not_scored") -> Dict[str, Any]:
     return {
         "scored": False,
@@ -327,6 +371,39 @@ def _empty_rigid_hint_pose(reason: str = "not_evaluated") -> Dict[str, Any]:
         "position_delta_m": 0.0,
         "rotation_delta_deg": 0.0,
         "marker_indices": [],
+    }
+
+
+def _empty_subset_hypothesis(
+    reason: str = "not_evaluated",
+    thresholds: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    return {
+        "evaluated": False,
+        "reason": str(reason),
+        "diagnostics_only": True,
+        "enabled": True,
+        "thresholds": dict(thresholds or {}),
+        "candidate_count": 0,
+        "pruned_candidate_count": 0,
+        "valid_candidate_count": 0,
+        "rejected_by_ambiguity": 0,
+        "rejected_by_2d_score": 0,
+        "rejected_by_rms": 0,
+        "flip_risk_count": 0,
+        "truncated": False,
+        "best": {},
+        "second": {},
+        "best_score": 0.0,
+        "second_score": 0.0,
+        "best_combined_score": 0.0,
+        "second_combined_score": 0.0,
+        "margin": 0.0,
+        "combined_margin": 0.0,
+        "generic_score": 0.0,
+        "score_delta": 0.0,
+        "subset_adoption_ready": False,
+        "weighted_solve": {},
     }
 
 
@@ -630,6 +707,47 @@ class KabschEstimator:
         rms_error = np.sqrt(np.mean(errors ** 2))
         
         return R, t, rms_error
+
+    @staticmethod
+    def estimate_weighted(
+        observed_points: np.ndarray,
+        reference_points: np.ndarray,
+        weights: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray, float]:
+        """
+        Weighted Kabsch alignment with the same observed->reference convention.
+        """
+        if len(observed_points) != len(reference_points):
+            raise ValueError("Point counts must match")
+        if len(observed_points) != len(weights):
+            raise ValueError("Weight count must match point count")
+        if len(observed_points) < 3:
+            raise ValueError("Need at least 3 points")
+
+        observed = np.asarray(observed_points, dtype=np.float64)
+        reference = np.asarray(reference_points, dtype=np.float64)
+        weight_arr = np.asarray(weights, dtype=np.float64).reshape(-1)
+        weight_arr = np.maximum(weight_arr, 1e-9)
+        weight_sum = float(np.sum(weight_arr))
+        norm_weights = weight_arr / weight_sum
+
+        obs_centroid = np.sum(observed * norm_weights[:, None], axis=0)
+        ref_centroid = np.sum(reference * norm_weights[:, None], axis=0)
+        obs_centered = observed - obs_centroid
+        ref_centered = reference - ref_centroid
+        H = obs_centered.T @ (ref_centered * norm_weights[:, None])
+
+        U, _, Vt = np.linalg.svd(H)
+        R = Vt.T @ U.T
+        if np.linalg.det(R) < 0:
+            Vt[-1, :] *= -1
+            R = Vt.T @ U.T
+        t = ref_centroid - R @ obs_centroid
+
+        transformed = (R @ observed.T).T + t
+        errors = np.linalg.norm(transformed - reference, axis=1)
+        rms_error = float(np.sqrt(np.sum(norm_weights * (errors ** 2))))
+        return R, t, rms_error
     
     @staticmethod
     def find_correspondence(
@@ -841,6 +959,7 @@ class RigidBodyTracker:
         self._last_reprojection_score: Dict[str, Any] = _empty_reprojection_score()
         self._last_object_gating: Dict[str, Any] = _empty_object_gating()
         self._last_rigid_hint_pose: Dict[str, Any] = _empty_rigid_hint_pose()
+        self._last_subset_hypothesis: Dict[str, Any] = _empty_subset_hypothesis()
         self._reacquire_guard_evaluated_count = 0
         self._reacquire_guard_would_reject_count = 0
         self._reacquire_guard_rejected_count = 0
@@ -991,6 +1110,11 @@ class RigidBodyTracker:
         with self._lock:
             self._last_rigid_hint_pose = dict(diagnostic or _empty_rigid_hint_pose())
 
+    def record_subset_hypothesis(self, diagnostic: Dict[str, Any]) -> None:
+        """Attach latest Phase 6 subset hypothesis diagnostics."""
+        with self._lock:
+            self._last_subset_hypothesis = dict(diagnostic or _empty_subset_hypothesis())
+
     @property
     def mode(self) -> TrackMode:
         """Return the current lifecycle mode."""
@@ -1043,6 +1167,7 @@ class RigidBodyTracker:
             "reprojection_score": dict(self._last_reprojection_score),
             "object_gating": dict(self._last_object_gating),
             "rigid_hint_pose": dict(self._last_rigid_hint_pose),
+            "subset_hypothesis": dict(self._last_subset_hypothesis),
             "reacquire_guard": dict(self._last_reacquire_guard),
             "rms_error_m": latest_rms,
             "observed_markers": latest_observed,
@@ -1208,6 +1333,7 @@ class RigidBodyEstimator:
         reprojection_match_gate_px: float = 12.0,
         reacquire_guard_config: ReacquireGuardConfig = ReacquireGuardConfig(),
         object_gating_config: ObjectGatingConfig = ObjectGatingConfig(),
+        subset_solve_config: SubsetSolveConfig = SubsetSolveConfig(),
     ):
         """
         Initialize estimator.
@@ -1229,6 +1355,7 @@ class RigidBodyEstimator:
         self.reprojection_match_gate_px = float(reprojection_match_gate_px)
         self.reacquire_guard_config = reacquire_guard_config
         self.object_gating_config = object_gating_config
+        self.subset_solve_config = subset_solve_config
         
         self.clusterer = PointClusterer(
             marker_diameter=marker_diameter,
@@ -1571,6 +1698,12 @@ class RigidBodyEstimator:
             for tracker in self.trackers.values():
                 tracker.record_reprojection_score(_empty_reprojection_score("no_3d_points"))
                 tracker.record_rigid_hint_pose(_empty_rigid_hint_pose("no_rigid_hint_points"))
+                tracker.record_subset_hypothesis(
+                    _empty_subset_hypothesis(
+                        "no_3d_points",
+                        self.subset_solve_config.thresholds_dict(),
+                    )
+                )
             return {
                 name: tracker.predict()
                 for name, tracker in self.trackers.items()
@@ -1633,9 +1766,21 @@ class RigidBodyEstimator:
                     generic_pose=best_pose,
                     generic_score=score,
                 )
+                subset_diagnostic = self._evaluate_subset_hypotheses(
+                    pattern,
+                    timestamp,
+                    points_3d,
+                    rigid_hint_triangulated_points,
+                    camera_params,
+                    observations_by_camera,
+                    coordinate_space=coordinate_space,
+                    generic_pose=best_pose,
+                    generic_score=score,
+                )
                 guard = self._evaluate_reacquire_guard(tracker, best_pose, score)
                 tracker.record_reprojection_score(score)
                 tracker.record_rigid_hint_pose(hint_diagnostic)
+                tracker.record_subset_hypothesis(subset_diagnostic)
                 tracker.record_reacquire_guard(guard)
                 if guard.get("enforced") and guard.get("would_reject"):
                     rejected_pose = self._invalid_pose(timestamp)
@@ -1659,6 +1804,19 @@ class RigidBodyEstimator:
                     self._evaluate_rigid_hint_pose(
                         pattern,
                         timestamp,
+                        rigid_hint_triangulated_points,
+                        camera_params,
+                        observations_by_camera,
+                        coordinate_space=coordinate_space,
+                        generic_pose=None,
+                        generic_score=score,
+                    )
+                )
+                tracker.record_subset_hypothesis(
+                    self._evaluate_subset_hypotheses(
+                        pattern,
+                        timestamp,
+                        points_3d,
                         rigid_hint_triangulated_points,
                         camera_params,
                         observations_by_camera,
@@ -1838,6 +1996,506 @@ class RigidBodyEstimator:
             "rotation_delta_deg": rotation_delta_deg,
             "marker_indices": [int(index) for index in marker_indices],
             "invalid_points": int(invalid_points),
+        }
+
+    def _evaluate_subset_hypotheses(
+        self,
+        pattern: MarkerPattern,
+        timestamp: int,
+        points_3d: np.ndarray,
+        rigid_hint_triangulated_points: Optional[List[Dict[str, Any]]],
+        camera_params: Optional[Dict[str, Any]],
+        observations_by_camera: Optional[Dict[str, List[Any]]],
+        *,
+        coordinate_space: str,
+        generic_pose: Optional[RigidBodyPose],
+        generic_score: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        config = self.subset_solve_config
+        thresholds = config.thresholds_dict()
+        if not config.enabled:
+            diagnostic = _empty_subset_hypothesis("disabled", thresholds)
+            diagnostic["enabled"] = False
+            return diagnostic
+
+        generic_points = np.asarray(points_3d, dtype=np.float64).reshape(-1, 3)
+        candidates: List[Dict[str, Any]] = []
+        candidate_count = 0
+        pruned_candidate_count = 0
+        rejected_by_ambiguity = 0
+        rejected_by_2d = 0
+        rejected_by_rms = 0
+        flip_risk_count = 0
+        truncated = False
+
+        def add_candidate(
+            *,
+            source: str,
+            observed: np.ndarray,
+            marker_indices: Tuple[int, ...],
+            weights: np.ndarray,
+            observed_indices: Optional[Tuple[int, ...]] = None,
+        ) -> bool:
+            nonlocal candidate_count
+            nonlocal pruned_candidate_count
+            nonlocal rejected_by_ambiguity
+            nonlocal rejected_by_2d
+            nonlocal rejected_by_rms
+            nonlocal flip_risk_count
+            nonlocal truncated
+
+            if candidate_count >= config.max_hypotheses:
+                truncated = True
+                return False
+            if self._subset_candidate_pruned(
+                source=source,
+                pattern=pattern,
+                observed=observed,
+                marker_indices=marker_indices,
+                generic_pose=generic_pose,
+            ):
+                pruned_candidate_count += 1
+                return True
+            candidate_count += 1
+            candidate = self._build_subset_candidate(
+                pattern,
+                timestamp,
+                source=source,
+                observed=observed,
+                marker_indices=marker_indices,
+                weights=weights,
+                camera_params=camera_params,
+                observations_by_camera=observations_by_camera,
+                coordinate_space=coordinate_space,
+                generic_pose=generic_pose,
+                generic_score=generic_score,
+                observed_indices=observed_indices,
+            )
+            if candidate.get("ambiguous"):
+                rejected_by_ambiguity += 1
+            if candidate.get("rejected_by_2d_score"):
+                rejected_by_2d += 1
+            if candidate.get("rejected_by_rms"):
+                rejected_by_rms += 1
+            if candidate.get("flip_risk"):
+                flip_risk_count += 1
+            if candidate.get("rankable"):
+                candidates.append(candidate)
+            return True
+
+        hint_markers = self._rigid_hint_markers_by_index(pattern, rigid_hint_triangulated_points)
+        hint_indices = sorted(hint_markers)
+        for subset_size in config.subset_sizes:
+            size = int(subset_size)
+            if size < 3 or size > pattern.num_markers or size > len(hint_indices):
+                continue
+            for marker_subset in combinations(hint_indices, size):
+                observed = np.asarray(
+                    [hint_markers[index]["point"] for index in marker_subset],
+                    dtype=np.float64,
+                )
+                weights = np.asarray(
+                    [hint_markers[index]["weight"] for index in marker_subset],
+                    dtype=np.float64,
+                )
+                if not add_candidate(
+                    source="rigid_hint_subset",
+                    observed=observed,
+                    marker_indices=tuple(int(index) for index in marker_subset),
+                    weights=weights,
+                ):
+                    break
+
+        if 3 <= len(generic_points) <= config.max_observed_points:
+            observed_subsets = self._prioritized_generic_observed_subsets(
+                generic_points,
+                pattern,
+                generic_pose,
+            )
+            marker_range = tuple(range(pattern.num_markers))
+            for observed_subset in observed_subsets:
+                size = len(observed_subset)
+                if size not in {int(value) for value in config.subset_sizes}:
+                    continue
+                if size < 3 or size > pattern.num_markers:
+                    continue
+                observed = generic_points[list(observed_subset)]
+                for marker_subset in combinations(marker_range, size):
+                    for marker_order in permutations(marker_subset):
+                        weights = np.ones(size, dtype=np.float64)
+                        if not add_candidate(
+                            source="generic_subset",
+                            observed=observed,
+                            marker_indices=tuple(int(index) for index in marker_order),
+                            weights=weights,
+                            observed_indices=tuple(int(index) for index in observed_subset),
+                        ):
+                            break
+                    if truncated:
+                        break
+                if truncated:
+                    break
+
+        if candidate_count <= 0:
+            return _empty_subset_hypothesis("no_subset_candidates", thresholds)
+
+        ranked = sorted(
+            candidates,
+            key=lambda item: (
+                float(item.get("combined_score", 0.0)),
+                float(item.get("score", 0.0)),
+                int(item.get("matched_marker_views", 0)),
+                -float(item.get("p95_error_px", 0.0)),
+                -float(item.get("rms_error_m", 0.0)),
+            ),
+            reverse=True,
+        )
+        best = ranked[0] if ranked else {}
+        second = ranked[1] if len(ranked) > 1 else {}
+        best_score = float(best.get("score", 0.0)) if best else 0.0
+        second_score = float(second.get("score", 0.0)) if second else 0.0
+        best_combined_score = float(best.get("combined_score", 0.0)) if best else 0.0
+        second_combined_score = float(second.get("combined_score", 0.0)) if second else 0.0
+        margin = float(best_score - second_score) if best else 0.0
+        combined_margin = float(best_combined_score - second_combined_score) if best else 0.0
+        generic_score_value = float((generic_score or {}).get("score", 0.0))
+        weighted_solve = self._subset_weighted_solve_summary(best)
+        subset_adoption_ready = bool(
+            best
+            and best.get("valid")
+            and not best.get("flip_risk")
+            and combined_margin >= config.min_margin
+            and best_score >= max(config.min_score, generic_score_value)
+            and int(best.get("observed_markers", 0)) >= max(3, pattern.num_markers - 1)
+        )
+        return {
+            "evaluated": True,
+            "reason": "ok" if ranked else "no_rankable_candidates",
+            "diagnostics_only": bool(config.diagnostics_only),
+            "enabled": True,
+            "thresholds": thresholds,
+            "candidate_count": int(candidate_count),
+            "pruned_candidate_count": int(pruned_candidate_count),
+            "valid_candidate_count": int(len(ranked)),
+            "rejected_by_ambiguity": int(rejected_by_ambiguity),
+            "rejected_by_2d_score": int(rejected_by_2d),
+            "rejected_by_rms": int(rejected_by_rms),
+            "flip_risk_count": int(flip_risk_count),
+            "truncated": bool(truncated),
+            "best": self._subset_candidate_public(best),
+            "second": self._subset_candidate_public(second),
+            "best_score": best_score,
+            "second_score": second_score,
+            "best_combined_score": best_combined_score,
+            "second_combined_score": second_combined_score,
+            "margin": margin,
+            "combined_margin": combined_margin,
+            "generic_score": generic_score_value,
+            "score_delta": float(best_score - generic_score_value),
+            "subset_adoption_ready": subset_adoption_ready,
+            "weighted_solve": weighted_solve,
+        }
+
+    def _build_subset_candidate(
+        self,
+        pattern: MarkerPattern,
+        timestamp: int,
+        *,
+        source: str,
+        observed: np.ndarray,
+        marker_indices: Tuple[int, ...],
+        weights: np.ndarray,
+        camera_params: Optional[Dict[str, Any]],
+        observations_by_camera: Optional[Dict[str, List[Any]]],
+        coordinate_space: str,
+        generic_pose: Optional[RigidBodyPose],
+        generic_score: Dict[str, Any],
+        observed_indices: Optional[Tuple[int, ...]] = None,
+    ) -> Dict[str, Any]:
+        reference = np.asarray(
+            [pattern.marker_positions[index] for index in marker_indices],
+            dtype=np.float64,
+        )
+        ambiguous = self._subset_is_ambiguous(pattern, tuple(sorted(marker_indices)))
+        try:
+            rotation, position, rms_error = KabschEstimator.estimate_weighted(
+                reference,
+                observed,
+                weights,
+            )
+            quat_xyzw = Rotation.from_matrix(rotation).as_quat()
+            quaternion = np.array(
+                [quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]],
+                dtype=np.float64,
+            )
+            pose = RigidBodyPose(
+                timestamp=timestamp,
+                position=position,
+                rotation=rotation,
+                quaternion=quaternion,
+                rms_error=float(rms_error),
+                observed_markers=int(len(marker_indices)),
+                valid=bool(float(rms_error) <= self.max_rms_error_m),
+            )
+        except Exception:
+            return {
+                "source": source,
+                "valid": False,
+                "rankable": False,
+                "rejected_by_rms": True,
+                "rejected_by_2d_score": True,
+                "ambiguous": bool(ambiguous),
+                "flip_risk": False,
+                "marker_indices": [int(index) for index in marker_indices],
+                "observed_indices": [int(index) for index in observed_indices or ()],
+                "score": 0.0,
+                "rms_error_m": float("inf"),
+            }
+
+        score = self._score_pose_reprojection(
+            pose,
+            pattern,
+            camera_params,
+            observations_by_camera,
+            coordinate_space=coordinate_space,
+        )
+        score_value = float(score.get("score", 0.0))
+        p95_error = float(score.get("p95_error_px", 0.0))
+        rejected_by_rms = not pose.valid
+        rejected_by_2d = (
+            not score.get("scored", False)
+            or score_value < self.subset_solve_config.min_score
+            or p95_error > self.subset_solve_config.max_p95_error_px
+        )
+        rotation_delta_deg = (
+            _quaternion_angle_deg(generic_pose.quaternion, pose.quaternion)
+            if generic_pose is not None and generic_pose.valid and pose.valid
+            else 0.0
+        )
+        position_delta_m = (
+            float(np.linalg.norm(pose.position - generic_pose.position))
+            if generic_pose is not None and generic_pose.valid and pose.valid
+            else 0.0
+        )
+        flip_risk = bool(
+            generic_pose is not None
+            and generic_pose.valid
+            and pose.valid
+            and rotation_delta_deg > self.subset_solve_config.max_rotation_delta_deg
+        )
+        rankable = bool(
+            pose.valid
+            and score.get("scored", False)
+            and not rejected_by_2d
+            and not ambiguous
+        )
+        coverage = float(len(marker_indices) / max(1, pattern.num_markers))
+        temporal_penalty = min(
+            1.0,
+            (position_delta_m / max(1e-6, self.subset_solve_config.prediction_gate_m))
+            + (rotation_delta_deg / max(1e-6, self.subset_solve_config.max_rotation_delta_deg)),
+        )
+        source_bonus = (
+            self.subset_solve_config.source_priority_bonus
+            if source == "rigid_hint_subset"
+            else 0.0
+        )
+        combined_score = float(
+            np.clip(
+                score_value
+                + self.subset_solve_config.coverage_weight * coverage
+                + source_bonus
+                - self.subset_solve_config.temporal_penalty_weight * temporal_penalty
+                - (self.subset_solve_config.flip_penalty if flip_risk else 0.0),
+                0.0,
+                1.5,
+            )
+        )
+        return {
+            "source": source,
+            "valid": bool(pose.valid),
+            "rankable": rankable,
+            "ambiguous": bool(ambiguous),
+            "rejected_by_rms": bool(rejected_by_rms),
+            "rejected_by_2d_score": bool(rejected_by_2d),
+            "flip_risk": flip_risk,
+            "marker_indices": [int(index) for index in marker_indices],
+            "observed_indices": [int(index) for index in observed_indices or ()],
+            "observed_markers": int(len(marker_indices)),
+            "rms_error_m": float(pose.rms_error),
+            "score": score_value,
+            "combined_score": combined_score,
+            "coverage": coverage,
+            "temporal_penalty": temporal_penalty,
+            "source_bonus": float(source_bonus),
+            "score_detail": dict(score),
+            "generic_score": float((generic_score or {}).get("score", 0.0)),
+            "score_delta": float(score_value - float((generic_score or {}).get("score", 0.0))),
+            "mean_error_px": float(score.get("mean_error_px", 0.0)),
+            "p95_error_px": p95_error,
+            "matched_marker_views": int(score.get("matched_marker_views", 0)),
+            "position_delta_m": position_delta_m,
+            "rotation_delta_deg": rotation_delta_deg,
+            "weights": [float(value) for value in np.asarray(weights, dtype=np.float64).reshape(-1)],
+        }
+
+    def _rigid_hint_markers_by_index(
+        self,
+        pattern: MarkerPattern,
+        rigid_hint_triangulated_points: Optional[List[Dict[str, Any]]],
+    ) -> Dict[int, Dict[str, Any]]:
+        by_marker: Dict[int, Dict[str, Any]] = {}
+        for payload in rigid_hint_triangulated_points or []:
+            if not isinstance(payload, dict):
+                continue
+            if str(payload.get("rigid_name", pattern.name)) != pattern.name:
+                continue
+            if bool(payload.get("is_virtual", False)):
+                continue
+            try:
+                marker_idx = int(payload["marker_idx"])
+                point = np.asarray(payload["point"], dtype=np.float64).reshape(3)
+            except (KeyError, TypeError, ValueError):
+                continue
+            if marker_idx < 0 or marker_idx >= pattern.num_markers or not np.isfinite(point).all():
+                continue
+            errors = payload.get("reprojection_errors_px", [])
+            mean_error = (
+                float(np.mean(np.asarray(errors, dtype=np.float64)))
+                if isinstance(errors, list) and errors
+                else 0.0
+            )
+            contributing_rays = int(payload.get("contributing_rays", 0))
+            weight = max(0.1, float(contributing_rays)) / (1.0 + mean_error)
+            previous = by_marker.get(marker_idx)
+            previous_weight = float(previous.get("weight", -1.0)) if previous else -1.0
+            if previous is None or weight > previous_weight:
+                by_marker[marker_idx] = {
+                    "point": point,
+                    "weight": float(weight),
+                }
+        return by_marker
+
+    def _subset_candidate_pruned(
+        self,
+        *,
+        source: str,
+        pattern: MarkerPattern,
+        observed: np.ndarray,
+        marker_indices: Tuple[int, ...],
+        generic_pose: Optional[RigidBodyPose],
+    ) -> bool:
+        if source == "rigid_hint_subset":
+            return False
+        if generic_pose is None or not generic_pose.valid:
+            return False
+        predicted = (
+            generic_pose.rotation @ np.asarray(
+                [pattern.marker_positions[index] for index in marker_indices],
+                dtype=np.float64,
+            ).T
+        ).T + generic_pose.position.reshape(1, 3)
+        residuals = np.linalg.norm(np.asarray(observed, dtype=np.float64) - predicted, axis=1)
+        return bool(float(np.mean(residuals)) > self.subset_solve_config.prediction_gate_m)
+
+    def _prioritized_generic_observed_subsets(
+        self,
+        generic_points: np.ndarray,
+        pattern: MarkerPattern,
+        generic_pose: Optional[RigidBodyPose],
+    ) -> List[Tuple[int, ...]]:
+        all_subsets: List[Tuple[float, Tuple[int, ...]]] = []
+        sizes = {int(size) for size in self.subset_solve_config.subset_sizes}
+        point_indices = tuple(range(len(generic_points)))
+        predicted_markers = None
+        if generic_pose is not None and generic_pose.valid:
+            predicted_markers = (
+                generic_pose.rotation @ pattern.marker_positions.T
+            ).T + generic_pose.position.reshape(1, 3)
+        for size in sorted(sizes, reverse=True):
+            if size < 3 or size > len(generic_points) or size > pattern.num_markers:
+                continue
+            for subset in combinations(point_indices, size):
+                points = generic_points[list(subset)]
+                if predicted_markers is None:
+                    priority = 0.0
+                else:
+                    distances = [
+                        float(np.min(np.linalg.norm(predicted_markers - point.reshape(1, 3), axis=1)))
+                        for point in points
+                    ]
+                    priority = float(np.mean(distances))
+                    if priority > self.subset_solve_config.prediction_gate_m:
+                        continue
+                all_subsets.append((priority, tuple(int(index) for index in subset)))
+        all_subsets.sort(key=lambda item: (item[0], -len(item[1]), item[1]))
+        limit = max(1, int(self.subset_solve_config.max_generic_observed_subsets))
+        return [subset for _, subset in all_subsets[:limit]]
+
+    def _subset_is_ambiguous(
+        self,
+        pattern: MarkerPattern,
+        marker_indices: Tuple[int, ...],
+    ) -> bool:
+        if len(marker_indices) >= pattern.num_markers:
+            return False
+        reference = pattern.marker_positions
+        profile = self._subset_distance_profile(reference[list(marker_indices)])
+        for other in combinations(range(pattern.num_markers), len(marker_indices)):
+            if tuple(other) == tuple(marker_indices):
+                continue
+            other_profile = self._subset_distance_profile(reference[list(other)])
+            if len(profile) != len(other_profile):
+                continue
+            delta = float(np.linalg.norm(profile - other_profile))
+            if delta <= self.subset_solve_config.ambiguous_subset_delta_m:
+                return True
+        return False
+
+    @staticmethod
+    def _subset_distance_profile(points: np.ndarray) -> np.ndarray:
+        distances = []
+        for idx_a, idx_b in combinations(range(len(points)), 2):
+            distances.append(float(np.linalg.norm(points[idx_a] - points[idx_b])))
+        return np.sort(np.asarray(distances, dtype=np.float64))
+
+    @staticmethod
+    def _subset_candidate_public(candidate: Dict[str, Any]) -> Dict[str, Any]:
+        if not candidate:
+            return {}
+        return {
+            "source": str(candidate.get("source", "")),
+            "valid": bool(candidate.get("valid", False)),
+            "rankable": bool(candidate.get("rankable", False)),
+            "ambiguous": bool(candidate.get("ambiguous", False)),
+            "flip_risk": bool(candidate.get("flip_risk", False)),
+            "marker_indices": [int(index) for index in candidate.get("marker_indices", [])],
+            "observed_indices": [int(index) for index in candidate.get("observed_indices", [])],
+            "observed_markers": int(candidate.get("observed_markers", 0)),
+            "score": float(candidate.get("score", 0.0)),
+            "combined_score": float(candidate.get("combined_score", 0.0)),
+            "coverage": float(candidate.get("coverage", 0.0)),
+            "temporal_penalty": float(candidate.get("temporal_penalty", 0.0)),
+            "source_bonus": float(candidate.get("source_bonus", 0.0)),
+            "score_delta": float(candidate.get("score_delta", 0.0)),
+            "rms_error_m": float(candidate.get("rms_error_m", 0.0)),
+            "mean_error_px": float(candidate.get("mean_error_px", 0.0)),
+            "p95_error_px": float(candidate.get("p95_error_px", 0.0)),
+            "matched_marker_views": int(candidate.get("matched_marker_views", 0)),
+            "position_delta_m": float(candidate.get("position_delta_m", 0.0)),
+            "rotation_delta_deg": float(candidate.get("rotation_delta_deg", 0.0)),
+        }
+
+    def _subset_weighted_solve_summary(self, candidate: Dict[str, Any]) -> Dict[str, Any]:
+        if not candidate:
+            return {"valid": False, "reason": "no_best_candidate"}
+        return {
+            "valid": bool(candidate.get("valid", False)),
+            "source": str(candidate.get("source", "")),
+            "observed_markers": int(candidate.get("observed_markers", 0)),
+            "rms_error_m": float(candidate.get("rms_error_m", 0.0)),
+            "weights": [float(value) for value in candidate.get("weights", [])],
+            "marker_indices": [int(index) for index in candidate.get("marker_indices", [])],
         }
 
     @staticmethod

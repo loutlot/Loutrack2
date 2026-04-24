@@ -1400,3 +1400,314 @@ Phase 5C の結果、Phase 6 は実装可能な状態になった。理由は、
 - Phase 6 の first step は、3-marker / 4-marker subset hypothesis を diagnostics-only で生成し、現行 generic pose と比較すること。
 - 採択変更はまだしない。まず `subset_hypothesis_summary` に candidate 数、best score、2nd score、margin、rejected-by-ambiguity、rejected-by-2D-score を出す。
 - `hint_pose_adoption_ready = false` のため、Phase 6 実装後も最初は diagnostics-only で進めるのが安全。
+
+## Phase 6 - Subset RANSAC and weighted rigid solve diagnostics
+
+### 実装結果
+
+- `SubsetSolveConfig` を追加し、Phase 6 の subset hypothesis 生成を default diagnostics-only で制御できるようにした。
+- 3-marker / 4-marker subset から pose hypothesis を作り、generic points と `rigid_hint` marker-indexed points の両方を候補源にした。
+- 各 hypothesis を Phase 4 の 2D reprojection score で評価し、`best`, `second`, `margin`, `score_delta`, `flip_risk_count`, `rejected_by_2d_score`, `rejected_by_rms`, `rejected_by_ambiguity` を出すようにした。
+- `KabschEstimator.estimate_weighted()` を追加し、best subset の weighted solve summary を `subset_hypothesis.weighted_solve` に出すようにした。
+- Pattern 内の subset ambiguity は marker distance profile の近接で判定し、曖昧な subset を rankable candidate から外すようにした。
+- `RigidBodyTracker` に `subset_hypothesis` diagnostics を保持させ、`TrackingPipeline.get_subset_hypothesis_events()` と replay summary の `subset_hypothesis_summary` を追加した。
+- 採択ロジックはまだ変えていない。pose commit は従来の generic path を維持する。
+- `tests/test_rigid_reprojection_scoring.py` に、正解4点 + noise6点でも subset hypothesis が高score candidateを出す test を追加した。
+- `tests/test_tracking_replay_harness.py` に、`subset_hypothesis_summary.phase6_complete` の replay summary test を追加した。
+- `changelog.md` に Phase 6 の user-visible diagnostics 進捗を記録した。
+
+### データ契約
+
+`tracking.<name>.subset_hypothesis` は以下の形で出る。
+
+```json
+{
+  "evaluated": true,
+  "reason": "ok",
+  "diagnostics_only": true,
+  "candidate_count": 125,
+  "valid_candidate_count": 24,
+  "rejected_by_ambiguity": 0,
+  "rejected_by_2d_score": 101,
+  "rejected_by_rms": 4,
+  "flip_risk_count": 94,
+  "truncated": false,
+  "best_score": 0.8990512341102239,
+  "second_score": 0.8988986890582578,
+  "margin": 0.00015254505196615753,
+  "generic_score": 0.8988986890582578,
+  "score_delta": 0.00015254505196615753,
+  "subset_adoption_ready": false,
+  "best": {
+    "source": "rigid_hint_subset",
+    "marker_indices": [0, 1, 2, 3],
+    "score": 0.8990512341102239,
+    "p95_error_px": 1.1101003280511064,
+    "rotation_delta_deg": 0.04732950064258966
+  },
+  "weighted_solve": {
+    "valid": true,
+    "source": "rigid_hint_subset",
+    "observed_markers": 4,
+    "rms_error_m": 0.0015591280938460513
+  }
+}
+```
+
+Replay summary には `subset_hypothesis_summary` が追加される。
+
+```json
+{
+  "totals": {
+    "event_count": 493,
+    "candidate_count": 60111,
+    "valid_candidate_count": 11241,
+    "rejected_by_2d_score": 48870,
+    "rejected_by_rms": 1886,
+    "flip_risk_count": 45326,
+    "subset_adoption_ready_count": 0,
+    "truncated_count": 0,
+    "phase6_complete": true
+  }
+}
+```
+
+### 検証
+
+Phase 6 周辺の主テスト:
+
+```bash
+/tmp/loutrack-py313-test/bin/python -m pytest \
+  tests/test_geo_blob_assignment.py \
+  tests/test_tracking_pipeline_diagnostics.py \
+  tests/test_rigid_reprojection_scoring.py \
+  tests/test_rigid_body_tracker_stats.py \
+  tests/test_pattern_evaluator.py \
+  tests/test_tracking_replay_harness.py -q
+```
+
+結果: `38 passed`
+
+周辺 runtime / GUI backend / clusterer test:
+
+```bash
+/tmp/loutrack-py313-test/bin/python -m pytest \
+  tests/test_tracking_runtime.py \
+  tests/test_gui_backend_services.py \
+  tests/test_rigid_clusterer.py -q
+```
+
+結果: `52 passed`
+
+実ログ replay:
+
+```bash
+/tmp/loutrack-py313-test/bin/python - <<'PY'
+from src.host.tracking_replay_harness import replay_tracking_log
+summary = replay_tracking_log(
+    log_path='logs/tracking_gui.jsonl',
+    calibration_path='calibration',
+    patterns=['waist'],
+    rigids_path='calibration/tracking_rigids.json',
+)
+s = summary.to_dict()
+print(s['pipeline_stage_ms'].get('rigid_ms'))
+print(s['subset_hypothesis_summary']['totals'])
+print(s['subset_hypothesis_summary']['by_rigid'])
+PY
+```
+
+結果:
+
+- frames processed: `497`
+- valid poses: `493`
+- rigid_ms mean: `30.909575 ms`
+- rigid_ms p95: `32.266792 ms`
+- rigid_ms max: `70.573209 ms`
+- triangulation_ms mean: `2.686855025 ms`
+- subset events: `493`
+- subset candidate count: `60111`
+- valid subset candidate count: `11241`
+- rejected by 2D score: `48870`
+- rejected by RMS: `1886`
+- rejected by ambiguity: `0`
+- flip risk count: `45326`
+- truncated count: `0`
+- best source counts: `generic_subset = 209`, `rigid_hint_subset = 284`
+- margin mean: `0.0024109287281096044`
+- margin p95: `0.004200195536867568`
+- score delta mean: `0.017931867799784937`
+- score delta p95: `0.08085246753707642`
+- best p95 reprojection p95: `1.439467798673221 px`
+- best rotation delta p95: `31.173432782515803 deg`
+- subset adoption ready count: `0`
+- `phase6_complete = true`
+
+### 読み取り
+
+Phase 6 は完了状態。subset hypothesis 生成、2D score による比較、flip-risk 診断、weighted solve summary、same-path replay summary まで通っており、実ログでも `phase6_complete = true`、`truncated_count = 0` になった。
+
+一方、`subset_adoption_ready_count = 0` なので、採択ONはまだ早い。理由は明確で、best / second の margin がかなり薄い。latest frame でも best と second の差は `0.0001525` しかない。Phase 6 の診断は「候補を作れる」ことだけでなく、「採択判断には margin が足りない」ことも示している。
+
+`flip_risk_count = 45326` は大きいが、これは候補全体の中に危険な permutation / subset が大量にあるという意味。2D score と margin gate がなければ flip を拾う危険が高い。Phase 6 の diagnostics-only default は妥当。
+
+runtime cost は replay で `rigid_ms p95 = 32.27 ms`。候補生成が入ったぶん重くなっているため、採択ONの前に candidate pruning が必要。
+
+### 次に期待すること
+
+- 次は Phase 6.5 として、採択変更ではなく candidate pruning と margin 改善を行うのが安全。
+- 具体的には、generic subset の全 permutation を減らし、`rigid_hint_subset` と prediction近傍 subset を優先する。
+- `subset_adoption_ready` を増やすには、best / second margin を厚くする必要がある。2D score だけでなく、temporal innovation、marker coverage、source priority を combined score に入れる。
+- `rigid_ms p95` を下げるため、candidate上限ではなく候補生成前の枝刈りを入れる。`truncated_count = 0` なので、現状は上限不足ではなく候補を作りすぎている。
+- Phase 6 の採択ONはまだ行わない。`subset_adoption_ready_ratio` と `rigid_ms p95` が改善してから、shadow enforcement replay を挟む。
+
+## Phase 6.5 - Candidate pruning and combined subset score
+
+### 実装結果
+
+- `SubsetSolveConfig` に `max_generic_observed_subsets`, `prediction_gate_m`, `source_priority_bonus`, `coverage_weight`, `temporal_penalty_weight`, `flip_penalty` を追加した。
+- `generic_subset` は全 observed subset を展開せず、generic pose / prediction 近傍で説明できる observed subset を優先し、`max_generic_observed_subsets = 24` に絞るようにした。
+- `generic_subset` の各 marker permutation は、generic pose から見て平均 `prediction_gate_m = 0.08m` を超える場合、pose solve 前に prune するようにした。
+- `combined_score` を追加し、raw 2D score だけでなく marker coverage、`rigid_hint_subset` source bonus、temporal innovation penalty、flip penalty を加味して best / second を rank するようにした。
+- `subset_hypothesis` に `pruned_candidate_count`, `best_combined_score`, `second_combined_score`, `combined_margin` を追加した。
+- `TrackingPipeline` の `subset_hypothesis_events` と replay summary の `subset_hypothesis_summary` に pruning / combined margin metrics を追加した。
+- 採択ロジックはまだ変更していない。Phase 6.5 も diagnostics-only。
+- `changelog.md` に Phase 6.5 の user-visible diagnostics 進捗を記録した。
+
+### データ契約
+
+`tracking.<name>.subset_hypothesis` には以下が追加される。
+
+```json
+{
+  "candidate_count": 77,
+  "pruned_candidate_count": 48,
+  "best_score": 0.8990512341102239,
+  "second_score": 0.8937058535802875,
+  "best_combined_score": 1.0188161721326305,
+  "second_combined_score": 0.9887152621121309,
+  "margin": 0.005345380529936383,
+  "combined_margin": 0.030100910020499638,
+  "subset_adoption_ready": true,
+  "best": {
+    "source": "rigid_hint_subset",
+    "combined_score": 1.0188161721326305,
+    "coverage": 1.0,
+    "temporal_penalty": 0.0013058998755184183,
+    "source_bonus": 0.04
+  }
+}
+```
+
+Replay summary の `subset_hypothesis_summary.totals` には以下が入る。
+
+```json
+{
+  "candidate_count": 37714,
+  "pruned_candidate_count": 22397,
+  "valid_candidate_count": 6844,
+  "subset_adoption_ready_count": 283,
+  "subset_adoption_ready_ratio": 0.5740365111561866,
+  "combined_margin_summary": {
+    "mean": 0.028525272244270556,
+    "p95": 0.03352911901724043
+  }
+}
+```
+
+### 検証
+
+Phase 6 / 6.5 周辺の主テスト:
+
+```bash
+/tmp/loutrack-py313-test/bin/python -m pytest \
+  tests/test_geo_blob_assignment.py \
+  tests/test_tracking_pipeline_diagnostics.py \
+  tests/test_rigid_reprojection_scoring.py \
+  tests/test_rigid_body_tracker_stats.py \
+  tests/test_pattern_evaluator.py \
+  tests/test_tracking_replay_harness.py -q
+```
+
+結果: `38 passed`
+
+周辺 runtime / GUI backend / clusterer test:
+
+```bash
+/tmp/loutrack-py313-test/bin/python -m pytest \
+  tests/test_tracking_runtime.py \
+  tests/test_gui_backend_services.py \
+  tests/test_rigid_clusterer.py -q
+```
+
+結果: `52 passed`
+
+実ログ replay:
+
+```bash
+/tmp/loutrack-py313-test/bin/python - <<'PY'
+from src.host.tracking_replay_harness import replay_tracking_log
+summary = replay_tracking_log(
+    log_path='logs/tracking_gui.jsonl',
+    calibration_path='calibration',
+    patterns=['waist'],
+    rigids_path='calibration/tracking_rigids.json',
+)
+s = summary.to_dict()
+print(s['pipeline_stage_ms'].get('rigid_ms'))
+print(s['subset_hypothesis_summary']['totals'])
+print(s['subset_hypothesis_summary']['by_rigid'])
+PY
+```
+
+結果:
+
+- frames processed: `497`
+- valid poses: `493`
+- rigid_ms mean: `21.752600879166668 ms`
+- rigid_ms p95: `23.396334 ms`
+- rigid_ms max: `74.928625 ms`
+- subset events: `493`
+- subset candidate count: `37714`
+- pruned candidate count: `22397`
+- valid subset candidate count: `6844`
+- rejected by 2D score: `30870`
+- rejected by RMS: `940`
+- flip risk count: `23884`
+- truncated count: `0`
+- best source counts: `generic_subset = 27`, `rigid_hint_subset = 458`, empty best = `8`
+- raw margin mean: `0.003803637575004811`
+- raw margin p95: `0.00980447992408684`
+- combined margin mean: `0.028525272244270556`
+- combined margin p95: `0.03352911901724043`
+- best p95 reprojection p95: `1.3162558093085044 px`
+- best rotation delta p95: `0.2712228983038488 deg`
+- subset adoption ready count: `283`
+- subset adoption ready ratio: `0.5740365111561866`
+- `phase6_complete = true`
+
+Phase 6 からの改善:
+
+- candidate count: `60111 -> 37714`
+- valid candidate count: `11241 -> 6844`
+- flip risk count: `45326 -> 23884`
+- rigid_ms p95: `32.266792 ms -> 23.396334 ms`
+- raw margin p95: `0.004200195536867568 -> 0.00980447992408684`
+- combined margin p95: `0.03352911901724043`
+- subset adoption ready count: `0 -> 283`
+
+### 読み取り
+
+Phase 6.5 は完了状態。候補数、flip-risk候補、runtime cost が下がり、combined score によって best / second margin が厚くなった。`subset_adoption_ready_count = 283` まで増えたので、Phase 6 の「採択ONはまだ全く無理」から、「一部 frame では採択候補として成立する」状態に進んだ。
+
+ただし、採択ONはまだ default にしない。`subset_adoption_ready_ratio = 0.574` で、全 frame に対して十分ではない。また empty best が `8` frame 残っており、max rigid time も `74.9ms` とスパイクがある。shadow enforcement replay を挟まずに commit path を変えるのはまだ危険。
+
+今回の combined score は `rigid_hint_subset` を強めに優先した。best source は `458 / 493` が `rigid_hint_subset` になったため、Phase 5 の object-conditioned gating がかなり効いている。一方で、generic subset が best の frame も `27` あり、fallback lane は残すべき。
+
+### 次に期待すること
+
+- 次は Phase 6.6 または Phase 7 前の guard として、`subset_adoption_ready` の shadow enforcement replay を入れるのが安全。
+- default 採択ONの前に、`subset_adoption_ready` の frame だけ仮採択した場合の valid/lost、flip、rigid_ms を replay比較する。
+- empty best `8` frame の理由を分解する。`reason_counts` や no-rankable frame の camera/blob状況を追加するとよい。
+- runtime max `74.9ms` のスパイクを潰す。候補数だけでなく、per-frame candidate generation time / scoring time を分けて計測する。
+- `subset_adoption_ready_ratio` が `0.9+`、かつ replay flip悪化なし、rigid_ms p95が目標内になってから採択ONを検討する。

@@ -122,6 +122,30 @@ class _FakePipeline:
             }
         ]
 
+    def get_subset_hypothesis_events(self):
+        return [
+            {
+                "rigid_name": "waist",
+                "candidate_count": 12,
+                "valid_candidate_count": 4,
+                "rejected_by_ambiguity": 2,
+                "rejected_by_2d_score": 3,
+                "rejected_by_rms": 1,
+                "flip_risk_count": 0,
+                "truncated": False,
+                "best_source": "rigid_hint_subset",
+                "best_score": 0.99,
+                "second_score": 0.91,
+                "margin": 0.08,
+                "generic_score": 0.95,
+                "score_delta": 0.04,
+                "best_p95_error_px": 0.7,
+                "best_rotation_delta_deg": 0.0,
+                "subset_adoption_ready": True,
+                "diagnostics_only": True,
+            }
+        ]
+
 
 def test_replay_tracking_log_injects_frames_through_frame_processor(
     monkeypatch, tmp_path: Path
@@ -144,6 +168,7 @@ def test_replay_tracking_log_injects_frames_through_frame_processor(
     assert "object_gating_summary" in summary
     assert summary["rigid_hint_summary"]["totals"]["accepted_points"] == 4
     assert summary["rigid_hint_pose_summary"]["totals"]["phase6_ready"] is True
+    assert summary["subset_hypothesis_summary"]["totals"]["phase6_complete"] is True
     assert summary["phase45_go_no_go"]["decision"] in {
         "no_reacquire_reject_signal",
         "pending_enforcement_replay",

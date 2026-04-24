@@ -20,7 +20,7 @@ from .geo import (
 )
 from .rigid import (
     RigidBodyEstimator, RigidBodyPose, 
-    MarkerPattern, WAIST_PATTERN, ReacquireGuardConfig, ObjectGatingConfig
+    MarkerPattern, WAIST_PATTERN, ReacquireGuardConfig, ObjectGatingConfig, SubsetSolveConfig
 )
 from .metrics import MetricsCollector
 from .logger import FrameLogger
@@ -108,6 +108,7 @@ class TrackingPipeline:
         reacquire_guard_config: Optional[ReacquireGuardConfig] = None,
         reacquire_guard_event_logging: bool = False,
         object_gating_config: Optional[ObjectGatingConfig] = None,
+        subset_solve_config: Optional[SubsetSolveConfig] = None,
     ):
         """
         Initialize tracking pipeline.
@@ -141,6 +142,7 @@ class TrackingPipeline:
             patterns=patterns or [WAIST_PATTERN],
             reacquire_guard_config=reacquire_guard_config or ReacquireGuardConfig(),
             object_gating_config=object_gating_config or ObjectGatingConfig(),
+            subset_solve_config=subset_solve_config or SubsetSolveConfig(),
         )
         self.metrics = MetricsCollector()
         
@@ -202,6 +204,7 @@ class TrackingPipeline:
         self._object_gating_events: Deque[Dict[str, Any]] = deque(maxlen=2000)
         self._rigid_hint_events: Deque[Dict[str, Any]] = deque(maxlen=2000)
         self._rigid_hint_pose_events: Deque[Dict[str, Any]] = deque(maxlen=2000)
+        self._subset_hypothesis_events: Deque[Dict[str, Any]] = deque(maxlen=2000)
     
     def set_pose_callback(self, callback: Callable[[Dict[str, RigidBodyPose]], None]) -> None:
         """Set callback for estimated poses."""
@@ -398,6 +401,7 @@ class TrackingPipeline:
             self._record_stage("rigid_ms", self._elapsed_ms(stage_started_ns))
             self._record_reacquire_guard_events(timestamp)
             self._record_rigid_hint_pose_events(timestamp)
+            self._record_subset_hypothesis_events(timestamp)
             
             # Update metrics
             stage_started_ns = time.perf_counter_ns()
@@ -484,6 +488,7 @@ class TrackingPipeline:
             "object_gating_events": self.get_object_gating_events(limit=20),
             "rigid_hint_events": self.get_rigid_hint_events(limit=20),
             "rigid_hint_pose_events": self.get_rigid_hint_pose_events(limit=20),
+            "subset_hypothesis_events": self.get_subset_hypothesis_events(limit=20),
             "reacquire_guard_events": self.get_reacquire_guard_events(limit=20),
             "pipeline_stage_ms": self._stage_diagnostics(),
             "logger": self._logger_diagnostics(),
@@ -618,6 +623,49 @@ class TrackingPipeline:
                 }
             )
 
+    def _record_subset_hypothesis_events(self, timestamp: int) -> None:
+        tracking = self.rigid_estimator.get_tracking_status()
+        for rigid_name, status in tracking.items():
+            if not isinstance(status, dict):
+                continue
+            subset = status.get("subset_hypothesis")
+            if not isinstance(subset, dict) or not subset.get("evaluated"):
+                continue
+            best = subset.get("best", {})
+            second = subset.get("second", {})
+            if not isinstance(best, dict):
+                best = {}
+            if not isinstance(second, dict):
+                second = {}
+            self._subset_hypothesis_events.append(
+                {
+                    "timestamp": int(timestamp),
+                    "rigid_name": str(rigid_name),
+                    "reason": str(subset.get("reason", "")),
+                    "candidate_count": int(subset.get("candidate_count", 0)),
+                    "pruned_candidate_count": int(subset.get("pruned_candidate_count", 0)),
+                    "valid_candidate_count": int(subset.get("valid_candidate_count", 0)),
+                    "rejected_by_ambiguity": int(subset.get("rejected_by_ambiguity", 0)),
+                    "rejected_by_2d_score": int(subset.get("rejected_by_2d_score", 0)),
+                    "rejected_by_rms": int(subset.get("rejected_by_rms", 0)),
+                    "flip_risk_count": int(subset.get("flip_risk_count", 0)),
+                    "truncated": bool(subset.get("truncated", False)),
+                    "best_source": str(best.get("source", "")),
+                    "best_score": float(subset.get("best_score", 0.0)),
+                    "second_score": float(subset.get("second_score", 0.0)),
+                    "best_combined_score": float(subset.get("best_combined_score", 0.0)),
+                    "second_combined_score": float(subset.get("second_combined_score", 0.0)),
+                    "margin": float(subset.get("margin", 0.0)),
+                    "combined_margin": float(subset.get("combined_margin", 0.0)),
+                    "generic_score": float(subset.get("generic_score", 0.0)),
+                    "score_delta": float(subset.get("score_delta", 0.0)),
+                    "best_p95_error_px": float(best.get("p95_error_px", 0.0)),
+                    "best_rotation_delta_deg": float(best.get("rotation_delta_deg", 0.0)),
+                    "subset_adoption_ready": bool(subset.get("subset_adoption_ready", False)),
+                    "diagnostics_only": bool(subset.get("diagnostics_only", True)),
+                }
+            )
+
     def get_reacquire_guard_events(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         events = list(self._reacquire_guard_events)
         if limit is not None:
@@ -638,6 +686,12 @@ class TrackingPipeline:
 
     def get_rigid_hint_pose_events(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         events = list(self._rigid_hint_pose_events)
+        if limit is not None:
+            events = events[-max(0, int(limit)):]
+        return [dict(event) for event in events]
+
+    def get_subset_hypothesis_events(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        events = list(self._subset_hypothesis_events)
         if limit is not None:
             events = events[-max(0, int(limit)):]
         return [dict(event) for event in events]
@@ -675,6 +729,7 @@ class TrackingPipeline:
                 "object_gating_events": self.get_object_gating_events(limit=20),
                 "rigid_hint_events": self.get_rigid_hint_events(limit=20),
                 "rigid_hint_pose_events": self.get_rigid_hint_pose_events(limit=20),
+                "subset_hypothesis_events": self.get_subset_hypothesis_events(limit=20),
                 "pipeline_stage_ms": self._stage_diagnostics(),
                 "logger": self._logger_diagnostics(),
             },

@@ -243,3 +243,37 @@ def test_process_context_reports_rigid_hint_pose_side_by_side_without_commit() -
     assert diagnostics["score"]["matched_marker_views"] == 8
     assert diagnostics["position_delta_m"] < 1e-9
     assert diagnostics["rotation_delta_deg"] < 1e-6
+
+
+def test_process_context_reports_subset_hypotheses_with_noise_points() -> None:
+    cameras = create_dummy_calibration(["cam0", "cam1"], focal_length=800.0)
+    points_world = WAIST_PATTERN.marker_positions + np.array([0.0, 0.0, 2.5])
+    observations = _observations_for_points(cameras, points_world)
+    noise = np.array(
+        [
+            [0.22, -0.18, 2.48],
+            [-0.19, 0.21, 2.56],
+            [0.31, 0.16, 2.43],
+            [-0.28, -0.20, 2.62],
+            [0.02, 0.33, 2.51],
+            [0.36, -0.02, 2.59],
+        ],
+        dtype=np.float64,
+    )
+    estimator = RigidBodyEstimator(patterns=[WAIST_PATTERN])
+
+    estimator.process_context(
+        np.vstack([points_world, noise]),
+        1_000_000,
+        camera_params=cameras,
+        observations_by_camera=observations,
+    )
+
+    subset = estimator.get_tracking_status()["waist"]["subset_hypothesis"]
+    assert subset["evaluated"] is True
+    assert subset["diagnostics_only"] is True
+    assert subset["candidate_count"] > 0
+    assert subset["valid_candidate_count"] > 0
+    assert subset["best"]["score"] > 0.95
+    assert subset["best"]["matched_marker_views"] == 8
+    assert subset["weighted_solve"]["valid"] is True

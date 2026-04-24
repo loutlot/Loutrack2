@@ -66,6 +66,8 @@ class TrackingReplaySummary:
     rigid_hint_summary: Dict[str, Any]
     rigid_hint_pose_events: List[Dict[str, Any]]
     rigid_hint_pose_summary: Dict[str, Any]
+    subset_hypothesis_events: List[Dict[str, Any]]
+    subset_hypothesis_summary: Dict[str, Any]
     phase45_go_no_go: Dict[str, Any]
 
     def to_dict(self) -> Dict[str, Any]:
@@ -89,6 +91,8 @@ class TrackingReplaySummary:
             "rigid_hint_summary": self.rigid_hint_summary,
             "rigid_hint_pose_events": self.rigid_hint_pose_events,
             "rigid_hint_pose_summary": self.rigid_hint_pose_summary,
+            "subset_hypothesis_events": self.subset_hypothesis_events,
+            "subset_hypothesis_summary": self.subset_hypothesis_summary,
             "phase45_go_no_go": self.phase45_go_no_go,
         }
 
@@ -166,6 +170,11 @@ def replay_tracking_log(
         if hasattr(pipeline, "get_rigid_hint_pose_events")
         else []
     )
+    subset_hypothesis_events = (
+        pipeline.get_subset_hypothesis_events()
+        if hasattr(pipeline, "get_subset_hypothesis_events")
+        else []
+    )
     pair_count = int(
         receiver.get("pairer", {}).get("pairs_emitted", pipeline.frames_processed)
     )
@@ -191,6 +200,8 @@ def replay_tracking_log(
         rigid_hint_summary=_summarize_rigid_hints(rigid_hint_events),
         rigid_hint_pose_events=rigid_hint_pose_events,
         rigid_hint_pose_summary=_summarize_rigid_hint_poses(rigid_hint_pose_events),
+        subset_hypothesis_events=subset_hypothesis_events,
+        subset_hypothesis_summary=_summarize_subset_hypotheses(subset_hypothesis_events),
         phase45_go_no_go=_single_run_phase45_decision(
             tracking,
             guard_summary,
@@ -460,6 +471,96 @@ def _summarize_rigid_hint_poses(events: Optional[List[Dict[str, Any]]] = None) -
         totals["event_count"] > 0
         and (totals["valid_count"] > 0 or totals["generic_valid_count"] > 0)
         and totals["p95_error_px_summary"]["count"] > 0
+    )
+    return {"by_rigid": by_rigid, "totals": totals}
+
+
+def _summarize_subset_hypotheses(events: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    event_list = list(events or [])
+    by_rigid: Dict[str, Dict[str, Any]] = {}
+    margins: List[float] = []
+    combined_margins: List[float] = []
+    score_deltas: List[float] = []
+    best_p95_errors: List[float] = []
+    best_rotation_deltas: List[float] = []
+    for event in event_list:
+        rigid_name = str(event.get("rigid_name", ""))
+        bucket = by_rigid.setdefault(
+            rigid_name,
+            {
+                "event_count": 0,
+                "candidate_count": 0,
+                "pruned_candidate_count": 0,
+                "valid_candidate_count": 0,
+                "rejected_by_ambiguity": 0,
+                "rejected_by_2d_score": 0,
+                "rejected_by_rms": 0,
+                "flip_risk_count": 0,
+                "subset_adoption_ready_count": 0,
+                "truncated_count": 0,
+                "best_source_counts": {},
+            },
+        )
+        bucket["event_count"] += 1
+        for key in (
+            "candidate_count",
+            "pruned_candidate_count",
+            "valid_candidate_count",
+            "rejected_by_ambiguity",
+            "rejected_by_2d_score",
+            "rejected_by_rms",
+            "flip_risk_count",
+        ):
+            bucket[key] += int(event.get(key, 0))
+        if event.get("subset_adoption_ready"):
+            bucket["subset_adoption_ready_count"] += 1
+        if event.get("truncated"):
+            bucket["truncated_count"] += 1
+        source = str(event.get("best_source", ""))
+        source_counts = bucket["best_source_counts"]
+        source_counts[source] = int(source_counts.get(source, 0)) + 1
+        margins.append(float(event.get("margin", 0.0)))
+        combined_margins.append(float(event.get("combined_margin", 0.0)))
+        score_deltas.append(float(event.get("score_delta", 0.0)))
+        best_p95_errors.append(float(event.get("best_p95_error_px", 0.0)))
+        best_rotation_deltas.append(float(event.get("best_rotation_delta_deg", 0.0)))
+
+    adoption_ready_count = int(
+        sum(1 for event in event_list if event.get("subset_adoption_ready"))
+    )
+    totals = {
+        "event_count": int(len(event_list)),
+        "candidate_count": int(sum(int(event.get("candidate_count", 0)) for event in event_list)),
+        "pruned_candidate_count": int(
+            sum(int(event.get("pruned_candidate_count", 0)) for event in event_list)
+        ),
+        "valid_candidate_count": int(
+            sum(int(event.get("valid_candidate_count", 0)) for event in event_list)
+        ),
+        "rejected_by_ambiguity": int(
+            sum(int(event.get("rejected_by_ambiguity", 0)) for event in event_list)
+        ),
+        "rejected_by_2d_score": int(
+            sum(int(event.get("rejected_by_2d_score", 0)) for event in event_list)
+        ),
+        "rejected_by_rms": int(sum(int(event.get("rejected_by_rms", 0)) for event in event_list)),
+        "flip_risk_count": int(sum(int(event.get("flip_risk_count", 0)) for event in event_list)),
+        "subset_adoption_ready_count": adoption_ready_count,
+        "truncated_count": int(sum(1 for event in event_list if event.get("truncated"))),
+        "margin_summary": _numeric_summary(margins),
+        "combined_margin_summary": _numeric_summary(combined_margins),
+        "score_delta_summary": _numeric_summary(score_deltas),
+        "best_p95_error_px_summary": _numeric_summary(best_p95_errors),
+        "best_rotation_delta_deg_summary": _numeric_summary(best_rotation_deltas),
+    }
+    totals["subset_adoption_ready_ratio"] = (
+        float(adoption_ready_count / len(event_list)) if event_list else 0.0
+    )
+    totals["phase6_complete"] = bool(
+        totals["event_count"] > 0
+        and totals["candidate_count"] > 0
+        and totals["valid_candidate_count"] > 0
+        and totals["truncated_count"] == 0
     )
     return {"by_rigid": by_rigid, "totals": totals}
 

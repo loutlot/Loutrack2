@@ -1,3 +1,5 @@
+- Phase 6.5 rigid stabilization now prunes subset candidates and ranks them with combined 2D, coverage, source, and temporal scores in replay diagnostics
+- Phase 6 rigid stabilization now emits diagnostics-only subset RANSAC and weighted-solve replay summaries before changing pose adoption
 - Phase 5 rigid stabilization now compares diagnostics-only `rigid_hint` poses against generic poses in replay summaries so Phase 6 subset RANSAC inputs are ready
 - Phase 5 rigid stabilization now reports object-conditioned 2D gates plus diagnostics-only `rigid_hint` triangulated points beside generic triangulation
 - Phase 4.5 reacquire guard tuning now uses a 136 degree rotation-innovation threshold that keeps replay valid-frame loss under the go/no-go budget
