@@ -340,7 +340,16 @@ class TrackingPipeline:
             )
             
             stage_started_ns = time.perf_counter_ns()
-            poses = self.rigid_estimator.process_points(points_array, timestamp)
+            if hasattr(self.rigid_estimator, "process_context"):
+                poses = self.rigid_estimator.process_context(
+                    points_array,
+                    timestamp,
+                    camera_params=self.geometry.camera_params,
+                    observations_by_camera=result.get("observations_by_camera", {}),
+                    coordinate_space="raw_pixel",
+                )
+            else:
+                poses = self.rigid_estimator.process_points(points_array, timestamp)
             self._record_stage("rigid_ms", self._elapsed_ms(stage_started_ns))
             
             # Update metrics

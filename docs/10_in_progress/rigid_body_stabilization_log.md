@@ -523,3 +523,126 @@ Phase 3 では採択ロジックを変えていないため、Phase 2 と同じ 
 - まだ `process_context()` は導入していない。Phase 4 の最初は既存 `GeometryPipeline` output を `TrackingPipeline` から渡す薄い context wrapper を作るのが安全。
 - 2D score は raw pixel と undistorted pixel を混ぜない。現状の triangulation provenance は raw/undistorted を両方持つので、score context に coordinate space を明示する。
 - Phase 4 の初回は採択変更を入れず、score diagnostics の replay 差分だけを見る。reacquire 中の reject は次の小ステップに分けた方が戻しやすい。
+
+## 2026-04-24 - Phase 4 2D Reprojection Scoring
+
+### 実装結果
+
+- `src/host/rigid.py` に 2D reprojection scoring diagnostics を追加した。
+- `RigidBodyEstimator.process_context()` を追加し、既存 `process_points()` は 3D-only 互換 wrapper として残した。
+- `TrackingPipeline` から `GeometryPipeline` の `camera_params` と `observations_by_camera` を estimator へ渡すようにした。fake estimator / 旧 estimator との互換のため、`process_context` がある場合だけ呼ぶ。
+- 既存の pose acceptance は変更していない。Phase 4 初回では Kabsch RMS / cluster selection / valid 判定は Phase 3 と同じ。
+- accepted pose から marker world positions を作り、各 camera の raw pixel blob に再投影して最近傍 residual を計算するようにした。
+- `tracking.<name>.reprojection_score` に structured diagnostics を追加した。
+- `tests/test_rigid_reprojection_scoring.py` を追加し、synthetic blobs で high score が出ること、旧 `process_points()` が 2D context なしで動くことを確認した。
+- `changelog.md` に Phase 4 の diagnostics 追加を記録した。
+
+### データ契約
+
+`tracking.<name>.reprojection_score` は以下の形で出る。
+
+```json
+{
+  "scored": true,
+  "reason": "ok",
+  "coordinate_space": "raw_pixel",
+  "score": 0.8988986890582578,
+  "mean_error_px": 0.8440602124269088,
+  "p95_error_px": 1.1093540335311303,
+  "max_error_px": 1.1127079208686501,
+  "matched_marker_views": 8,
+  "expected_marker_views": 8,
+  "missing_marker_views": 0,
+  "duplicate_assignment_count": 0,
+  "unexpected_blob_count": 0,
+  "camera_count": 2,
+  "match_gate_px": 12.0
+}
+```
+
+現在は `coordinate_space = raw_pixel` で scoring している。raw pixel projection は camera distortion も含めた `cv.projectPoints()` を使う。`undistorted_pixel` scoring 用の分岐も入れてあるが、pipeline 経由ではまだ raw pixel 固定。
+
+### 検証
+
+OpenCV が入っている Python 3.13 の一時 venv で検証した。
+
+```bash
+/tmp/loutrack-py313-test/bin/python -m pytest \
+  tests/test_rigid_reprojection_scoring.py \
+  tests/test_rigid_body_tracker_stats.py \
+  tests/test_pattern_evaluator.py \
+  tests/test_geo_blob_assignment.py \
+  tests/test_tracking_pipeline_diagnostics.py \
+  tests/test_tracking_replay_harness.py
+```
+
+結果: `30 passed`
+
+実ログ replay も継続して通る。
+
+```bash
+/tmp/loutrack-py313-test/bin/python - <<'PY'
+from src.host.tracking_replay_harness import replay_tracking_log
+summary = replay_tracking_log(
+    log_path='logs/tracking_gui.jsonl',
+    calibration_path='calibration',
+    patterns=['waist'],
+    rigids_path='calibration/tracking_rigids.json',
+).to_dict()
+tracking = summary['tracking']['waist']
+print({k: summary[k] for k in ['frame_count', 'pair_count', 'frames_processed', 'poses_estimated']})
+print({k: tracking[k] for k in [
+    'valid', 'mode', 'track_count', 'total_frames', 'reacquire_count',
+    'max_pose_flip_deg', 'rolling_confidence', 'mode_transition_count',
+]})
+print(tracking['reprojection_score'])
+PY
+```
+
+結果:
+
+- input frames: `994`
+- paired frames: `497`
+- processed pairs: `497`
+- estimated valid poses: `493`
+- valid: `true`
+- final mode: `continue`
+- track count: `493`
+- total frames: `497`
+- reacquire count: `3`
+- mode transition count: `7`
+- max pose flip candidate: `138.43282502436344 deg`
+- rolling confidence: `0.46102492276458507`
+- reprojection score: `0.8988986890582578`
+- mean reprojection error: `0.8440602124269088 px`
+- p95 reprojection error: `1.1093540335311303 px`
+- matched marker views: `8 / 8`
+- duplicate assignment count: `0`
+- unexpected blob count: `0`
+
+### 読み取り
+
+Phase 4 でも採択ロジックを変えていないため、Phase 3 と同じ `493 / 497` valid、`reacquire_count = 3`、`max_pose_flip_deg = 138.43282502436344` が維持された。これは受入条件どおり。
+
+最終 frame の 2D score は高く、`8 / 8` marker views が raw pixel residual 約 `0.84px` mean で一致している。つまり、この frame の pose は 2D 観測上はかなり整合している。一方で `max_pose_flip_deg` はまだ残っているので、flip は「最終 frame が悪い」というより、reacquire 近辺の一時的な hypothesis selection と pattern ambiguity の問題として扱うべき。
+
+Phase 4 の重要な進捗は、これまで 3D RMS と valid/lost しか見えなかった rigid pose に対して、multi-camera 2D residual、missing views、duplicate blob assignment、unexpected blobs を同じ diagnostics 面で見られるようになったこと。次はこの score を frame ごと、特に `REACQUIRE` mode の accepted candidate に対して使う。
+
+### 次に期待すること
+
+- 次フェーズは **Phase 4.5 - Reacquire Candidate Guard** を挟むのが安全。
+- いきなり全 mode で採択を変えず、`REACQUIRE` mode の accepted candidate だけに 2D score guard を入れる。
+- guard の初期条件は緩めにし、例えば `matched_marker_views >= 6`, `mean_error_px <= 4.0`, `duplicate_assignment_count == 0`, `missing_marker_views <= 2` から始める。
+- guard が reject した場合は invalid pose として tracker に流し、`invalid_reason = "reprojection_guard_rejected"` のように diagnostics で見えるようにする。
+- Replay ではまず `valid/reacquire/pose_flip` が改善するか、悪化しないかを確認する。もし valid が落ちすぎる場合は guard を diagnostics-only に戻せる feature flag が必要。
+- `score` の時系列が必要なので、次は replay summary に per-frame score dump または low-score event logging を追加すると原因分析がかなり楽になる。
+
+### 次フェーズの実装可否
+
+次フェーズも実装可能。Phase 4 で `process_context()` と `reprojection_score` が入ったため、`REACQUIRE` mode の candidate に対して score-based guard を入れる材料は揃った。
+
+注意点:
+
+- 現在の score は marker assignment を 2D 最近傍で見ているだけで、marker identity の permutation ambiguity までは解いていない。Phase 1 の ambiguity evaluator と組み合わせる必要がある。
+- `reprojection_match_gate_px = 12px` は diagnostics 用に広め。採択 guard では mean/p95/duplicate/missing を併用し、単一 gate だけで落とさない。
+- current replay の最終 frame は score が良いので、guard の効果を見るには reacquire 直後の accepted frames を per-frame でログ化した方がよい。

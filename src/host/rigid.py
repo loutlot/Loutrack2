@@ -19,6 +19,7 @@ from scipy.spatial.transform import Rotation
 from scipy.spatial.distance import cdist
 from scipy.spatial import cKDTree
 import threading
+import cv2 as cv
 
 
 @dataclass
@@ -207,6 +208,25 @@ class TrackModeConfig:
     reacquire_lost_frames: int = 5
     continue_position_gate_m: float = 0.25
     continue_rotation_gate_deg: float = 120.0
+
+
+def _empty_reprojection_score(reason: str = "not_scored") -> Dict[str, Any]:
+    return {
+        "scored": False,
+        "reason": reason,
+        "coordinate_space": "raw_pixel",
+        "score": 0.0,
+        "mean_error_px": 0.0,
+        "p95_error_px": 0.0,
+        "max_error_px": 0.0,
+        "matched_marker_views": 0,
+        "expected_marker_views": 0,
+        "missing_marker_views": 0,
+        "duplicate_assignment_count": 0,
+        "unexpected_blob_count": 0,
+        "camera_count": 0,
+        "match_gate_px": 0.0,
+    }
 
 
 @dataclass
@@ -684,6 +704,7 @@ class RigidBodyTracker:
         self._last_rotation_innovation_deg = 0.0
         self._max_rotation_innovation_deg = 0.0
         self._last_mode_reason = "initializing"
+        self._last_reprojection_score: Dict[str, Any] = _empty_reprojection_score()
     
     def update(self, pose: RigidBodyPose) -> None:
         """Update tracker with new pose estimate, including velocity estimation."""
@@ -811,6 +832,11 @@ class RigidBodyTracker:
         prediction = self.peek_prediction(target_ts)
         return prediction.to_dict()
 
+    def record_reprojection_score(self, score: Dict[str, Any]) -> None:
+        """Attach latest 2D reprojection diagnostics without affecting tracking state."""
+        with self._lock:
+            self._last_reprojection_score = dict(score or _empty_reprojection_score())
+
     def get_diagnostics(self) -> Dict[str, Any]:
         """Return diagnostics used by tracking logs and replay summaries."""
         latest = self._pose_history[-1] if self._pose_history else None
@@ -839,6 +865,7 @@ class RigidBodyTracker:
             "max_position_innovation_m": float(self._max_position_innovation_m),
             "last_rotation_innovation_deg": float(self._last_rotation_innovation_deg),
             "max_rotation_innovation_deg": float(self._max_rotation_innovation_deg),
+            "reprojection_score": dict(self._last_reprojection_score),
             "rms_error_m": latest_rms,
             "observed_markers": latest_observed,
             "real_ray_count": latest_observed,
@@ -1000,6 +1027,7 @@ class RigidBodyEstimator:
         marker_diameter: float = 0.014,
         cluster_radius_m: float = 0.08,
         max_rms_error_m: float = 0.055,
+        reprojection_match_gate_px: float = 12.0,
     ):
         """
         Initialize estimator.
@@ -1012,10 +1040,13 @@ class RigidBodyEstimator:
         """
         if not np.isfinite(max_rms_error_m) or float(max_rms_error_m) <= 0.0:
             raise ValueError("max_rms_error_m must be a finite positive value")
+        if not np.isfinite(reprojection_match_gate_px) or float(reprojection_match_gate_px) <= 0.0:
+            raise ValueError("reprojection_match_gate_px must be a finite positive value")
         self.patterns = patterns or [WAIST_PATTERN]
         self.marker_diameter = marker_diameter
         self.cluster_radius_m = float(cluster_radius_m)
         self.max_rms_error_m = float(max_rms_error_m)
+        self.reprojection_match_gate_px = float(reprojection_match_gate_px)
         
         self.clusterer = PointClusterer(
             marker_diameter=marker_diameter,
@@ -1112,6 +1143,42 @@ class RigidBodyEstimator:
         points_3d: np.ndarray,
         timestamp: int
     ) -> Dict[str, RigidBodyPose]:
+        """Process 3D points using the legacy 3D-only path."""
+        return self._process_points(
+            points_3d,
+            timestamp,
+            camera_params=None,
+            observations_by_camera=None,
+            coordinate_space="raw_pixel",
+        )
+
+    def process_context(
+        self,
+        points_3d: np.ndarray,
+        timestamp: int,
+        *,
+        camera_params: Optional[Dict[str, Any]] = None,
+        observations_by_camera: Optional[Dict[str, List[Any]]] = None,
+        coordinate_space: str = "raw_pixel",
+    ) -> Dict[str, RigidBodyPose]:
+        """Process 3D points with 2D observation context for diagnostics."""
+        return self._process_points(
+            points_3d,
+            timestamp,
+            camera_params=camera_params,
+            observations_by_camera=observations_by_camera,
+            coordinate_space=coordinate_space,
+        )
+
+    def _process_points(
+        self,
+        points_3d: np.ndarray,
+        timestamp: int,
+        *,
+        camera_params: Optional[Dict[str, Any]],
+        observations_by_camera: Optional[Dict[str, List[Any]]],
+        coordinate_space: str,
+    ) -> Dict[str, RigidBodyPose]:
         """
         Process 3D points and estimate poses for all tracked bodies.
         
@@ -1124,6 +1191,8 @@ class RigidBodyEstimator:
         """
         if len(points_3d) == 0:
             # Return predictions for all bodies
+            for tracker in self.trackers.values():
+                tracker.record_reprojection_score(_empty_reprojection_score("no_3d_points"))
             return {
                 name: tracker.predict()
                 for name, tracker in self.trackers.items()
@@ -1170,15 +1239,160 @@ class RigidBodyEstimator:
             if best_pose is not None:
                 poses[pattern.name] = best_pose
                 used_clusters.add(best_cluster_idx)
+                score = self._score_pose_reprojection(
+                    best_pose,
+                    pattern,
+                    camera_params,
+                    observations_by_camera,
+                    coordinate_space=coordinate_space,
+                )
+                self.trackers[pattern.name].record_reprojection_score(score)
                 self.trackers[pattern.name].update(best_pose)
             else:
                 # Use prediction
                 predicted = self.trackers[pattern.name].predict()
                 predicted.timestamp = timestamp
                 poses[pattern.name] = predicted
+                self.trackers[pattern.name].record_reprojection_score(
+                    _empty_reprojection_score("no_valid_pose")
+                )
                 self.trackers[pattern.name].update(predicted)
         
         return poses
+
+    def _score_pose_reprojection(
+        self,
+        pose: RigidBodyPose,
+        pattern: MarkerPattern,
+        camera_params: Optional[Dict[str, Any]],
+        observations_by_camera: Optional[Dict[str, List[Any]]],
+        *,
+        coordinate_space: str,
+    ) -> Dict[str, Any]:
+        if not pose.valid:
+            return _empty_reprojection_score("invalid_pose")
+        if not camera_params or not observations_by_camera:
+            return _empty_reprojection_score("no_2d_context")
+
+        space = "undistorted_pixel" if coordinate_space == "undistorted_pixel" else "raw_pixel"
+        markers_world = (pose.rotation @ pattern.marker_positions.T).T + pose.position.reshape(1, 3)
+        residuals: List[float] = []
+        matched = 0
+        expected = 0
+        duplicate_assignments = 0
+        unexpected_blobs = 0
+        scored_cameras = 0
+
+        for camera_id, observations in observations_by_camera.items():
+            camera = camera_params.get(camera_id)
+            if camera is None:
+                continue
+            observed_uvs = self._extract_observation_uvs(observations, space)
+            if not observed_uvs:
+                continue
+
+            projected_uvs = self._project_markers_to_camera(markers_world, camera, space)
+            if not projected_uvs:
+                continue
+
+            scored_cameras += 1
+            expected += len(projected_uvs)
+            nearest_blob_indices: List[int] = []
+            for uv in projected_uvs:
+                distances = [
+                    float(np.linalg.norm(np.asarray(uv, dtype=np.float64) - np.asarray(obs, dtype=np.float64)))
+                    for obs in observed_uvs
+                ]
+                nearest_idx = int(np.argmin(distances))
+                error = float(distances[nearest_idx])
+                if error <= self.reprojection_match_gate_px:
+                    matched += 1
+                    residuals.append(error)
+                    nearest_blob_indices.append(nearest_idx)
+
+            unique_blob_indices = set(nearest_blob_indices)
+            duplicate_assignments += max(0, len(nearest_blob_indices) - len(unique_blob_indices))
+            unexpected_blobs += max(0, len(observed_uvs) - len(unique_blob_indices))
+
+        if expected <= 0:
+            return _empty_reprojection_score("no_projectable_markers")
+
+        missing = max(0, expected - matched)
+        mean_error = float(np.mean(residuals)) if residuals else 0.0
+        p95_error = float(np.percentile(residuals, 95)) if residuals else 0.0
+        max_error = float(np.max(residuals)) if residuals else 0.0
+        coverage = float(matched / expected) if expected else 0.0
+        residual_score = 1.0 / (1.0 + mean_error / 5.0) if residuals else 0.0
+        duplicate_penalty = min(1.0, duplicate_assignments / max(1, matched))
+        score = float(np.clip(0.70 * residual_score + 0.30 * coverage - 0.30 * duplicate_penalty, 0.0, 1.0))
+
+        return {
+            "scored": True,
+            "reason": "ok",
+            "coordinate_space": space,
+            "score": score,
+            "mean_error_px": mean_error,
+            "p95_error_px": p95_error,
+            "max_error_px": max_error,
+            "matched_marker_views": int(matched),
+            "expected_marker_views": int(expected),
+            "missing_marker_views": int(missing),
+            "duplicate_assignment_count": int(duplicate_assignments),
+            "unexpected_blob_count": int(unexpected_blobs),
+            "camera_count": int(scored_cameras),
+            "match_gate_px": float(self.reprojection_match_gate_px),
+        }
+
+    @staticmethod
+    def _extract_observation_uvs(observations: List[Any], coordinate_space: str) -> List[Tuple[float, float]]:
+        key = "undistorted_uv" if coordinate_space == "undistorted_pixel" else "raw_uv"
+        uvs: List[Tuple[float, float]] = []
+        for observation in observations:
+            value = None
+            if isinstance(observation, dict):
+                value = observation.get(key)
+            else:
+                value = getattr(observation, key, None)
+            if value is None or len(value) < 2:
+                continue
+            uvs.append((float(value[0]), float(value[1])))
+        return uvs
+
+    @staticmethod
+    def _project_markers_to_camera(
+        markers_world: np.ndarray,
+        camera: Any,
+        coordinate_space: str,
+    ) -> List[Tuple[float, float]]:
+        points_world = np.asarray(markers_world, dtype=np.float64).reshape(-1, 3)
+        rotation = np.asarray(camera.rotation, dtype=np.float64).reshape(3, 3)
+        translation = np.asarray(camera.translation, dtype=np.float64).reshape(3)
+        points_cam = (rotation @ points_world.T).T + translation.reshape(1, 3)
+        in_front = points_cam[:, 2] > 1e-9
+        if not np.any(in_front):
+            return []
+
+        points_world = points_world[in_front]
+        if coordinate_space == "undistorted_pixel":
+            points_cam = points_cam[in_front]
+            fx = float(camera.intrinsic_matrix[0, 0])
+            fy = float(camera.intrinsic_matrix[1, 1])
+            cx = float(camera.intrinsic_matrix[0, 2])
+            cy = float(camera.intrinsic_matrix[1, 2])
+            return [
+                (float(fx * point[0] / point[2] + cx), float(fy * point[1] / point[2] + cy))
+                for point in points_cam
+            ]
+
+        rvec, _ = cv.Rodrigues(rotation)
+        projected, _ = cv.projectPoints(
+            points_world.astype(np.float32),
+            rvec,
+            translation,
+            camera.intrinsic_matrix,
+            camera.distortion_coeffs,
+        )
+        return [(float(point[0]), float(point[1])) for point in projected.reshape(-1, 2)]
     
     def get_tracking_status(self) -> Dict[str, Dict[str, Any]]:
         """Get tracking status for all bodies."""
