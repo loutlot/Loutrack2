@@ -11,7 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -109,10 +109,16 @@ def replay_tracking_log(
     reacquire_guard_shadow_enabled: bool = True,
     reacquire_guard_event_logging: bool = False,
     object_gating_enforced: bool = False,
+    start_timestamp_us: Optional[int] = None,
+    end_timestamp_us: Optional[int] = None,
+    start_received_at: Optional[str] = None,
+    end_received_at: Optional[str] = None,
+    max_frames: Optional[int] = None,
 ) -> TrackingReplaySummary:
     """Replay a tracking log through the existing host pipeline path."""
     log_path = Path(log_path)
-    calibration_path = Path(calibration_path)
+    calibration_input_path = Path(calibration_path)
+    calibration_path = _resolve_replay_calibration_path(calibration_input_path)
     selected_patterns = _load_patterns(patterns, rigids_path)
 
     replay = FrameReplay(str(log_path))
@@ -141,7 +147,21 @@ def replay_tracking_log(
     pipeline.frame_processor.set_paired_callback(pipeline._on_paired_frames)
 
     frame_count = 0
+    start_received_s = _timestamp_to_seconds(start_received_at) if start_received_at else None
+    end_received_s = _timestamp_to_seconds(end_received_at) if end_received_at else None
     for entry in replay.replay(realtime=False):
+        timestamp_us = int(entry.data.get("timestamp", 0) or 0)
+        if start_timestamp_us is not None and timestamp_us < int(start_timestamp_us):
+            continue
+        if end_timestamp_us is not None and timestamp_us > int(end_timestamp_us):
+            continue
+        received_s = _timestamp_to_seconds(entry.received_at)
+        if start_received_s is not None and received_s < start_received_s:
+            continue
+        if end_received_s is not None and received_s > end_received_s:
+            continue
+        if max_frames is not None and frame_count >= int(max_frames):
+            break
         pipeline.frame_processor._on_frame_received(_frame_from_log_entry(entry))
         frame_count += 1
 
@@ -213,6 +233,154 @@ def replay_tracking_log(
     )
 
 
+def summarize_tracking_diagnostics(
+    *,
+    log_path: str | Path,
+    patterns: Optional[Iterable[str]] = None,
+    min_accepted_points: int = 4,
+    jump_threshold_m: float = 0.10,
+    flip_threshold_deg: float = 90.0,
+    window_padding_s: float = 2.0,
+) -> Dict[str, Any]:
+    """Summarize live tracking diagnostics already embedded in a tracking log."""
+    replay = FrameReplay(str(log_path))
+    requested = [str(name) for name in (patterns or [WAIST_PATTERN.name]) if str(name).strip()]
+    frame_timestamps = []
+    for frame in replay.replay(realtime=False):
+        timestamp = _frame_entry_timestamp(frame)
+        if timestamp > 0:
+            frame_timestamps.append(timestamp)
+    first_frame_ts = min(frame_timestamps) if frame_timestamps else None
+    last_frame_ts = max(frame_timestamps) if frame_timestamps else None
+    diagnostics_events = [
+        event for event in replay.events if event.event_type == "tracking_diagnostics"
+    ]
+
+    by_rigid: Dict[str, Dict[str, Any]] = {}
+    for rigid_name in requested:
+        event_summaries: List[Dict[str, Any]] = []
+        accepted_points_values: List[float] = []
+        reprojection_mean_values: List[float] = []
+        epipolar_mean_values: List[float] = []
+        rigid_ms_values: List[float] = []
+        pipeline_pair_ms_values: List[float] = []
+        valid_count = 0
+        invalid_count = 0
+        previous_max_jump_m = 0.0
+        previous_max_flip_deg = 0.0
+
+        for event_index, event in enumerate(diagnostics_events, start=1):
+            data = event.data if isinstance(event.data, dict) else {}
+            tracking = data.get("tracking", {})
+            rigid_status = tracking.get(rigid_name, {}) if isinstance(tracking, dict) else {}
+            if not isinstance(rigid_status, dict):
+                continue
+
+            geometry = data.get("geometry", {}) if isinstance(data.get("geometry"), dict) else {}
+            quality = geometry.get("quality", {}) if isinstance(geometry.get("quality"), dict) else {}
+            accepted_points = int(quality.get("accepted_points", 0) or 0)
+            accepted_points_values.append(float(accepted_points))
+
+            reprojection_summary = quality.get("reprojection_error_px_summary", {})
+            if isinstance(reprojection_summary, dict):
+                reprojection_mean_values.append(float(reprojection_summary.get("mean", 0.0) or 0.0))
+            epipolar_summary = quality.get("epipolar_error_px_summary", {})
+            if isinstance(epipolar_summary, dict):
+                epipolar_mean_values.append(float(epipolar_summary.get("mean", 0.0) or 0.0))
+
+            stage_ms = data.get("pipeline_stage_ms", {})
+            if isinstance(stage_ms, dict):
+                rigid_ms = stage_ms.get("rigid_ms", {})
+                if isinstance(rigid_ms, dict):
+                    rigid_ms_values.append(float(rigid_ms.get("last", 0.0) or 0.0))
+                pipeline_pair_ms = stage_ms.get("pipeline_pair_ms", {})
+                if isinstance(pipeline_pair_ms, dict):
+                    pipeline_pair_ms_values.append(float(pipeline_pair_ms.get("last", 0.0) or 0.0))
+
+            valid = bool(rigid_status.get("valid", False))
+            if valid:
+                valid_count += 1
+            else:
+                invalid_count += 1
+
+            max_jump_m = float(rigid_status.get("max_pose_jump_m", 0.0) or 0.0)
+            max_flip_deg = float(rigid_status.get("max_pose_flip_deg", 0.0) or 0.0)
+            jump_increase_m = max(0.0, max_jump_m - previous_max_jump_m)
+            flip_increase_deg = max(0.0, max_flip_deg - previous_max_flip_deg)
+            previous_max_jump_m = max(previous_max_jump_m, max_jump_m)
+            previous_max_flip_deg = max(previous_max_flip_deg, max_flip_deg)
+
+            reasons: List[str] = []
+            if not valid:
+                reasons.append("invalid")
+            if accepted_points < int(min_accepted_points):
+                reasons.append("low_accepted_points")
+            if jump_increase_m > 0.0 and max_jump_m >= float(jump_threshold_m):
+                reasons.append("pose_jump")
+            if flip_increase_deg > 0.0 and max_flip_deg >= float(flip_threshold_deg):
+                reasons.append("pose_flip")
+
+            if reasons:
+                event_summaries.append(
+                    {
+                        "event_index": int(event_index),
+                        "timestamp": event.timestamp,
+                        "window_start": _iso_with_offset(event.timestamp, -float(window_padding_s)),
+                        "window_end": _iso_with_offset(event.timestamp, float(window_padding_s)),
+                        "reasons": reasons,
+                        "mode": str(rigid_status.get("mode", "")),
+                        "valid": valid,
+                        "accepted_points": accepted_points,
+                        "observed_markers": int(rigid_status.get("observed_markers", 0) or 0),
+                        "invalid_reason": str(
+                            rigid_status.get("invalid_reason")
+                            or rigid_status.get("last_mode_reason")
+                            or ""
+                        ),
+                        "max_pose_jump_m": max_jump_m,
+                        "max_pose_flip_deg": max_flip_deg,
+                        "jump_increase_m": jump_increase_m,
+                        "flip_increase_deg": flip_increase_deg,
+                    }
+                )
+
+        event_count = len(accepted_points_values)
+        by_rigid[rigid_name] = {
+            "event_count": int(event_count),
+            "valid_count": int(valid_count),
+            "invalid_count": int(invalid_count),
+            "valid_ratio": float(valid_count / event_count) if event_count else 0.0,
+            "accepted_points": _numeric_summary(accepted_points_values),
+            "reprojection_mean_px": _numeric_summary(reprojection_mean_values),
+            "epipolar_mean_px": _numeric_summary(epipolar_mean_values),
+            "rigid_ms": _numeric_summary(rigid_ms_values),
+            "pipeline_pair_ms": _numeric_summary(pipeline_pair_ms_values),
+            "failure_event_count": int(len(event_summaries)),
+            "failure_segments": _merge_failure_segments(event_summaries),
+            "failure_events": event_summaries,
+        }
+
+    duration_s = (
+        float((last_frame_ts - first_frame_ts) / 1_000_000.0)
+        if first_frame_ts is not None and last_frame_ts is not None
+        else 0.0
+    )
+    return {
+        "log_path": str(log_path),
+        "frame_count": int(len(frame_timestamps)),
+        "diagnostics_event_count": int(len(diagnostics_events)),
+        "duration_s": duration_s,
+        "patterns": requested,
+        "thresholds": {
+            "min_accepted_points": int(min_accepted_points),
+            "jump_threshold_m": float(jump_threshold_m),
+            "flip_threshold_deg": float(flip_threshold_deg),
+            "window_padding_s": float(window_padding_s),
+        },
+        "by_rigid": by_rigid,
+    }
+
+
 def compare_reacquire_guard_enforcement(
     *,
     log_path: str | Path,
@@ -220,6 +388,11 @@ def compare_reacquire_guard_enforcement(
     patterns: Optional[Iterable[str]] = None,
     rigids_path: str | Path | None = None,
     epipolar_threshold_px: Optional[float] = None,
+    start_timestamp_us: Optional[int] = None,
+    end_timestamp_us: Optional[int] = None,
+    start_received_at: Optional[str] = None,
+    end_received_at: Optional[str] = None,
+    max_frames: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Run shadow and enforced guard replays and compare Phase 4.5 go/no-go."""
     shadow = replay_tracking_log(
@@ -230,6 +403,11 @@ def compare_reacquire_guard_enforcement(
         epipolar_threshold_px=epipolar_threshold_px,
         reacquire_guard_enforced=False,
         reacquire_guard_shadow_enabled=True,
+        start_timestamp_us=start_timestamp_us,
+        end_timestamp_us=end_timestamp_us,
+        start_received_at=start_received_at,
+        end_received_at=end_received_at,
+        max_frames=max_frames,
     ).to_dict()
     enforced = replay_tracking_log(
         log_path=log_path,
@@ -239,6 +417,11 @@ def compare_reacquire_guard_enforcement(
         epipolar_threshold_px=epipolar_threshold_px,
         reacquire_guard_enforced=True,
         reacquire_guard_shadow_enabled=True,
+        start_timestamp_us=start_timestamp_us,
+        end_timestamp_us=end_timestamp_us,
+        start_received_at=start_received_at,
+        end_received_at=end_received_at,
+        max_frames=max_frames,
     ).to_dict()
     return {
         "shadow": shadow,
@@ -655,6 +838,86 @@ def _numeric_summary(values: List[float]) -> Dict[str, float]:
     }
 
 
+def _resolve_replay_calibration_path(path: Path) -> Path:
+    """Resolve replay calibration inputs to the directory form needed by loaders."""
+    if path.is_file() and path.name.startswith("extrinsics_pose_v2"):
+        return path.parent
+    return path
+
+
+def _iso_with_offset(value: str, offset_s: float) -> str:
+    if not value:
+        return ""
+    try:
+        return (datetime.fromisoformat(value) + timedelta(seconds=float(offset_s))).isoformat()
+    except Exception:
+        return value
+
+
+def _frame_entry_timestamp(frame: Any) -> int:
+    data = getattr(frame, "data", {})
+    if not isinstance(data, dict):
+        data = {}
+    return int(getattr(frame, "timestamp", 0) or data.get("timestamp", 0) or 0)
+
+
+def _merge_failure_segments(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    segments: List[Dict[str, Any]] = []
+    for event in events:
+        try:
+            start = datetime.fromisoformat(str(event.get("window_start", "")))
+            end = datetime.fromisoformat(str(event.get("window_end", "")))
+        except Exception:
+            continue
+        reasons = set(str(reason) for reason in event.get("reasons", []))
+        if not segments:
+            segments.append(
+                {
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "event_count": 1,
+                    "reasons": sorted(reasons),
+                    "max_pose_jump_m": float(event.get("max_pose_jump_m", 0.0) or 0.0),
+                    "max_pose_flip_deg": float(event.get("max_pose_flip_deg", 0.0) or 0.0),
+                    "min_accepted_points": int(event.get("accepted_points", 0) or 0),
+                }
+            )
+            continue
+
+        previous = segments[-1]
+        previous_end = datetime.fromisoformat(str(previous["end"]))
+        if start <= previous_end:
+            previous["end"] = max(previous_end, end).isoformat()
+            previous["event_count"] = int(previous["event_count"]) + 1
+            previous["reasons"] = sorted(set(previous["reasons"]) | reasons)
+            previous["max_pose_jump_m"] = max(
+                float(previous.get("max_pose_jump_m", 0.0)),
+                float(event.get("max_pose_jump_m", 0.0) or 0.0),
+            )
+            previous["max_pose_flip_deg"] = max(
+                float(previous.get("max_pose_flip_deg", 0.0)),
+                float(event.get("max_pose_flip_deg", 0.0) or 0.0),
+            )
+            previous["min_accepted_points"] = min(
+                int(previous.get("min_accepted_points", 0)),
+                int(event.get("accepted_points", 0) or 0),
+            )
+            continue
+
+        segments.append(
+            {
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "event_count": 1,
+                "reasons": sorted(reasons),
+                "max_pose_jump_m": float(event.get("max_pose_jump_m", 0.0) or 0.0),
+                "max_pose_flip_deg": float(event.get("max_pose_flip_deg", 0.0) or 0.0),
+                "min_accepted_points": int(event.get("accepted_points", 0) or 0),
+            }
+        )
+    return segments
+
+
 def _single_run_phase45_decision(
     tracking: Dict[str, Dict[str, Any]],
     guard_summary: Dict[str, Any],
@@ -829,16 +1092,40 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--reacquire-guard-event-logging", action="store_true", help="Enable live logger guard events during replay.")
     parser.add_argument("--object-gating-enforced", action="store_true", help="Replay with Phase 5 object-gating rigid-hint pose enforcement enabled.")
     parser.add_argument("--compare-reacquire-guard-enforcement", action="store_true", help="Run both shadow and enforced Phase 4.5 replays and compare go/no-go.")
+    parser.add_argument("--diagnostics-summary", action="store_true", help="Summarize live tracking_diagnostics events without replaying frames.")
+    parser.add_argument("--min-accepted-points", type=int, default=4, help="Minimum accepted points before a diagnostics event is flagged.")
+    parser.add_argument("--jump-threshold-m", type=float, default=0.10, help="Pose jump threshold for diagnostics failure extraction.")
+    parser.add_argument("--flip-threshold-deg", type=float, default=90.0, help="Pose flip threshold for diagnostics failure extraction.")
+    parser.add_argument("--failure-window-padding-s", type=float, default=2.0, help="Padding around diagnostics failure events when merging segments.")
+    parser.add_argument("--start-timestamp-us", type=int, default=None, help="Replay only frames at or after this log timestamp.")
+    parser.add_argument("--end-timestamp-us", type=int, default=None, help="Replay only frames at or before this log timestamp.")
+    parser.add_argument("--start-received-at", default=None, help="Replay only frames received at or after this ISO timestamp.")
+    parser.add_argument("--end-received-at", default=None, help="Replay only frames received at or before this ISO timestamp.")
+    parser.add_argument("--max-frames", type=int, default=None, help="Replay at most this many frames after filtering.")
     parser.add_argument("--out", default=None, help="Optional summary JSON output path.")
     args = parser.parse_args(argv)
 
-    if args.compare_reacquire_guard_enforcement:
+    if args.diagnostics_summary:
+        summary = summarize_tracking_diagnostics(
+            log_path=args.log,
+            patterns=_parse_pattern_names(args.patterns),
+            min_accepted_points=args.min_accepted_points,
+            jump_threshold_m=args.jump_threshold_m,
+            flip_threshold_deg=args.flip_threshold_deg,
+            window_padding_s=args.failure_window_padding_s,
+        )
+    elif args.compare_reacquire_guard_enforcement:
         summary = compare_reacquire_guard_enforcement(
             log_path=args.log,
             calibration_path=args.calibration,
             patterns=_parse_pattern_names(args.patterns),
             rigids_path=args.rigids,
             epipolar_threshold_px=args.epipolar_threshold_px,
+            start_timestamp_us=args.start_timestamp_us,
+            end_timestamp_us=args.end_timestamp_us,
+            start_received_at=args.start_received_at,
+            end_received_at=args.end_received_at,
+            max_frames=args.max_frames,
         )
     else:
         summary = replay_tracking_log(
@@ -851,6 +1138,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             reacquire_guard_shadow_enabled=not bool(args.disable_reacquire_guard_shadow),
             reacquire_guard_event_logging=bool(args.reacquire_guard_event_logging),
             object_gating_enforced=bool(args.object_gating_enforced),
+            start_timestamp_us=args.start_timestamp_us,
+            end_timestamp_us=args.end_timestamp_us,
+            start_received_at=args.start_received_at,
+            end_received_at=args.end_received_at,
+            max_frames=args.max_frames,
         ).to_dict()
 
     text = json.dumps(summary, ensure_ascii=False, indent=2)

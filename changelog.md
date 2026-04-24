@@ -1,3 +1,5 @@
+- tracking replay harness now extracts live diagnostics failure segments and resolves `extrinsics_pose_v2.json` inputs to the calibration directory for replay
+- GUI tracking start no longer blocks ready cameras whose generated mask has zero masked pixels
 - GUI tracking start now disables live rigid-stabilization diagnostics in the start payload so logs can be replayed offline
 - object-gating enforcement now explicitly adopts qualified rigid-hint poses and exposes runtime/replay flags with enforcement diagnostics
 - rigid stabilization now requires consistent reacquire candidates and one-to-one 2D scoring to reduce flip-prone pose recovery

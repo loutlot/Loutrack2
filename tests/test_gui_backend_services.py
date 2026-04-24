@@ -662,7 +662,7 @@ def test_gui_tracking_status_reports_unhealthy_camera_blocker(tmp_path: Path) ->
 
 
 def test_gui_tracking_status_reports_mask_missing_blocker(tmp_path: Path) -> None:
-    session = _ConfigurablePingSession(mask_pixels_by_camera={"pi-cam-02": 0})
+    session = _ConfigurablePingSession(state_by_camera={"pi-cam-02": "IDLE"})
     state = _build_state(tmp_path, session=session)
     calibration_dir = tmp_path / "calibration"
     calibration_dir.mkdir()
@@ -675,6 +675,25 @@ def test_gui_tracking_status_reports_mask_missing_blocker(tmp_path: Path) -> Non
 
     assert status["start_allowed"] is False
     assert status["start_blockers"] == ["mask_missing"]
+
+
+def test_gui_tracking_status_allows_zero_area_mask_when_ready(tmp_path: Path) -> None:
+    session = _ConfigurablePingSession(mask_pixels_by_camera={"pi-cam-01": 0, "pi-cam-02": 0})
+    state = _build_state(tmp_path, session=session)
+    calibration_dir = tmp_path / "calibration"
+    calibration_dir.mkdir()
+    extrinsics_path = calibration_dir / "extrinsics_pose_v2.json"
+    extrinsics_path.write_text("{}", encoding="utf-8")
+    state.latest_extrinsics_path = extrinsics_path
+    state.selected_camera_ids = ["pi-cam-01", "pi-cam-02"]
+
+    cameras = state.refresh_targets()
+    status = state.get_tracking_status(cameras=cameras)
+    workflow = state._workflow_presenter.summarize(cameras)
+
+    assert status["start_allowed"] is True
+    assert status["start_blockers"] == []
+    assert workflow["mask_ready_count"] == 2
 
 
 def test_gui_tracking_status_allows_start_when_preconditions_are_met(tmp_path: Path) -> None:

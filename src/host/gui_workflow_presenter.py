@@ -36,8 +36,7 @@ class GuiWorkflowPresenter:
         mask_ready_count = sum(
             1
             for camera in active_cameras
-            if diagnostics(camera).get("state") in ("READY", "RUNNING")
-            and float(diagnostics(camera).get("mask_pixels", 0) or 0) > 0.0
+            if str(diagnostics(camera).get("state") or "").upper() in ("READY", "RUNNING")
         )
         running_count = sum(
             1 for camera in active_cameras if diagnostics(camera).get("state") == "RUNNING"

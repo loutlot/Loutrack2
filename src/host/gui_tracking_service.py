@@ -297,8 +297,7 @@ class GuiTrackingService:
         if not isinstance(diagnostics, dict):
             diagnostics = {}
         state = str(diagnostics.get("state") or "").upper()
-        mask_pixels = float(diagnostics.get("mask_pixels", 0) or 0)
-        return state in ("READY", "RUNNING") and mask_pixels > 0.0
+        return state in ("READY", "RUNNING")
 
     def _tracking_blocker_message(self, blockers: List[str]) -> str | None:
         if not blockers:
