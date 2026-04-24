@@ -3744,6 +3744,14 @@
             : ["waist"],
           camera_ids: selectedCameraIds(),
           epipolar_threshold_px: Number(elements.trackingEpipolarThreshold?.value || 3.5),
+          rigid_stabilization: {
+            object_conditioned_gating: false,
+            subset_ransac: false,
+            reacquire_guard_shadow_enabled: false,
+            reacquire_guard_event_logging: false,
+            reacquire_guard_enforced: false,
+            object_gating_enforced: false,
+          },
         });
         trackingUiState = { phase: "idle", error: "" };
         setActivePage("tracking");

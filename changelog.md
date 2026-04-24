@@ -1,3 +1,4 @@
+- GUI tracking start now disables live rigid-stabilization diagnostics in the start payload so logs can be replayed offline
 - object-gating enforcement now explicitly adopts qualified rigid-hint poses and exposes runtime/replay flags with enforcement diagnostics
 - rigid stabilization now requires consistent reacquire candidates and one-to-one 2D scoring to reduce flip-prone pose recovery
 - rigid stabilization replay now reports subset adoption shadow outcomes before enabling subset pose commits

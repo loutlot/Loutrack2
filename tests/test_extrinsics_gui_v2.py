@@ -1768,6 +1768,13 @@ def test_tracking_page_surfaces_start_stop_status_messages() -> None:
     assert 'id="trackingEpipolarThreshold" type="range" min="1" max="6" step="0.5" value="3.5"' in HTML_PAGE
     assert "trackingEpipolarThresholdValue" in HTML_PAGE
     assert "epipolar_threshold_px: Number(elements.trackingEpipolarThreshold?.value || 3.5)" in HTML_PAGE
+    assert "rigid_stabilization: {" in HTML_PAGE
+    assert "object_conditioned_gating: false" in HTML_PAGE
+    assert "subset_ransac: false" in HTML_PAGE
+    assert "reacquire_guard_shadow_enabled: false" in HTML_PAGE
+    assert "reacquire_guard_event_logging: false" in HTML_PAGE
+    assert "reacquire_guard_enforced: false" in HTML_PAGE
+    assert "object_gating_enforced: false" in HTML_PAGE
     assert 'id="focus" type="range"' not in HTML_PAGE
     assert "trackingClientDiagnostics" in HTML_PAGE
     assert "sseInterArrivalMs" in HTML_PAGE

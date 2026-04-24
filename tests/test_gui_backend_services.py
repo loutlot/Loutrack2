@@ -217,6 +217,7 @@ class _TrackingRuntime:
         self.running = False
         self.started_with = None
         self.started_epipolar_threshold_px = None
+        self.started_rigid_stabilization = None
         self.custom_rigids: list[Dict[str, Any]] = []
 
     def start(  # noqa: ANN001
@@ -224,12 +225,14 @@ class _TrackingRuntime:
         calibration_path: str,
         patterns,
         epipolar_threshold_px=None,
+        rigid_stabilization=None,
     ):
         if self.fail:
             raise RuntimeError("tracking bind failed")
         self.running = True
         self.started_with = (calibration_path, list(patterns))
         self.started_epipolar_threshold_px = epipolar_threshold_px
+        self.started_rigid_stabilization = rigid_stabilization
         return {"running": True, "calibration_loaded": True}
 
     def stop(self) -> Dict[str, Any]:
@@ -565,6 +568,35 @@ def test_gui_tracking_service_forwards_epipolar_threshold(tmp_path: Path) -> Non
 
     assert runtime.started_epipolar_threshold_px == 3.5
     assert response["epipolar_threshold_px"] == 3.5
+
+
+def test_gui_tracking_service_forwards_rigid_stabilization_payload(tmp_path: Path) -> None:
+    runtime = _TrackingRuntime()
+    state = _build_state(tmp_path, runtime=runtime)
+    calibration_dir = tmp_path / "calibration"
+    calibration_dir.mkdir()
+    extrinsics_path = calibration_dir / "extrinsics_pose_v2.json"
+    extrinsics_path.write_text("{}", encoding="utf-8")
+    state.latest_extrinsics_path = extrinsics_path
+
+    rigid_stabilization = {
+        "object_conditioned_gating": False,
+        "subset_ransac": False,
+        "reacquire_guard_shadow_enabled": False,
+        "reacquire_guard_event_logging": False,
+        "reacquire_guard_enforced": False,
+        "object_gating_enforced": False,
+    }
+    response = state._tracking_service.start_tracking(
+        {
+            "patterns": ["waist"],
+            "camera_ids": ["pi-cam-01"],
+            "rigid_stabilization": rigid_stabilization,
+        }
+    )
+
+    assert runtime.started_rigid_stabilization == rigid_stabilization
+    assert response["running"] is True
 
 
 def test_gui_tracking_service_rolls_back_receiver_when_runtime_start_fails(tmp_path: Path) -> None:
