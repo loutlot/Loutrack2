@@ -546,16 +546,23 @@ Phase 5 に進むために、enforcement を本番 default にする必要はな
 
 ### Phase 6 - Subset RANSAC と weighted rigid solve
 
+#### Phase 6 に入る前提
+
+Phase 5C で `rigid_hint_pose` の side-by-side replay が入ったため、Phase 6 は実装可能な状態。`hint_pose_adoption_ready` は false のまま扱う。つまり、Phase 6 の目的は hint pose を即採択することではなく、generic / rigid-hint / subset hypotheses を同じ 2D score で比較し、flip しそうな subset を落とすこと。
+
 #### 目的
 
 複数 rigid body や noise blob が混ざったとき、全 permutation に頼らず、局所 subset hypothesis と 2D score で正しい pose を選ぶ。
 
 #### 実装内容
 
-1. 3-marker / 4-marker subset から pose hypothesis を作る。
-2. pattern evaluator の ambiguity score を使い、曖昧な subset は低優先にする。
-3. 全 hypothesis を Phase 4 の 2D score で比較する。
-4. final solve は weighted Kabsch にする。real triangulated points は重く、single-ray virtual は軽く、古い virtual はさらに軽くする。
+1. Diagnostics-only で 3-marker / 4-marker subset から pose hypothesis を作る。
+2. Generic pose、rigid-hint pose、subset pose を同じ replay frame 上で比較する。
+3. pattern evaluator の ambiguity score を使い、曖昧な subset は低優先にする。
+4. 全 hypothesis を Phase 4 の 2D score で比較する。
+5. `subset_hypothesis_summary` に candidate 数、best score、second score、margin、rejected-by-ambiguity、rejected-by-2D-score、flip-risk count を出す。
+6. final solve は weighted Kabsch にする。real triangulated points は重く、single-ray virtual は軽く、古い virtual はさらに軽くする。
+7. 最初の実装では採択を変えない。`subset_adoption_ready` が true になるまで commit path は generic 優先のままにする。
 
 #### 受入基準
 

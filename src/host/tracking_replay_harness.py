@@ -60,6 +60,12 @@ class TrackingReplaySummary:
     pipeline_stage_ms: Dict[str, Any]
     reacquire_guard_events: List[Dict[str, Any]]
     reacquire_guard_summary: Dict[str, Any]
+    object_gating_events: List[Dict[str, Any]]
+    object_gating_summary: Dict[str, Any]
+    rigid_hint_events: List[Dict[str, Any]]
+    rigid_hint_summary: Dict[str, Any]
+    rigid_hint_pose_events: List[Dict[str, Any]]
+    rigid_hint_pose_summary: Dict[str, Any]
     phase45_go_no_go: Dict[str, Any]
 
     def to_dict(self) -> Dict[str, Any]:
@@ -77,6 +83,12 @@ class TrackingReplaySummary:
             "pipeline_stage_ms": self.pipeline_stage_ms,
             "reacquire_guard_events": self.reacquire_guard_events,
             "reacquire_guard_summary": self.reacquire_guard_summary,
+            "object_gating_events": self.object_gating_events,
+            "object_gating_summary": self.object_gating_summary,
+            "rigid_hint_events": self.rigid_hint_events,
+            "rigid_hint_summary": self.rigid_hint_summary,
+            "rigid_hint_pose_events": self.rigid_hint_pose_events,
+            "rigid_hint_pose_summary": self.rigid_hint_pose_summary,
             "phase45_go_no_go": self.phase45_go_no_go,
         }
 
@@ -139,6 +151,21 @@ def replay_tracking_log(
         if hasattr(pipeline, "get_reacquire_guard_events")
         else []
     )
+    object_gating_events = (
+        pipeline.get_object_gating_events()
+        if hasattr(pipeline, "get_object_gating_events")
+        else []
+    )
+    rigid_hint_events = (
+        pipeline.get_rigid_hint_events()
+        if hasattr(pipeline, "get_rigid_hint_events")
+        else []
+    )
+    rigid_hint_pose_events = (
+        pipeline.get_rigid_hint_pose_events()
+        if hasattr(pipeline, "get_rigid_hint_pose_events")
+        else []
+    )
     pair_count = int(
         receiver.get("pairer", {}).get("pairs_emitted", pipeline.frames_processed)
     )
@@ -158,6 +185,12 @@ def replay_tracking_log(
         pipeline_stage_ms=dict(diagnostics.get("pipeline_stage_ms", {})),
         reacquire_guard_events=guard_events,
         reacquire_guard_summary=guard_summary,
+        object_gating_events=object_gating_events,
+        object_gating_summary=_summarize_object_gating(tracking, object_gating_events),
+        rigid_hint_events=rigid_hint_events,
+        rigid_hint_summary=_summarize_rigid_hints(rigid_hint_events),
+        rigid_hint_pose_events=rigid_hint_pose_events,
+        rigid_hint_pose_summary=_summarize_rigid_hint_poses(rigid_hint_pose_events),
         phase45_go_no_go=_single_run_phase45_decision(
             tracking,
             guard_summary,
@@ -255,6 +288,192 @@ def _summarize_reacquire_guard(
         ),
         "reason_counts": reason_counts,
         "by_rigid": by_rigid,
+    }
+
+
+def _summarize_object_gating(
+    tracking: Dict[str, Dict[str, Any]],
+    events: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    by_rigid: Dict[str, Any] = {}
+    totals = {
+        "evaluated_count": 0,
+        "assigned_marker_views": 0,
+        "candidate_window_count": 0,
+        "markers_with_two_or_more_rays": 0,
+        "single_ray_candidates": 0,
+        "generic_fallback_blob_count": 0,
+    }
+    for name, status in tracking.items():
+        gating = status.get("object_gating", {}) if isinstance(status, dict) else {}
+        if not isinstance(gating, dict):
+            continue
+        evaluated = bool(gating.get("evaluated", False))
+        summary = {
+            "enabled": bool(gating.get("enabled", False)),
+            "evaluated": evaluated,
+            "reason": str(gating.get("reason", "")),
+            "mode": str(gating.get("mode", "")),
+            "confidence": float(gating.get("confidence", 0.0)),
+            "pixel_gate_px": float(gating.get("pixel_gate_px", 0.0)),
+            "assigned_marker_views": int(gating.get("assigned_marker_views", 0)),
+            "candidate_window_count": int(gating.get("candidate_window_count", 0)),
+            "markers_with_two_or_more_rays": int(gating.get("markers_with_two_or_more_rays", 0)),
+            "single_ray_candidates": int(gating.get("single_ray_candidates", 0)),
+            "generic_fallback_blob_count": int(gating.get("generic_fallback_blob_count", 0)),
+        }
+        by_rigid[str(name)] = summary
+        if evaluated:
+            totals["evaluated_count"] += 1
+        for key in totals:
+            if key == "evaluated_count":
+                continue
+            totals[key] += int(summary.get(key, 0))
+    event_list = list(events or [])
+    event_totals = {
+        "event_count": int(len(event_list)),
+        "assigned_marker_views": int(sum(int(event.get("assigned_marker_views", 0)) for event in event_list)),
+        "candidate_window_count": int(sum(int(event.get("candidate_window_count", 0)) for event in event_list)),
+        "markers_with_two_or_more_rays": int(sum(int(event.get("markers_with_two_or_more_rays", 0)) for event in event_list)),
+        "single_ray_candidates": int(sum(int(event.get("single_ray_candidates", 0)) for event in event_list)),
+        "generic_fallback_blob_count": int(sum(int(event.get("generic_fallback_blob_count", 0)) for event in event_list)),
+    }
+    return {"by_rigid": by_rigid, "totals": totals, "event_totals": event_totals}
+
+
+def _summarize_rigid_hints(events: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    event_list = list(events or [])
+    by_rigid: Dict[str, Dict[str, Any]] = {}
+    reprojection_means: List[float] = []
+    reprojection_p95s: List[float] = []
+    for event in event_list:
+        rigid_name = str(event.get("rigid_name", ""))
+        bucket = by_rigid.setdefault(
+            rigid_name,
+            {
+                "event_count": 0,
+                "candidate_markers": 0,
+                "markers_with_two_or_more_rays": 0,
+                "single_ray_candidates": 0,
+                "accepted_points": 0,
+                "rejected_markers": 0,
+                "invalid_assignments": 0,
+            },
+        )
+        bucket["event_count"] += 1
+        for key in (
+            "candidate_markers",
+            "markers_with_two_or_more_rays",
+            "single_ray_candidates",
+            "accepted_points",
+            "rejected_markers",
+            "invalid_assignments",
+        ):
+            bucket[key] += int(event.get(key, 0))
+        reprojection_means.append(float(event.get("reprojection_mean_px", 0.0)))
+        reprojection_p95s.append(float(event.get("reprojection_p95_px", 0.0)))
+
+    totals = {
+        "event_count": int(len(event_list)),
+        "candidate_markers": int(sum(int(event.get("candidate_markers", 0)) for event in event_list)),
+        "markers_with_two_or_more_rays": int(
+            sum(int(event.get("markers_with_two_or_more_rays", 0)) for event in event_list)
+        ),
+        "single_ray_candidates": int(
+            sum(int(event.get("single_ray_candidates", 0)) for event in event_list)
+        ),
+        "accepted_points": int(sum(int(event.get("accepted_points", 0)) for event in event_list)),
+        "rejected_markers": int(sum(int(event.get("rejected_markers", 0)) for event in event_list)),
+        "invalid_assignments": int(sum(int(event.get("invalid_assignments", 0)) for event in event_list)),
+        "reprojection_mean_px_summary": _numeric_summary(reprojection_means),
+        "reprojection_p95_px_summary": _numeric_summary(reprojection_p95s),
+    }
+    return {"by_rigid": by_rigid, "totals": totals}
+
+
+def _summarize_rigid_hint_poses(events: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    event_list = list(events or [])
+    by_rigid: Dict[str, Dict[str, Any]] = {}
+    score_deltas: List[float] = []
+    position_deltas: List[float] = []
+    rotation_deltas: List[float] = []
+    p95_errors: List[float] = []
+    for event in event_list:
+        rigid_name = str(event.get("rigid_name", ""))
+        bucket = by_rigid.setdefault(
+            rigid_name,
+            {
+                "event_count": 0,
+                "valid_count": 0,
+                "generic_valid_count": 0,
+                "would_improve_score_count": 0,
+                "candidate_points": 0,
+                "observed_markers": 0,
+                "real_ray_count": 0,
+                "virtual_marker_count": 0,
+                "reason_counts": {},
+            },
+        )
+        bucket["event_count"] += 1
+        if event.get("valid"):
+            bucket["valid_count"] += 1
+        if event.get("generic_valid"):
+            bucket["generic_valid_count"] += 1
+        if event.get("would_improve_score"):
+            bucket["would_improve_score_count"] += 1
+        for key in (
+            "candidate_points",
+            "observed_markers",
+            "real_ray_count",
+            "virtual_marker_count",
+        ):
+            bucket[key] += int(event.get(key, 0))
+        reason = str(event.get("reason", ""))
+        reasons = bucket["reason_counts"]
+        reasons[reason] = int(reasons.get(reason, 0)) + 1
+        score_deltas.append(float(event.get("score_delta", 0.0)))
+        position_deltas.append(float(event.get("position_delta_m", 0.0)))
+        rotation_deltas.append(float(event.get("rotation_delta_deg", 0.0)))
+        p95_errors.append(float(event.get("p95_error_px", 0.0)))
+
+    totals = {
+        "event_count": int(len(event_list)),
+        "valid_count": int(sum(1 for event in event_list if event.get("valid"))),
+        "generic_valid_count": int(
+            sum(1 for event in event_list if event.get("generic_valid"))
+        ),
+        "would_improve_score_count": int(
+            sum(1 for event in event_list if event.get("would_improve_score"))
+        ),
+        "score_delta_summary": _numeric_summary(score_deltas),
+        "position_delta_m_summary": _numeric_summary(position_deltas),
+        "rotation_delta_deg_summary": _numeric_summary(rotation_deltas),
+        "p95_error_px_summary": _numeric_summary(p95_errors),
+    }
+    totals["hint_pose_adoption_ready"] = bool(
+        totals["event_count"] > 0
+        and totals["valid_count"] >= totals["generic_valid_count"]
+        and float(totals["rotation_delta_deg_summary"]["p95"]) < 5.0
+        and float(totals["p95_error_px_summary"]["p95"]) <= 2.0
+    )
+    totals["phase6_ready"] = bool(
+        totals["event_count"] > 0
+        and (totals["valid_count"] > 0 or totals["generic_valid_count"] > 0)
+        and totals["p95_error_px_summary"]["count"] > 0
+    )
+    return {"by_rigid": by_rigid, "totals": totals}
+
+
+def _numeric_summary(values: List[float]) -> Dict[str, float]:
+    if not values:
+        return {"count": 0, "mean": 0.0, "p95": 0.0, "max": 0.0}
+    sorted_values = sorted(float(value) for value in values)
+    p95_index = min(len(sorted_values) - 1, int(round((len(sorted_values) - 1) * 0.95)))
+    return {
+        "count": int(len(sorted_values)),
+        "mean": float(sum(sorted_values) / len(sorted_values)),
+        "p95": float(sorted_values[p95_index]),
+        "max": float(sorted_values[-1]),
     }
 
 

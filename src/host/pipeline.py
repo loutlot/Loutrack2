@@ -20,7 +20,7 @@ from .geo import (
 )
 from .rigid import (
     RigidBodyEstimator, RigidBodyPose, 
-    MarkerPattern, WAIST_PATTERN, ReacquireGuardConfig
+    MarkerPattern, WAIST_PATTERN, ReacquireGuardConfig, ObjectGatingConfig
 )
 from .metrics import MetricsCollector
 from .logger import FrameLogger
@@ -107,6 +107,7 @@ class TrackingPipeline:
         epipolar_threshold_px: Optional[float] = None,
         reacquire_guard_config: Optional[ReacquireGuardConfig] = None,
         reacquire_guard_event_logging: bool = False,
+        object_gating_config: Optional[ObjectGatingConfig] = None,
     ):
         """
         Initialize tracking pipeline.
@@ -139,6 +140,7 @@ class TrackingPipeline:
         self.rigid_estimator = RigidBodyEstimator(
             patterns=patterns or [WAIST_PATTERN],
             reacquire_guard_config=reacquire_guard_config or ReacquireGuardConfig(),
+            object_gating_config=object_gating_config or ObjectGatingConfig(),
         )
         self.metrics = MetricsCollector()
         
@@ -164,15 +166,20 @@ class TrackingPipeline:
         self._latest_triangulation_snapshot: Dict[str, Any] = {
             "timestamp": 0,
             "points_3d": [],
+            "rigid_hint_points_3d": [],
             "observations_by_camera": {},
             "triangulated_points": [],
+            "rigid_hint_triangulated_points": [],
             "reprojection_errors": [],
+            "rigid_hint_reprojection_errors": [],
             "triangulation_quality": _empty_triangulation_quality(),
+            "rigid_hint_quality": {},
             "contributing_rays": {"per_point": [], "summary": {}},
             "reprojection_error_px_summary": {},
             "epipolar_error_px_summary": {},
             "triangulation_angle_deg_summary": {},
             "assignment_diagnostics": {},
+            "object_gating": {},
             "pair_timestamp_range_us": 0,
         }
         
@@ -192,6 +199,9 @@ class TrackingPipeline:
         self._last_diagnostics_event_monotonic = 0.0
         self._diagnostics_event_interval_s = 1.0
         self._reacquire_guard_events: Deque[Dict[str, Any]] = deque(maxlen=2000)
+        self._object_gating_events: Deque[Dict[str, Any]] = deque(maxlen=2000)
+        self._rigid_hint_events: Deque[Dict[str, Any]] = deque(maxlen=2000)
+        self._rigid_hint_pose_events: Deque[Dict[str, Any]] = deque(maxlen=2000)
     
     def set_pose_callback(self, callback: Callable[[Dict[str, RigidBodyPose]], None]) -> None:
         """Set callback for estimated poses."""
@@ -297,13 +307,24 @@ class TrackingPipeline:
             
             # Triangulate
             result: Dict[str, Any] = {"reprojection_errors": []}
+            object_gating = {}
+            if self._calibration_loaded and hasattr(self.rigid_estimator, "evaluate_object_conditioned_gating"):
+                object_gating = self.rigid_estimator.evaluate_object_conditioned_gating(
+                    timestamp=timestamp,
+                    camera_params=self.geometry.camera_params,
+                    frames_by_camera=paired_frames.frames,
+                    coordinate_space="raw_pixel",
+                )
+                self._record_object_gating_events(timestamp, object_gating)
             stage_started_ns = time.perf_counter_ns()
             if self._calibration_loaded:
                 result = self.geometry.process_paired_frames(
                     paired_frames,
                     min_inlier_views=2,
+                    object_gating=object_gating,
                 )
                 points_3d = result.get("points_3d", [])
+                self._record_rigid_hint_events(timestamp, result.get("rigid_hint_quality", {}))
             else:
                 points_3d = []
             self._record_stage("triangulation_ms", self._elapsed_ms(stage_started_ns))
@@ -313,6 +334,7 @@ class TrackingPipeline:
             triangulation_quality = _copy_triangulation_quality(
                 result.get("triangulation_quality", _empty_triangulation_quality())
             )
+            rigid_hint_points = list(result.get("rigid_hint_points_3d", []) or [])
 
             with self._triangulation_lock:
                 self._latest_triangulation_snapshot = {
@@ -321,10 +343,21 @@ class TrackingPipeline:
                         point.tolist() if hasattr(point, "tolist") else list(point)
                         for point in points_3d_list
                     ],
+                    "rigid_hint_points_3d": [
+                        point.tolist() if hasattr(point, "tolist") else list(point)
+                        for point in rigid_hint_points
+                    ],
                     "observations_by_camera": dict(result.get("observations_by_camera", {})),
                     "triangulated_points": list(result.get("triangulated_points", [])),
+                    "rigid_hint_triangulated_points": list(
+                        result.get("rigid_hint_triangulated_points", [])
+                    ),
                     "reprojection_errors": list(result.get("reprojection_errors", [])),
+                    "rigid_hint_reprojection_errors": list(
+                        result.get("rigid_hint_reprojection_errors", [])
+                    ),
                     "triangulation_quality": triangulation_quality,
+                    "rigid_hint_quality": dict(result.get("rigid_hint_quality", {})),
                     "contributing_rays": dict(triangulation_quality.get("contributing_rays", {})),
                     "reprojection_error_px_summary": dict(
                         triangulation_quality.get("reprojection_error_px_summary", {})
@@ -336,6 +369,7 @@ class TrackingPipeline:
                         triangulation_quality.get("triangulation_angle_deg_summary", {})
                     ),
                     "assignment_diagnostics": dict(result.get("assignment_diagnostics", {})),
+                    "object_gating": dict(object_gating),
                     "pair_timestamp_range_us": paired_frames.timestamp_range_us,
                 }
             
@@ -353,12 +387,17 @@ class TrackingPipeline:
                     timestamp,
                     camera_params=self.geometry.camera_params,
                     observations_by_camera=result.get("observations_by_camera", {}),
+                    rigid_hint_triangulated_points=result.get(
+                        "rigid_hint_triangulated_points",
+                        [],
+                    ),
                     coordinate_space="raw_pixel",
                 )
             else:
                 poses = self.rigid_estimator.process_points(points_array, timestamp)
             self._record_stage("rigid_ms", self._elapsed_ms(stage_started_ns))
             self._record_reacquire_guard_events(timestamp)
+            self._record_rigid_hint_pose_events(timestamp)
             
             # Update metrics
             stage_started_ns = time.perf_counter_ns()
@@ -427,11 +466,24 @@ class TrackingPipeline:
             return get_diagnostics()
         return {}
 
+    @staticmethod
+    def _object_gating_from_tracking(tracking_status: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            name: dict(status.get("object_gating", {}))
+            for name, status in tracking_status.items()
+            if isinstance(status, dict) and isinstance(status.get("object_gating"), dict)
+        }
+
     def _diagnostics_snapshot(self) -> Dict[str, Any]:
+        tracking_status = self.rigid_estimator.get_tracking_status()
         return {
             "receiver": self.frame_processor.get_stats(),
             "geometry": self._geometry_diagnostics(),
-            "tracking": self.rigid_estimator.get_tracking_status(),
+            "tracking": tracking_status,
+            "object_gating": self._object_gating_from_tracking(tracking_status),
+            "object_gating_events": self.get_object_gating_events(limit=20),
+            "rigid_hint_events": self.get_rigid_hint_events(limit=20),
+            "rigid_hint_pose_events": self.get_rigid_hint_pose_events(limit=20),
             "reacquire_guard_events": self.get_reacquire_guard_events(limit=20),
             "pipeline_stage_ms": self._stage_diagnostics(),
             "logger": self._logger_diagnostics(),
@@ -472,8 +524,120 @@ class TrackingPipeline:
             ):
                 self.logger.log_event("reacquire_guard", event)
 
+    def _record_object_gating_events(
+        self,
+        timestamp: int,
+        object_gating: Dict[str, Dict[str, Any]],
+    ) -> None:
+        for rigid_name, gating in object_gating.items():
+            if not isinstance(gating, dict) or not gating.get("evaluated"):
+                continue
+            event = {
+                "timestamp": int(timestamp),
+                "rigid_name": str(rigid_name),
+                "mode": str(gating.get("mode", "")),
+                "reason": str(gating.get("reason", "")),
+                "confidence": float(gating.get("confidence", 0.0)),
+                "pixel_gate_px": float(gating.get("pixel_gate_px", 0.0)),
+                "assigned_marker_views": int(gating.get("assigned_marker_views", 0)),
+                "candidate_window_count": int(gating.get("candidate_window_count", 0)),
+                "markers_with_two_or_more_rays": int(gating.get("markers_with_two_or_more_rays", 0)),
+                "single_ray_candidates": int(gating.get("single_ray_candidates", 0)),
+                "generic_fallback_blob_count": int(gating.get("generic_fallback_blob_count", 0)),
+            }
+            self._object_gating_events.append(event)
+
+    def _record_rigid_hint_events(
+        self,
+        timestamp: int,
+        rigid_hint_quality: Dict[str, Any],
+    ) -> None:
+        if not isinstance(rigid_hint_quality, dict):
+            return
+        by_rigid = rigid_hint_quality.get("by_rigid", {})
+        if not isinstance(by_rigid, dict) or not by_rigid:
+            return
+        reprojection_summary = rigid_hint_quality.get("reprojection_error_px_summary", {})
+        if not isinstance(reprojection_summary, dict):
+            reprojection_summary = {}
+        for rigid_name, summary in by_rigid.items():
+            if not isinstance(summary, dict):
+                continue
+            self._rigid_hint_events.append(
+                {
+                    "timestamp": int(timestamp),
+                    "rigid_name": str(rigid_name),
+                    "candidate_markers": int(summary.get("candidate_markers", 0)),
+                    "markers_with_two_or_more_rays": int(
+                        summary.get("markers_with_two_or_more_rays", 0)
+                    ),
+                    "single_ray_candidates": int(summary.get("single_ray_candidates", 0)),
+                    "accepted_points": int(summary.get("accepted_points", 0)),
+                    "rejected_markers": int(summary.get("rejected_markers", 0)),
+                    "invalid_assignments": int(summary.get("invalid_assignments", 0)),
+                    "reprojection_mean_px": float(reprojection_summary.get("mean", 0.0)),
+                    "reprojection_p95_px": float(reprojection_summary.get("p95", 0.0)),
+                }
+            )
+
+    def _record_rigid_hint_pose_events(self, timestamp: int) -> None:
+        tracking = self.rigid_estimator.get_tracking_status()
+        for rigid_name, status in tracking.items():
+            if not isinstance(status, dict):
+                continue
+            hint_pose = status.get("rigid_hint_pose")
+            if not isinstance(hint_pose, dict) or not hint_pose.get("evaluated"):
+                continue
+            score = hint_pose.get("score", {})
+            generic_score = hint_pose.get("generic_score", {})
+            if not isinstance(score, dict):
+                score = {}
+            if not isinstance(generic_score, dict):
+                generic_score = {}
+            self._rigid_hint_pose_events.append(
+                {
+                    "timestamp": int(timestamp),
+                    "rigid_name": str(rigid_name),
+                    "reason": str(hint_pose.get("reason", "")),
+                    "valid": bool(hint_pose.get("valid", False)),
+                    "generic_valid": bool(hint_pose.get("generic_valid", False)),
+                    "would_improve_score": bool(hint_pose.get("would_improve_score", False)),
+                    "candidate_points": int(hint_pose.get("candidate_points", 0)),
+                    "observed_markers": int(hint_pose.get("observed_markers", 0)),
+                    "real_ray_count": int(hint_pose.get("real_ray_count", 0)),
+                    "virtual_marker_count": int(hint_pose.get("virtual_marker_count", 0)),
+                    "rms_error_m": float(hint_pose.get("rms_error_m", 0.0)),
+                    "generic_rms_error_m": float(hint_pose.get("generic_rms_error_m", 0.0)),
+                    "score": float(score.get("score", 0.0)),
+                    "generic_score": float(generic_score.get("score", 0.0)),
+                    "score_delta": float(hint_pose.get("score_delta", 0.0)),
+                    "position_delta_m": float(hint_pose.get("position_delta_m", 0.0)),
+                    "rotation_delta_deg": float(hint_pose.get("rotation_delta_deg", 0.0)),
+                    "matched_marker_views": int(score.get("matched_marker_views", 0)),
+                    "p95_error_px": float(score.get("p95_error_px", 0.0)),
+                }
+            )
+
     def get_reacquire_guard_events(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         events = list(self._reacquire_guard_events)
+        if limit is not None:
+            events = events[-max(0, int(limit)):]
+        return [dict(event) for event in events]
+
+    def get_object_gating_events(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        events = list(self._object_gating_events)
+        if limit is not None:
+            events = events[-max(0, int(limit)):]
+        return [dict(event) for event in events]
+
+    def get_rigid_hint_events(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        events = list(self._rigid_hint_events)
+        if limit is not None:
+            events = events[-max(0, int(limit)):]
+        return [dict(event) for event in events]
+
+    def get_rigid_hint_pose_events(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        events = list(self._rigid_hint_pose_events)
         if limit is not None:
             events = events[-max(0, int(limit)):]
         return [dict(event) for event in events]
@@ -490,6 +654,7 @@ class TrackingPipeline:
     def get_status(self) -> Dict[str, Any]:
         """Get current pipeline status."""
         triangulation = self.get_latest_triangulation_snapshot()
+        tracking_status = self.rigid_estimator.get_tracking_status()
         return {
             "running": self._running,
             "calibration_loaded": self._calibration_loaded,
@@ -498,14 +663,18 @@ class TrackingPipeline:
             "uptime_seconds": time.time() - self.start_time if self.start_time else 0,
             "receiver": self.frame_processor.get_stats(),
             "metrics": self.metrics.get_summary(),
-            "tracking": self.rigid_estimator.get_tracking_status(),
+            "tracking": tracking_status,
             "triangulation_quality": _copy_triangulation_quality(
                 triangulation.get("triangulation_quality", _empty_triangulation_quality())
             ),
             "diagnostics": {
                 "geometry": self._geometry_diagnostics(),
-                "tracking": self.rigid_estimator.get_tracking_status(),
+                "tracking": tracking_status,
                 "reacquire_guard_events": self.get_reacquire_guard_events(limit=20),
+                "object_gating": self._object_gating_from_tracking(tracking_status),
+                "object_gating_events": self.get_object_gating_events(limit=20),
+                "rigid_hint_events": self.get_rigid_hint_events(limit=20),
+                "rigid_hint_pose_events": self.get_rigid_hint_pose_events(limit=20),
                 "pipeline_stage_ms": self._stage_diagnostics(),
                 "logger": self._logger_diagnostics(),
             },
@@ -535,12 +704,35 @@ class TrackingPipeline:
                         [],
                     )
                 ],
+                "rigid_hint_points_3d": [
+                    list(point)
+                    for point in self._latest_triangulation_snapshot.get(
+                        "rigid_hint_points_3d",
+                        [],
+                    )
+                ],
+                "rigid_hint_triangulated_points": [
+                    dict(point)
+                    for point in self._latest_triangulation_snapshot.get(
+                        "rigid_hint_triangulated_points",
+                        [],
+                    )
+                ],
                 "reprojection_errors": list(self._latest_triangulation_snapshot["reprojection_errors"]),
+                "rigid_hint_reprojection_errors": list(
+                    self._latest_triangulation_snapshot.get(
+                        "rigid_hint_reprojection_errors",
+                        [],
+                    )
+                ),
                 "triangulation_quality": _copy_triangulation_quality(
                     self._latest_triangulation_snapshot.get(
                         "triangulation_quality",
                         _empty_triangulation_quality(),
                     )
+                ),
+                "rigid_hint_quality": dict(
+                    self._latest_triangulation_snapshot.get("rigid_hint_quality", {})
                 ),
                 "contributing_rays": {
                     "per_point": list(
@@ -575,6 +767,7 @@ class TrackingPipeline:
                     )
                 ),
                 "assignment_diagnostics": dict(self._latest_triangulation_snapshot.get("assignment_diagnostics", {})),
+                "object_gating": dict(self._latest_triangulation_snapshot.get("object_gating", {})),
                 "pair_timestamp_range_us": self._latest_triangulation_snapshot["pair_timestamp_range_us"],
             }
 

@@ -546,6 +546,24 @@ class Triangulator:
             "assignment_diagnostics": dict(assignment_diagnostics or _empty_assignment_diagnostics()),
         }
 
+    @staticmethod
+    def _empty_rigid_hint_quality(reason: str = "") -> Dict[str, Any]:
+        return {
+            "reason": str(reason),
+            "rigid_count": 0,
+            "candidate_markers": 0,
+            "markers_with_two_or_more_rays": 0,
+            "single_ray_candidates": 0,
+            "accepted_points": 0,
+            "rejected_markers": 0,
+            "invalid_assignments": 0,
+            "by_rigid": {},
+            "contributing_rays": {"per_point": [], "summary": _metric_summary([])},
+            "reprojection_error_px_summary": _metric_summary([]),
+            "triangulation_angle_deg_summary": _metric_summary([]),
+            "assignment_diagnostics": _empty_assignment_diagnostics(),
+        }
+
     # ---------------------------------------------------------------------- #
     # Cache management
     # ---------------------------------------------------------------------- #
@@ -1196,6 +1214,155 @@ class Triangulator:
         }
         return points_3d, errors
 
+    def triangulate_rigid_hints(
+        self,
+        object_gating: Optional[Dict[str, Any]],
+        *,
+        min_inlier_views: int = 2,
+    ) -> Tuple[List[np.ndarray], List[float], List[Dict[str, Any]], Dict[str, Any]]:
+        """
+        Triangulate object-conditioned marker assignments beside generic matching.
+
+        The returned points are diagnostics-only. They intentionally do not
+        replace the generic epipolar triangulation output until adoption metrics
+        show that the hinted lane is safer for pose estimation.
+        """
+        if not object_gating:
+            return [], [], [], self._empty_rigid_hint_quality("no_object_gating")
+        if not self._last_observations_by_camera:
+            return [], [], [], self._empty_rigid_hint_quality("no_observations")
+
+        points_3d: List[np.ndarray] = []
+        errors: List[float] = []
+        triangulated_points: List[TriangulatedPoint] = []
+        diagnostics = _empty_assignment_diagnostics()
+        accepted_contributing_rays: List[int] = []
+        accepted_reprojection_errors: List[float] = []
+        accepted_triangulation_angles: List[float] = []
+        by_rigid: Dict[str, Any] = {}
+
+        total_candidate_markers = 0
+        total_two_or_more_rays = 0
+        total_single_ray = 0
+        total_rejected = 0
+        total_invalid = 0
+
+        for rigid_name, gating in object_gating.items():
+            if not isinstance(gating, dict) or not gating.get("evaluated"):
+                continue
+            per_camera = gating.get("per_camera")
+            if not isinstance(per_camera, dict):
+                continue
+
+            observations_by_marker: Dict[int, List[_BlobObservation]] = {}
+            invalid_assignments = 0
+            for camera_id, camera_payload in per_camera.items():
+                if not isinstance(camera_payload, dict):
+                    continue
+                camera_observations = self._last_observations_by_camera.get(str(camera_id), [])
+                assignments = camera_payload.get("assignments", [])
+                if not isinstance(assignments, list):
+                    continue
+                for assignment in assignments:
+                    if not isinstance(assignment, dict):
+                        continue
+                    try:
+                        marker_idx = int(assignment["marker_idx"])
+                        blob_index = int(assignment["blob_index"])
+                    except (KeyError, TypeError, ValueError):
+                        invalid_assignments += 1
+                        continue
+                    if marker_idx < 0 or blob_index < 0 or blob_index >= len(camera_observations):
+                        invalid_assignments += 1
+                        continue
+                    observations_by_marker.setdefault(marker_idx, []).append(
+                        camera_observations[blob_index]
+                    )
+
+            candidate_markers = int(len(observations_by_marker))
+            two_or_more = int(
+                sum(1 for observations in observations_by_marker.values() if len(observations) >= 2)
+            )
+            single_ray = int(
+                sum(1 for observations in observations_by_marker.values() if len(observations) == 1)
+            )
+            accepted_for_rigid = 0
+            rejected_for_rigid = 0
+
+            for marker_idx, observations in sorted(observations_by_marker.items()):
+                if len(observations) < 2:
+                    continue
+                candidate = self._refine_candidate_observation(
+                    observations,
+                    diagnostics,
+                    required_inlier_views=min_inlier_views,
+                )
+                if candidate is None:
+                    rejected_for_rigid += 1
+                    continue
+
+                candidate_point = np.asarray(candidate["point_3d"], dtype=np.float64)
+                candidate_reprojection = [float(v) for v in candidate["reprojection_errors"]]
+                points_3d.append(candidate_point)
+                errors.append(float(np.mean(candidate_reprojection)))
+                accepted_for_rigid += 1
+                _increment_diagnostic(diagnostics, "assignment_matches", "triangulated_pairs")
+
+                accepted_contributing_rays.append(int(candidate["contributing_rays"]))
+                accepted_reprojection_errors.extend(candidate_reprojection)
+                angle_summary = candidate["triangulation_angle_deg_summary"]
+                if angle_summary.get("count", 0) > 0:
+                    accepted_triangulation_angles.append(float(angle_summary["max"]))
+                triangulated_points.append(
+                    TriangulatedPoint(
+                        point=candidate_point,
+                        observations=tuple(candidate["inlier_observations"]),
+                        reprojection_errors_px=tuple(candidate_reprojection),
+                        epipolar_errors_px=tuple(float(v) for v in candidate["epipolar_errors"]),
+                        triangulation_angles_deg=tuple(
+                            float(v) for v in candidate["triangulation_angles_deg"]
+                        ),
+                        source="rigid_hint",
+                        rigid_name=str(rigid_name),
+                        marker_idx=int(marker_idx),
+                    )
+                )
+
+            total_candidate_markers += candidate_markers
+            total_two_or_more_rays += two_or_more
+            total_single_ray += single_ray
+            total_rejected += rejected_for_rigid
+            total_invalid += invalid_assignments
+            by_rigid[str(rigid_name)] = {
+                "candidate_markers": candidate_markers,
+                "markers_with_two_or_more_rays": two_or_more,
+                "single_ray_candidates": single_ray,
+                "accepted_points": int(accepted_for_rigid),
+                "rejected_markers": int(rejected_for_rigid),
+                "invalid_assignments": int(invalid_assignments),
+            }
+
+        serialized_points = [point.to_dict() for point in triangulated_points]
+        quality = {
+            "reason": "ok" if by_rigid else "no_evaluated_rigids",
+            "rigid_count": int(len(by_rigid)),
+            "candidate_markers": int(total_candidate_markers),
+            "markers_with_two_or_more_rays": int(total_two_or_more_rays),
+            "single_ray_candidates": int(total_single_ray),
+            "accepted_points": int(len(points_3d)),
+            "rejected_markers": int(total_rejected),
+            "invalid_assignments": int(total_invalid),
+            "by_rigid": by_rigid,
+            "contributing_rays": {
+                "per_point": list(accepted_contributing_rays),
+                "summary": _metric_summary([float(v) for v in accepted_contributing_rays]),
+            },
+            "reprojection_error_px_summary": _metric_summary(accepted_reprojection_errors),
+            "triangulation_angle_deg_summary": _metric_summary(accepted_triangulation_angles),
+            "assignment_diagnostics": dict(diagnostics),
+        }
+        return points_3d, errors, serialized_points, quality
+
     def triangulate_points(
         self,
         image_points_list: List[List[Tuple[float, float]]],
@@ -1224,6 +1391,7 @@ class GeometryPipeline:
         self.calibration_validation: Dict[str, Any] = {}
         self.epipolar_threshold_px = _EPIPOLAR_THRESHOLD_PX
         self._latest_quality_metrics: Dict[str, Any] = Triangulator._empty_quality_metrics()
+        self._latest_rigid_hint_quality: Dict[str, Any] = Triangulator._empty_rigid_hint_quality()
 
     @staticmethod
     def _extract_validation_summary(meta: Dict[str, Any]) -> Dict[str, Any]:
@@ -1278,6 +1446,7 @@ class GeometryPipeline:
         self.calibration_validation = {}
         self.epipolar_threshold_px = _EPIPOLAR_THRESHOLD_PX
         self._latest_quality_metrics = Triangulator._empty_quality_metrics()
+        self._latest_rigid_hint_quality = Triangulator._empty_rigid_hint_quality()
         for cam_id, calib in calibrations.items():
             if isinstance(calib, CameraParams):
                 self.camera_params[cam_id] = calib
@@ -1338,6 +1507,7 @@ class GeometryPipeline:
         paired_frames,
         *,
         min_inlier_views: int = 2,
+        object_gating: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Process paired frames to extract 3D points."""
         if not self.triangulator:
@@ -1352,16 +1522,30 @@ class GeometryPipeline:
         observations_by_camera = self.triangulator.last_observations_by_camera
         triangulated_points = self.triangulator.last_triangulated_points
         self._latest_quality_metrics = quality_metrics
+        (
+            rigid_hint_points,
+            rigid_hint_errors,
+            rigid_hint_triangulated_points,
+            rigid_hint_quality,
+        ) = self.triangulator.triangulate_rigid_hints(
+            object_gating,
+            min_inlier_views=min_inlier_views,
+        )
+        self._latest_rigid_hint_quality = rigid_hint_quality
 
         return {
             "timestamp": paired_frames.timestamp,
             "camera_ids": paired_frames.camera_ids,
             "points_3d": points_3d,
+            "rigid_hint_points_3d": rigid_hint_points,
             "observations_by_camera": observations_by_camera,
             "triangulated_points": triangulated_points,
+            "rigid_hint_triangulated_points": rigid_hint_triangulated_points,
             "reprojection_errors": errors,
+            "rigid_hint_reprojection_errors": rigid_hint_errors,
             "assignment_diagnostics": assignment_diagnostics,
             "triangulation_quality": quality_metrics,
+            "rigid_hint_quality": rigid_hint_quality,
             "mean_error": float(np.mean(errors)) if errors else 0.0,
             "point_count": len(points_3d),
         }
@@ -1386,6 +1570,7 @@ class GeometryPipeline:
             return {
                 "assignment": _empty_assignment_diagnostics(),
                 "quality": Triangulator._empty_quality_metrics(),
+                "rigid_hint": Triangulator._empty_rigid_hint_quality(),
                 "epipolar_threshold_px": float(self.epipolar_threshold_px),
                 "calibration_validation": dict(self.calibration_validation),
                 "cameras": camera_diagnostics,
@@ -1393,6 +1578,7 @@ class GeometryPipeline:
         return {
             "assignment": self.triangulator.last_assignment_diagnostics,
             "quality": self.triangulator.last_quality_metrics,
+            "rigid_hint": dict(self._latest_rigid_hint_quality),
             "epipolar_threshold_px": float(self.epipolar_threshold_px),
             "calibration_validation": dict(self.calibration_validation),
             "cameras": camera_diagnostics,

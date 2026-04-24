@@ -1,3 +1,5 @@
+- Phase 5 rigid stabilization now compares diagnostics-only `rigid_hint` poses against generic poses in replay summaries so Phase 6 subset RANSAC inputs are ready
+- Phase 5 rigid stabilization now reports object-conditioned 2D gates plus diagnostics-only `rigid_hint` triangulated points beside generic triangulation
 - Phase 4.5 reacquire guard tuning now uses a 136 degree rotation-innovation threshold that keeps replay valid-frame loss under the go/no-go budget
 - Phase 4.5 rigid stabilization replay now records per-frame reacquire guard events and compares shadow versus enforced guard outcomes before Phase 5
 - rigid body stabilization planning now folds Phase 5 prerequisites into Phase 4.5 sub-steps instead of adding a separate Phase 4.6

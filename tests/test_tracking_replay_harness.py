@@ -88,6 +88,40 @@ class _FakePipeline:
             },
         }
 
+    def get_rigid_hint_events(self):
+        return [
+            {
+                "rigid_name": "waist",
+                "candidate_markers": 4,
+                "markers_with_two_or_more_rays": 4,
+                "single_ray_candidates": 0,
+                "accepted_points": 4,
+                "rejected_markers": 0,
+                "invalid_assignments": 0,
+                "reprojection_mean_px": 0.5,
+                "reprojection_p95_px": 0.75,
+            }
+        ]
+
+    def get_rigid_hint_pose_events(self):
+        return [
+            {
+                "rigid_name": "waist",
+                "valid": True,
+                "generic_valid": True,
+                "would_improve_score": False,
+                "candidate_points": 4,
+                "observed_markers": 4,
+                "real_ray_count": 8,
+                "virtual_marker_count": 0,
+                "score_delta": 0.0,
+                "position_delta_m": 0.0,
+                "rotation_delta_deg": 0.0,
+                "p95_error_px": 0.75,
+                "reason": "ok",
+            }
+        ]
+
 
 def test_replay_tracking_log_injects_frames_through_frame_processor(
     monkeypatch, tmp_path: Path
@@ -107,6 +141,9 @@ def test_replay_tracking_log_injects_frames_through_frame_processor(
     assert summary["poses_estimated"] == 1
     assert summary["tracking"]["waist"]["valid"] is True
     assert "reacquire_guard_summary" in summary
+    assert "object_gating_summary" in summary
+    assert summary["rigid_hint_summary"]["totals"]["accepted_points"] == 4
+    assert summary["rigid_hint_pose_summary"]["totals"]["phase6_ready"] is True
     assert summary["phase45_go_no_go"]["decision"] in {
         "no_reacquire_reject_signal",
         "pending_enforcement_replay",

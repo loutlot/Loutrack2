@@ -8,7 +8,13 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from host.geo import CameraParams, create_dummy_calibration
-from host.rigid import ReacquireGuardConfig, RigidBodyEstimator, RigidBodyPose, WAIST_PATTERN
+from host.rigid import (
+    ObjectGatingConfig,
+    ReacquireGuardConfig,
+    RigidBodyEstimator,
+    RigidBodyPose,
+    WAIST_PATTERN,
+)
 
 
 def _project(camera: CameraParams, point: np.ndarray) -> tuple[float, float]:
@@ -158,3 +164,82 @@ def test_reacquire_guard_enforcement_commits_invalid_pose_when_candidate_fails()
     assert guard["would_reject"] is True
     assert guard["rejected_count"] == 1
     assert diagnostics["invalid_reason"] == "reprojection_guard_rejected"
+
+
+class _Frame:
+    def __init__(self, blobs: list[dict[str, float]]) -> None:
+        self.blobs = blobs
+
+
+def test_object_conditioned_gating_assigns_predicted_marker_windows() -> None:
+    cameras = create_dummy_calibration(["cam0", "cam1"], focal_length=800.0)
+    points_world = WAIST_PATTERN.marker_positions + np.array([0.0, 0.0, 2.5])
+    observations = _observations_for_points(cameras, points_world)
+    estimator = RigidBodyEstimator(patterns=[WAIST_PATTERN])
+    estimator.process_context(
+        points_world,
+        1_000_000,
+        camera_params=cameras,
+        observations_by_camera=observations,
+    )
+    frames = {
+        camera_id: _Frame([
+            {"x": float(obs["raw_uv"][0]), "y": float(obs["raw_uv"][1]), "area": 4.0}
+            for obs in camera_observations
+        ])
+        for camera_id, camera_observations in observations.items()
+    }
+
+    gating = estimator.evaluate_object_conditioned_gating(
+        timestamp=1_016_000,
+        camera_params=cameras,
+        frames_by_camera=frames,
+    )["waist"]
+
+    assert gating["evaluated"] is True
+    assert gating["prediction_valid"] is True
+    assert gating["candidate_window_count"] == 8
+    assert gating["assigned_marker_views"] == 8
+    assert gating["markers_with_two_or_more_rays"] == WAIST_PATTERN.num_markers
+    assert gating["generic_fallback_blob_count"] == 0
+    assert gating["pixel_gate_px"] >= ObjectGatingConfig().pixel_min
+    assert estimator.get_tracking_status()["waist"]["object_gating"]["assigned_marker_views"] == 8
+
+
+def test_process_context_reports_rigid_hint_pose_side_by_side_without_commit() -> None:
+    cameras = create_dummy_calibration(["cam0", "cam1"], focal_length=800.0)
+    points_world = WAIST_PATTERN.marker_positions + np.array([0.0, 0.0, 2.5])
+    observations = _observations_for_points(cameras, points_world)
+    rigid_hint_points = [
+        {
+            "point": [float(value) for value in point],
+            "source": "rigid_hint",
+            "rigid_name": "waist",
+            "marker_idx": marker_idx,
+            "is_virtual": False,
+            "contributing_rays": 2,
+            "reprojection_errors_px": [0.0, 0.0],
+        }
+        for marker_idx, point in enumerate(points_world)
+    ]
+    estimator = RigidBodyEstimator(patterns=[WAIST_PATTERN])
+
+    poses = estimator.process_context(
+        points_world,
+        1_000_000,
+        camera_params=cameras,
+        observations_by_camera=observations,
+        rigid_hint_triangulated_points=rigid_hint_points,
+    )
+
+    assert poses["waist"].valid is True
+    diagnostics = estimator.get_tracking_status()["waist"]["rigid_hint_pose"]
+    assert diagnostics["evaluated"] is True
+    assert diagnostics["diagnostics_only"] is True
+    assert diagnostics["valid"] is True
+    assert diagnostics["generic_valid"] is True
+    assert diagnostics["candidate_points"] == WAIST_PATTERN.num_markers
+    assert diagnostics["marker_indices"] == [0, 1, 2, 3]
+    assert diagnostics["score"]["matched_marker_views"] == 8
+    assert diagnostics["position_delta_m"] < 1e-9
+    assert diagnostics["rotation_delta_deg"] < 1e-6

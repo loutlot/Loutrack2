@@ -85,8 +85,8 @@ def test_tracking_pipeline_reports_stage_and_logger_diagnostics(tmp_path: Path) 
     pipeline._diagnostics_event_interval_s = 0.0
 
     class _Geometry:
-        def process_paired_frames(self, _paired_frames, *, min_inlier_views=2):
-            _ = min_inlier_views
+        def process_paired_frames(self, _paired_frames, *, min_inlier_views=2, object_gating=None):
+            _ = (min_inlier_views, object_gating)
             return {
                 "points_3d": [np.array([1.0, 2.0, 3.0])],
                 "observations_by_camera": {
@@ -208,8 +208,8 @@ def test_tracking_pipeline_logs_reacquire_guard_events(tmp_path: Path) -> None:
     class _Geometry:
         camera_params = {}
 
-        def process_paired_frames(self, _paired_frames, *, min_inlier_views=2):
-            _ = min_inlier_views
+        def process_paired_frames(self, _paired_frames, *, min_inlier_views=2, object_gating=None):
+            _ = (min_inlier_views, object_gating)
             return {
                 "points_3d": [np.array([1.0, 2.0, 3.0])],
                 "reprojection_errors": [0.25],
@@ -298,7 +298,8 @@ def test_tracking_pipeline_keeps_fixed_pair_window_and_omits_sync_status() -> No
     min_inlier_view_calls: list[int] = []
 
     class _Geometry:
-        def process_paired_frames(self, _paired_frames, *, min_inlier_views=2):
+        def process_paired_frames(self, _paired_frames, *, min_inlier_views=2, object_gating=None):
+            _ = object_gating
             min_inlier_view_calls.append(int(min_inlier_views))
             return {
                 "points_3d": [np.array([1.0, 2.0, 3.0])],

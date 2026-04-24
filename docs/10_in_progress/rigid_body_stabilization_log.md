@@ -1032,3 +1032,371 @@ Go / no-go:
 - 次に実機の静止ログ / stress log を取り、同じ `compare_reacquire_guard_enforcement()` で `136 deg` 設定を評価する。
 - stress log でも `valid_drop_ratio <= 2%`, `pose_flip_deg not worse`, `pose_jump_count not worse` なら、runtime config から enforcement を明示的に有効化する候補にできる。
 - Phase 5 には進める。Phase 5 では object-conditioned gating の default を diagnostics-only にし、Phase 4.5 enforcement と同時に強くしすぎないようにする。
+
+## 2026-04-24 - Phase 5 Object-conditioned 2D Gating Diagnostics
+
+### 実装結果
+
+- `src/host/rigid.py` に `ObjectGatingConfig` と object-conditioned gating diagnostics を追加した。
+- `RigidBodyEstimator.evaluate_object_conditioned_gating()` を追加し、tracker の `peek_prediction(timestamp)` から predicted marker world positions を作るようにした。
+- 各 camera へ predicted marker を raw pixel projection し、marker x blob の cost matrix を作って Hungarian assignment で one-to-one に割り当てるようにした。
+- Pixel gate は prediction uncertainty から `pixel_min=4px` と `pixel_max=16px` の範囲に clamp する。
+- `single_ray_confidence_min=0.75` 未満では single-ray candidate を許可しない diagnostics にした。
+- Phase 5 初回では generic triangulation の入力は変更していない。object-conditioned gating は diagnostics-only。
+- `TrackingPipeline` が triangulation 前に object-conditioned gating を評価し、latest triangulation snapshot と diagnostics に `object_gating` を載せるようにした。
+- `TrackingPipeline.get_object_gating_events()` を追加し、per-frame object gating event を replay summary へ出せるようにした。
+- `TrackingReplaySummary` に `object_gating_events` と `object_gating_summary` を追加した。
+- `tests/test_rigid_reprojection_scoring.py` に、2 camera x 4 marker の predicted windows が 8 marker-view assignment になる unit test を追加した。
+- `changelog.md` に Phase 5 diagnostics の進捗を記録した。
+
+### データ契約
+
+`tracking.<name>.object_gating` は以下の形で出る。
+
+```json
+{
+  "enabled": true,
+  "enforced": false,
+  "evaluated": true,
+  "reason": "ok",
+  "mode": "continue",
+  "prediction_valid": true,
+  "confidence": 0.4613978082521978,
+  "pixel_gate_px": 6.123284450728988,
+  "camera_count": 2,
+  "marker_count": 4,
+  "candidate_window_count": 8,
+  "assigned_marker_views": 8,
+  "unmatched_marker_views": 0,
+  "duplicate_assignment_count": 0,
+  "markers_with_two_or_more_rays": 4,
+  "markers_with_one_ray": 0,
+  "single_ray_candidates": 0,
+  "generic_fallback_blob_count": 0,
+  "allow_single_ray": false,
+  "per_marker_ray_count": [2, 2, 2, 2]
+}
+```
+
+Replay summary には `object_gating_summary` が追加される。
+
+```json
+{
+  "event_totals": {
+    "event_count": 496,
+    "assigned_marker_views": 3773,
+    "candidate_window_count": 3968,
+    "markers_with_two_or_more_rays": 1861,
+    "single_ray_candidates": 4,
+    "generic_fallback_blob_count": 178
+  }
+}
+```
+
+### 検証
+
+OpenCV が入っている Python 3.13 の一時 venv で検証した。
+
+```bash
+/tmp/loutrack-py313-test/bin/python -m pytest \
+  tests/test_rigid_reprojection_scoring.py \
+  tests/test_rigid_body_tracker_stats.py \
+  tests/test_pattern_evaluator.py \
+  tests/test_geo_blob_assignment.py \
+  tests/test_tracking_pipeline_diagnostics.py \
+  tests/test_tracking_replay_harness.py
+```
+
+結果: `35 passed`
+
+実ログ replay:
+
+```bash
+/tmp/loutrack-py313-test/bin/python - <<'PY'
+from src.host.tracking_replay_harness import replay_tracking_log
+s = replay_tracking_log(
+    log_path='logs/tracking_gui.jsonl',
+    calibration_path='calibration',
+    patterns=['waist'],
+    rigids_path='calibration/tracking_rigids.json',
+).to_dict()
+print(s['object_gating_summary'])
+PY
+```
+
+結果:
+
+- frames processed: `497`
+- valid poses: `493`
+- max pose flip candidate: `138.43282502436344 deg`
+- object gating events: `496`
+- candidate windows: `3968`
+- assigned marker views: `3773`
+- markers with 2+ rays: `1861`
+- single-ray candidates: `4`
+- generic fallback blobs: `178`
+- latest frame assigned marker views: `8 / 8`
+- latest frame markers with 2+ rays: `4 / 4`
+- latest frame fallback blobs: `0`
+
+### 読み取り
+
+Phase 5 初回は diagnostics-only なので、Phase 4.5 shadow と同じ `493 / 497` valid を維持した。これは意図どおり。
+
+一方、実ログのほぼ全 frame で predicted marker windows が評価され、累計 `3773 / 3968` marker-view assignment が成立した。最終 frame では `8 / 8` assignment、全 marker が 2 ray 以上を持ち、fallback blob も `0` だった。これは object-conditioned gating が次の constrained triangulation へ進めるだけの材料をかなり持っていることを示す。
+
+ただし single-ray candidates は累計 `4` と少ない。今回のログでは 2 camera 両方で見えている frame が多いため、single-ray continuation の効果はこのログだけでは評価しづらい。遮蔽 stress log が必要。
+
+### 次に期待すること
+
+- 次は Phase 5B として、object-conditioned gating から `source = "rigid_hint"` の constrained triangulated points を作る。ただし generic triangulation は fallback として残す。
+- 最初は constrained points を commit には使わず、generic points と side-by-side で `rigid_hint_points`, `generic_points`, `fallback_blob_count` を replay summary に出す。
+- `confidence < 0.75` のときは single-ray virtual marker を作らない方針を維持する。
+- `single_ray_candidates` の評価には、片 camera 遮蔽を含む stress log を取る必要がある。
+- Phase 4.5 enforcement と Phase 5 constrained triangulation を同時に強くしない。次の実装でも default は diagnostics-only にするのが安全。
+
+## Phase 5B - Diagnostics-only rigid-hint triangulation
+
+### 実装結果
+
+- `src/host/geo.py` に `Triangulator.triangulate_rigid_hints()` を追加した。
+- Phase 5A の `object_gating.per_camera.assignments` を、同フレームで生成済みの `BlobObservation2D` に引き直し、`marker_idx` ごとに 2 ray 以上あるものだけを `source = "rigid_hint"` の `TriangulatedPoint` として3D化するようにした。
+- `GeometryPipeline.process_paired_frames()` は既存の `points_3d` / `triangulated_points` を変更せず、別キーとして `rigid_hint_points_3d`, `rigid_hint_triangulated_points`, `rigid_hint_reprojection_errors`, `rigid_hint_quality` を返す。
+- `TrackingPipeline` は triangulation 時に `object_gating` を渡し、latest triangulation snapshot と diagnostics に `rigid_hint` の結果を残す。
+- `TrackingPipeline.get_rigid_hint_events()` と replay summary の `rigid_hint_summary` を追加し、実ログ全体で hint lane の accepted / rejected を集計できるようにした。
+- 採択ロジックはまだ変えていない。rigid pose estimation は従来どおり generic `points_3d` を使う。
+- `tests/test_geo_blob_assignment.py` に、shuffled blob order でも object-gating assignment から marker-indexed rigid hint 3D点が4点出る test を追加した。
+- `changelog.md` に Phase 5B の user-visible diagnostics 進捗を記録した。
+
+### データ契約
+
+`GeometryPipeline.process_paired_frames()` の返り値に以下が追加される。
+
+```json
+{
+  "rigid_hint_points_3d": [[...]],
+  "rigid_hint_triangulated_points": [
+    {
+      "source": "rigid_hint",
+      "rigid_name": "waist",
+      "marker_idx": 0,
+      "contributing_rays": 2,
+      "reprojection_errors_px": [...]
+    }
+  ],
+  "rigid_hint_quality": {
+    "reason": "ok",
+    "rigid_count": 1,
+    "candidate_markers": 4,
+    "markers_with_two_or_more_rays": 4,
+    "single_ray_candidates": 0,
+    "accepted_points": 4,
+    "rejected_markers": 0,
+    "invalid_assignments": 0
+  }
+}
+```
+
+Replay summary には `rigid_hint_summary` が追加される。
+
+```json
+{
+  "totals": {
+    "event_count": 496,
+    "candidate_markers": 1912,
+    "markers_with_two_or_more_rays": 1861,
+    "single_ray_candidates": 51,
+    "accepted_points": 1859,
+    "rejected_markers": 2,
+    "invalid_assignments": 0
+  }
+}
+```
+
+### 検証
+
+OpenCV が入っている Python 3.13 の一時 venv で検証した。
+
+```bash
+/tmp/loutrack-py313-test/bin/python -m pytest \
+  tests/test_geo_blob_assignment.py \
+  tests/test_tracking_pipeline_diagnostics.py \
+  tests/test_rigid_reprojection_scoring.py \
+  tests/test_rigid_body_tracker_stats.py \
+  tests/test_pattern_evaluator.py \
+  tests/test_tracking_replay_harness.py
+```
+
+結果: `36 passed`
+
+実ログ replay:
+
+```bash
+/tmp/loutrack-py313-test/bin/python - <<'PY'
+from src.host.tracking_replay_harness import replay_tracking_log
+summary = replay_tracking_log(
+    log_path='logs/tracking_gui.jsonl',
+    calibration_path='calibration',
+    patterns=['waist'],
+    rigids_path='calibration/tracking_rigids.json',
+)
+s = summary.to_dict()
+print(s['object_gating_summary'])
+print(s['rigid_hint_summary'])
+print(s['geometry'].get('rigid_hint'))
+PY
+```
+
+結果:
+
+- frames processed: `497`
+- valid poses: `493`
+- object gating events: `496`
+- object gating assigned marker views: `3773 / 3968`
+- object gating markers with 2+ rays: `1861`
+- object gating generic fallback blobs: `178`
+- rigid hint events: `496`
+- rigid hint candidate markers: `1912`
+- rigid hint markers with 2+ rays: `1861`
+- rigid hint accepted points: `1859`
+- rigid hint rejected markers: `2`
+- rigid hint invalid assignments: `0`
+- rigid hint reprojection mean over events: `0.3226566969905932 px`
+- rigid hint reprojection p95 over events: `0.5830684700602324 px`
+- latest frame rigid hint accepted points: `4 / 4`
+- latest frame rigid hint reprojection mean: `0.6255842174435337 px`
+
+### 読み取り
+
+Phase 5B は diagnostics-only なので、Phase 5A と同じ `493 / 497` valid を維持した。これは意図どおり。
+
+重要なのは、2D gate で2 ray以上そろった `1861` marker のうち、`1859` 点が rigid hint triangulation まで通ったこと。rejected は `2` のみで、invalid assignment は `0`。このログでは object-conditioned matching の対応表が3D化に十分使える品質を持っている。
+
+一方、`single_ray_candidates` は object-gating event 側では `4` だったが、rigid hint candidate marker 側では `51` になった。これは Phase 5A の `single_ray_candidates` が confidence threshold を通ったものだけを数えるのに対し、Phase 5B の rigid hint summary は「1 rayしか持たない marker」を素朴に数えているため。採択候補としての single-ray continuation へ進める前に、ここは naming を `one_ray_markers` と `single_ray_commit_candidates` に分けると誤読が減る。
+
+### 次に期待すること
+
+- 次は Phase 5C として、`rigid_hint_points_3d` を pose estimator へ side-by-side 入力し、generic pose と rigid-hint pose の両方を score する。ただし commit はまだ generic 優先にする。
+- `single_ray_candidates` の名前を整理し、virtual marker を作れる候補と単なる1 ray観測を分ける。
+- Phase 5C の go/no-go は、同ログで `rigid_hint_pose.valid >= generic_pose.valid`、flip candidate が増えないこと、reprojection score p95 が悪化しないことを条件にする。
+- 片 camera 遮蔽 stress log が取れたら、single-ray virtual marker の効果をそこで初めて評価する。
+
+## Phase 5C - Rigid-hint pose comparison / Phase 6 readiness
+
+### 実装結果
+
+- `RigidBodyEstimator.process_context()` に `rigid_hint_triangulated_points` を渡せるようにした。
+- `source = "rigid_hint"` かつ marker index 付きの3D点から、marker correspondence 固定の Kabsch pose を diagnostics-only で解くようにした。
+- 現行の generic pose 採択は変更していない。`rigid_hint_pose` は `TrackingStatus` に比較診断として載るだけ。
+- `rigid_hint_pose` は generic pose と同じ `reprojection_score` で評価し、`score_delta`, `position_delta_m`, `rotation_delta_deg`, `would_improve_score` を出す。
+- `TrackingPipeline.get_rigid_hint_pose_events()` を追加し、replay summary に `rigid_hint_pose_summary` を追加した。
+- `rigid_hint_pose_summary.totals` では、`hint_pose_adoption_ready` と `phase6_ready` を分けた。
+- `hint_pose_adoption_ready` は「hint poseをそのまま採択してよいか」の厳しめ判定。
+- `phase6_ready` は「Phase 6 の subset RANSAC / weighted solve を実装・検証する入力がそろったか」の判定。
+- `tests/test_rigid_reprojection_scoring.py` に、rigid hint pose が generic pose と side-by-side で評価され、採択を変えない test を追加した。
+- `tests/test_tracking_replay_harness.py` に、`rigid_hint_pose_summary` の replay summary test を追加した。
+- `changelog.md` に Phase 5C / Phase 6 readiness の進捗を記録した。
+
+### データ契約
+
+`tracking.<name>.rigid_hint_pose` は以下の形で出る。
+
+```json
+{
+  "evaluated": true,
+  "reason": "ok",
+  "diagnostics_only": true,
+  "valid": true,
+  "generic_valid": true,
+  "would_improve_score": false,
+  "candidate_points": 4,
+  "observed_markers": 4,
+  "real_ray_count": 8,
+  "virtual_marker_count": 0,
+  "rms_error_m": 0.0015512782290946932,
+  "generic_rms_error_m": 0.0015512782290946932,
+  "score_delta": 0.0,
+  "position_delta_m": 0.0,
+  "rotation_delta_deg": 0.0,
+  "marker_indices": [0, 1, 2, 3]
+}
+```
+
+Replay summary には `rigid_hint_pose_summary` が追加される。
+
+```json
+{
+  "totals": {
+    "event_count": 472,
+    "valid_count": 459,
+    "generic_valid_count": 469,
+    "would_improve_score_count": 6,
+    "hint_pose_adoption_ready": false,
+    "phase6_ready": true
+  }
+}
+```
+
+### 検証
+
+OpenCV が入っている Python 3.13 の一時 venv で検証した。
+
+```bash
+/tmp/loutrack-py313-test/bin/python -m pytest \
+  tests/test_geo_blob_assignment.py \
+  tests/test_tracking_pipeline_diagnostics.py \
+  tests/test_rigid_reprojection_scoring.py \
+  tests/test_rigid_body_tracker_stats.py \
+  tests/test_pattern_evaluator.py \
+  tests/test_tracking_replay_harness.py
+```
+
+結果: `37 passed`
+
+実ログ replay:
+
+```bash
+/tmp/loutrack-py313-test/bin/python - <<'PY'
+from src.host.tracking_replay_harness import replay_tracking_log
+summary = replay_tracking_log(
+    log_path='logs/tracking_gui.jsonl',
+    calibration_path='calibration',
+    patterns=['waist'],
+    rigids_path='calibration/tracking_rigids.json',
+)
+s = summary.to_dict()
+print(s['rigid_hint_pose_summary']['totals'])
+print(s['rigid_hint_pose_summary']['by_rigid'])
+PY
+```
+
+結果:
+
+- frames processed: `497`
+- valid poses: `493`
+- rigid hint pose events: `472`
+- rigid hint pose valid: `459`
+- generic pose valid on same events: `469`
+- rigid hint pose would improve score: `6`
+- rigid hint pose score delta mean: `0.004390109475119149`
+- rigid hint pose p95 reprojection p95: `1.2200366323622638 px`
+- max position delta: `0.023933041220510813 m`
+- max rotation delta: `107.54560432521374 deg`
+- reasons: `ok = 459`, `insufficient_rigid_hint_points = 13`
+- `hint_pose_adoption_ready = false`
+- `phase6_ready = true`
+
+### 読み取り
+
+Phase 5C の結果、Phase 6 は実装可能な状態になった。理由は、generic pose と rigid-hint pose を同じ replay 経路・同じ 2D score で横並び比較でき、Phase 6 の hypothesis selection に必要な candidate pose / score / delta / marker coverage がそろったため。
+
+ただし、rigid hint pose をそのまま採択する段階ではない。`valid_count` は `459` で、同じ event 上の `generic_valid_count = 469` を下回る。また、最大 rotation delta が `107.5 deg` あるため、subset RANSAC / weighted solve なしで hint pose を commit すると flip を拾う危険が残る。
+
+これは Phase 6 に進む理由としてはむしろ健全。Phase 6 では、複数 subset hypothesis を作り、Phase 4 の 2D score と Phase 5C の generic-vs-hint delta を使って、flip しそうな hypothesis を落とす。
+
+### 次に期待すること
+
+- Phase 6 は実装可能。
+- Phase 6 の first step は、3-marker / 4-marker subset hypothesis を diagnostics-only で生成し、現行 generic pose と比較すること。
+- 採択変更はまだしない。まず `subset_hypothesis_summary` に candidate 数、best score、2nd score、margin、rejected-by-ambiguity、rejected-by-2D-score を出す。
+- `hint_pose_adoption_ready = false` のため、Phase 6 実装後も最初は diagnostics-only で進めるのが安全。

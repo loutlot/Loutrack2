@@ -214,6 +214,61 @@ def test_process_paired_frames_exposes_observation_provenance() -> None:
         assert len(point_payload["reprojection_errors_px"]) == 2
 
 
+def test_process_paired_frames_triangulates_rigid_hint_assignments_separately() -> None:
+    pipeline = _geometry_pipeline()
+    params = pipeline.camera_params
+    points_world = np.array(
+        [
+            [-0.10, -0.12, 2.5],
+            [0.05, -0.04, 2.5],
+            [0.11, 0.08, 2.5],
+            [-0.05, 0.17, 2.5],
+        ],
+        dtype=np.float64,
+    )
+    blobs_a = [_blob(_project(params["cam0"], point)) for point in points_world]
+    projected_b = [_blob(_project(params["cam1"], point)) for point in points_world]
+    order_b = [2, 0, 3, 1]
+    blobs_b = [projected_b[index] for index in order_b]
+    marker_to_blob_b = {marker_idx: order_b.index(marker_idx) for marker_idx in range(4)}
+    object_gating = {
+        "waist": {
+            "evaluated": True,
+            "per_camera": {
+                "cam0": {
+                    "assignments": [
+                        {"marker_idx": marker_idx, "blob_index": marker_idx}
+                        for marker_idx in range(4)
+                    ]
+                },
+                "cam1": {
+                    "assignments": [
+                        {"marker_idx": marker_idx, "blob_index": marker_to_blob_b[marker_idx]}
+                        for marker_idx in range(4)
+                    ]
+                },
+            },
+        }
+    }
+
+    result = pipeline.process_paired_frames(
+        _paired(blobs_a, blobs_b),
+        object_gating=object_gating,
+    )
+
+    generic = np.asarray(result["points_3d"], dtype=np.float64)
+    hinted = np.asarray(result["rigid_hint_points_3d"], dtype=np.float64)
+    assert generic.shape == (4, 3)
+    assert hinted.shape == (4, 3)
+    assert result["rigid_hint_quality"]["accepted_points"] == 4
+    assert result["rigid_hint_quality"]["by_rigid"]["waist"]["markers_with_two_or_more_rays"] == 4
+    assert {point["source"] for point in result["rigid_hint_triangulated_points"]} == {"rigid_hint"}
+    assert {point["rigid_name"] for point in result["rigid_hint_triangulated_points"]} == {"waist"}
+    assert {point["marker_idx"] for point in result["rigid_hint_triangulated_points"]} == {0, 1, 2, 3}
+    for expected in points_world:
+        assert np.min(np.linalg.norm(hinted - expected, axis=1)) < 1e-6
+
+
 def test_process_paired_frames_does_not_force_unmatched_blob_into_3d_point() -> None:
     pipeline = _geometry_pipeline()
     params = pipeline.camera_params
