@@ -296,3 +296,230 @@ OpenCV が入っている Python 3.13 の一時 venv で検証した。
 - Phase 2 ではまだ object-conditioned gating を入れない。予測 pose と confidence を観測可能にするだけに留める。
 - `RigidBodyTracker.predict(dt=...)` は既存互換として残し、新 API は `peek_prediction(timestamp_us)` にする。
 - replay で `valid/reacquire/pose_flip` 指標が Phase 1 と変わらないことを受入条件にする。
+
+## 2026-04-24 - Phase 2 Pose Predictor / Rolling Confidence
+
+### 実装結果
+
+- `src/host/rigid.py` に `PredictedPose` を追加し、予測 pose、velocity、dt、confidence、position sigma、rotation sigma を structured diagnostics として扱えるようにした。
+- `RigidBodyTracker.peek_prediction(timestamp_us)` を追加し、tracker state を変更せずに指定 timestamp の pose を予測できるようにした。
+- 既存 `RigidBodyTracker.predict(dt=...)` は互換 API として残した。Phase 2 では tracking の採択ロジックは変更していない。
+- `RigidBodyTracker.rolling_confidence` を追加し、直近 valid ratio、median RMS、lost frames、pose jump、pose flip candidate から gating 用の confidence を計算できるようにした。
+- `RigidBodyTracker.get_prediction_diagnostics()` と `get_diagnostics()` に prediction payload と rolling confidence を追加した。
+- `tests/test_rigid_body_tracker_stats.py` に side-effect-free prediction と rolling confidence 低下のテストを追加した。
+
+### データ契約
+
+`tracking.<name>.prediction` は以下の形で出る。
+
+```json
+{
+  "timestamp": 1776967897815340,
+  "position": [-0.4760935342958236, 0.9328017370148517, 1.1295187986967496],
+  "quaternion": [0.49762534881179205, 0.33433629307037327, -0.31294928395204247, 0.736648492179145],
+  "velocity": [0.0961874724728649, -0.06710388339558249, -0.3273411039239402],
+  "dt_s": 0.0,
+  "valid": true,
+  "confidence": 0.46102492276458507,
+  "position_sigma_m": 0.013779501544708299,
+  "rotation_sigma_deg": 11.7795015447083,
+  "lost_frames": 0
+}
+```
+
+### 検証
+
+OpenCV が入っている Python 3.13 の一時 venv で検証した。
+
+```bash
+/tmp/loutrack-py313-test/bin/python -m pytest \
+  tests/test_rigid_body_tracker_stats.py \
+  tests/test_pattern_evaluator.py \
+  tests/test_geo_blob_assignment.py \
+  tests/test_tracking_pipeline_diagnostics.py \
+  tests/test_tracking_replay_harness.py
+```
+
+結果: `26 passed`
+
+実ログ replay も継続して通る。
+
+```bash
+/tmp/loutrack-py313-test/bin/python - <<'PY'
+from src.host.tracking_replay_harness import replay_tracking_log
+summary = replay_tracking_log(
+    log_path='logs/tracking_gui.jsonl',
+    calibration_path='calibration',
+    patterns=['waist'],
+    rigids_path='calibration/tracking_rigids.json',
+).to_dict()
+tracking = summary['tracking']['waist']
+print({k: summary[k] for k in ['frame_count', 'pair_count', 'frames_processed', 'poses_estimated']})
+print({k: tracking[k] for k in ['valid', 'track_count', 'total_frames', 'reacquire_count', 'max_pose_flip_deg', 'rolling_confidence']})
+print(tracking['prediction'])
+PY
+```
+
+結果:
+
+- input frames: `994`
+- paired frames: `497`
+- processed pairs: `497`
+- estimated valid poses: `493`
+- valid: `true`
+- track count: `493`
+- total frames: `497`
+- reacquire count: `3`
+- max pose flip candidate: `138.43282502436344 deg`
+- rolling confidence: `0.46102492276458507`
+
+### 読み取り
+
+Phase 2 では採択ロジックを変えていないため、Phase 0/1 と同じ `493 / 497` valid、`reacquire_count = 3`、`max_pose_flip_deg = 138.43282502436344` が維持された。これは受入条件どおり。
+
+一方で rolling confidence は `0.461` と高くない。直近 valid は安定しているが、Phase 0 で観測した大きな pose flip candidate を penalty として反映しているため。これは意図どおりで、Phase 3 以降ではこの confidence を使って「すぐ narrow gate に入らない」「reacquire 判定を慎重にする」方向へ進められる。
+
+### 次に期待すること
+
+- 次フェーズは **Phase 3 - Boot / Continue / Reacquire mode 分離** を推奨する。
+- Phase 3 では `peek_prediction()` と `rolling_confidence` を使って、状態だけを `BOOT`, `CONTINUE`, `REACQUIRE`, `LOST` に分ける。
+- 初期実装では candidate selection を大きく変えず、mode と diagnostics を追加して replay 指標が悪化しないことを確認する。
+- その後、`CONTINUE` 時だけ prediction 近傍 candidate を優先するように段階的に進める。
+- `rolling_confidence` が低い場合は narrow gate や single-ray continuation を許可しない方針にする。
+
+### 次フェーズの実装可否
+
+次フェーズも実装可能。Phase 2 で side-effect-free prediction と rolling confidence が入ったため、mode transition の材料は揃った。
+
+注意点:
+
+- Phase 3 の最初の PR では mode transition diagnostics までに留め、candidate pruning はまだ強く入れない方が安全。
+- `predict()` は invalid pose を tracker に update する既存挙動で使われているため、置き換えるなら別フェーズで慎重にやる。
+- replay の受入条件は `valid/reacquire/pose_flip` が Phase 2 から悪化しないこと。
+
+## 2026-04-24 - Phase 3 Boot / Continue / Reacquire Mode Separation
+
+### 実装結果
+
+- `src/host/rigid.py` に `TrackMode` (`boot`, `continue`, `reacquire`, `lost`) と `TrackModeConfig` を追加した。
+- `RigidBodyTracker.update()` が accepted / rejected measurement ごとに mode transition を更新するようにした。
+- Phase 3 では pose acceptance はまだ変更していない。`RigidBodyEstimator` の candidate selection と RMS threshold は既存のまま。
+- `boot -> continue` は 3 consecutive accepted、`continue -> reacquire` は 1 rejected、`reacquire -> continue` は prediction と整合する 2 consecutive accepted、`reacquire -> lost` は 5 consecutive rejected で遷移する。
+- `lost -> boot` は strict shape-first candidate が再び accepted された時点で遷移する。現段階では shape-first acceptance は既存 Kabsch/RMS 判定を使う。
+- diagnostics に `mode`, `mode_transition_count`, `last_mode_transition`, `mode_frame_count`, `mode_consecutive_accepts`, `mode_consecutive_rejects`, `last_mode_reason` を追加した。
+- diagnostics に `last_position_innovation_m`, `max_position_innovation_m`, `last_rotation_innovation_deg`, `max_rotation_innovation_deg` を追加した。
+- `tests/test_rigid_body_tracker_stats.py` に mode transition と reacquire innovation gate の unit test を追加した。
+- `changelog.md` に Phase 3 の user-visible diagnostics 追加を記録した。
+
+### Mode 遷移の現在仕様
+
+```text
+BOOT
+  accepted x3 -> CONTINUE
+  rejected    -> BOOT
+
+CONTINUE
+  accepted    -> CONTINUE
+  rejected    -> REACQUIRE
+
+REACQUIRE
+  accepted and innovation within gate x2 -> CONTINUE
+  accepted but large innovation          -> REACQUIRE
+  rejected x5                            -> LOST
+
+LOST
+  accepted -> BOOT
+  rejected -> LOST
+```
+
+現在の innovation gate は以下。
+
+- position: `0.25 m`
+- rotation: `120 deg`
+- reacquire accepted count: `2`
+- reacquire lost timeout: `5 frames`
+
+この gate は Phase 3 では **mode transition 用** であり、candidate 自体を reject する gate ではない。既存挙動を壊さずに、Phase 4/5 で object-conditioned gating や 2D score を入れるための観測面を作った。
+
+### 検証
+
+OpenCV が入っている Python 3.13 の一時 venv で検証した。
+
+```bash
+/tmp/loutrack-py313-test/bin/python -m pytest \
+  tests/test_rigid_body_tracker_stats.py \
+  tests/test_pattern_evaluator.py \
+  tests/test_geo_blob_assignment.py \
+  tests/test_tracking_pipeline_diagnostics.py \
+  tests/test_tracking_replay_harness.py
+```
+
+結果: `28 passed`
+
+実ログ replay も継続して通る。
+
+```bash
+/tmp/loutrack-py313-test/bin/python - <<'PY'
+from src.host.tracking_replay_harness import replay_tracking_log
+summary = replay_tracking_log(
+    log_path='logs/tracking_gui.jsonl',
+    calibration_path='calibration',
+    patterns=['waist'],
+    rigids_path='calibration/tracking_rigids.json',
+).to_dict()
+tracking = summary['tracking']['waist']
+print({k: summary[k] for k in ['frame_count', 'pair_count', 'frames_processed', 'poses_estimated']})
+print({k: tracking[k] for k in [
+    'valid', 'mode', 'track_count', 'total_frames', 'reacquire_count',
+    'max_pose_flip_deg', 'rolling_confidence', 'mode_transition_count',
+    'last_mode_transition', 'last_mode_reason',
+    'last_position_innovation_m', 'max_position_innovation_m',
+]})
+PY
+```
+
+結果:
+
+- input frames: `994`
+- paired frames: `497`
+- processed pairs: `497`
+- estimated valid poses: `493`
+- valid: `true`
+- final mode: `continue`
+- track count: `493`
+- total frames: `497`
+- reacquire count: `3`
+- mode transition count: `7`
+- last mode transition: `reacquire->continue:reacquire_confirmed`
+- last mode reason: `continue_measurement_accepted`
+- max pose flip candidate: `138.43282502436344 deg`
+- rolling confidence: `0.46102492276458507`
+- last position innovation: `0.00034645534915246417 m`
+- max position innovation: `0.0991694984463904 m`
+
+### 読み取り
+
+Phase 3 では採択ロジックを変えていないため、Phase 2 と同じ `493 / 497` valid、`reacquire_count = 3`、`max_pose_flip_deg = 138.43282502436344` が維持された。これは受入条件どおり。
+
+一方で mode diagnostics は、ログ内で 7 回の transition が発生し、最後は `reacquire->continue` に戻っていることを示した。つまり、valid/lost の揺れは mode 層でも再現できており、次フェーズで「reacquire 中だけ候補採点を慎重にする」「continue 中だけ予測近傍を優先する」という制御を入れる準備ができた。
+
+`max_position_innovation_m = 0.099m` は現在の `0.25m` gate 以内。位置 innovation だけでは今回の `138deg` class の flip を止めきれないため、次は 2D reprojection score と pattern ambiguity penalty を併用する必要がある。
+
+### 次に期待すること
+
+- 次フェーズは **Phase 4 - 2D Reprojection Scoring** を推奨する。
+- Phase 4 では Phase 0.5 の `observations_by_camera` / `triangulated_points` を使い、Kabsch RMS だけでなく multi-camera 2D residual を pose hypothesis に付ける。
+- まずは score を diagnostics と replay summary に出し、採択は変えない。
+- 次に `REACQUIRE` mode の時だけ、3D RMS が良くても 2D residual / duplicate assignment / missing marker view が悪い候補を commit しないようにする。
+- `CONTINUE` mode では prediction 近傍の candidate に temporal bonus を与えるが、`rolling_confidence` が低い時は narrow gate にしない。
+- 今回の replay では位置 innovation が大きくないため、Phase 4 では rotation innovation と 2D reprojection が flip 抑制の主役になる見込み。
+
+### 次フェーズの実装可否
+
+次フェーズも実装可能。Phase 0.5 で 2D provenance、Phase 2 で prediction/confidence、Phase 3 で mode が揃ったので、Phase 4 の scoring 材料は揃っている。
+
+注意点:
+
+- まだ `process_context()` は導入していない。Phase 4 の最初は既存 `GeometryPipeline` output を `TrackingPipeline` から渡す薄い context wrapper を作るのが安全。
+- 2D score は raw pixel と undistorted pixel を混ぜない。現状の triangulation provenance は raw/undistorted を両方持つので、score context に coordinate space を明示する。
+- Phase 4 の初回は採択変更を入れず、score diagnostics の replay 差分だけを見る。reacquire 中の reject は次の小ステップに分けた方が戻しやすい。

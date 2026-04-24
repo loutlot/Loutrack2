@@ -12,6 +12,7 @@ import numpy as np
 from typing import Optional, Dict, Any, List, Tuple
 from dataclasses import dataclass, field
 from collections import deque
+from enum import Enum
 from itertools import permutations
 from scipy.optimize import linear_sum_assignment
 from scipy.spatial.transform import Rotation
@@ -147,6 +148,68 @@ class RigidBodyPose:
 
 
 @dataclass
+class PredictedPose:
+    """Side-effect-free pose prediction used by stabilization phases."""
+
+    timestamp: int
+    position: np.ndarray
+    rotation: np.ndarray
+    quaternion: np.ndarray
+    velocity: np.ndarray
+    dt_s: float = 0.0
+    valid: bool = False
+    confidence: float = 0.0
+    position_sigma_m: float = 0.0
+    rotation_sigma_deg: float = 0.0
+    lost_frames: int = 0
+
+    def to_pose(self) -> RigidBodyPose:
+        return RigidBodyPose(
+            timestamp=self.timestamp,
+            position=self.position.copy(),
+            rotation=self.rotation.copy(),
+            quaternion=self.quaternion.copy(),
+            rms_error=0.0,
+            observed_markers=0,
+            valid=False,
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "timestamp": int(self.timestamp),
+            "position": self.position.tolist(),
+            "quaternion": self.quaternion.tolist(),
+            "velocity": self.velocity.tolist(),
+            "dt_s": float(self.dt_s),
+            "valid": bool(self.valid),
+            "confidence": float(self.confidence),
+            "position_sigma_m": float(self.position_sigma_m),
+            "rotation_sigma_deg": float(self.rotation_sigma_deg),
+            "lost_frames": int(self.lost_frames),
+        }
+
+
+class TrackMode(Enum):
+    """Rigid-body tracking lifecycle mode."""
+
+    BOOT = "boot"
+    CONTINUE = "continue"
+    REACQUIRE = "reacquire"
+    LOST = "lost"
+
+
+@dataclass(frozen=True)
+class TrackModeConfig:
+    """Thresholds for mode transitions without changing pose acceptance yet."""
+
+    boot_consecutive_accepts: int = 3
+    reacquire_consecutive_accepts: int = 2
+    reacquire_lost_frames: int = 5
+    continue_position_gate_m: float = 0.25
+    continue_rotation_gate_deg: float = 120.0
+
+
+@dataclass
 class TrackingStats:
     """Rolling rigid-body tracking diagnostics for stabilization work."""
 
@@ -266,6 +329,11 @@ def _quaternion_angle_deg(previous: np.ndarray, current: np.ndarray) -> float:
     dot = abs(float(np.dot(q_prev, q_curr)))
     dot = min(1.0, max(-1.0, dot))
     return float(np.degrees(2.0 * np.arccos(dot)))
+
+
+def _rotation_from_wxyz(quaternion: np.ndarray) -> np.ndarray:
+    quat = _normalize_quaternion(quaternion)
+    return Rotation.from_quat([quat[1], quat[2], quat[3], quat[0]]).as_matrix()
 
 
 class PointClusterer:
@@ -573,7 +641,8 @@ class RigidBodyTracker:
     def __init__(
         self,
         pattern: MarkerPattern,
-        history_size: int = 30
+        history_size: int = 30,
+        mode_config: TrackModeConfig = TrackModeConfig(),
     ):
         """
         Initialize tracker.
@@ -584,6 +653,7 @@ class RigidBodyTracker:
         """
         self.pattern = pattern
         self.history_size = history_size
+        self.mode_config = mode_config
         
         self._pose_history: deque = deque(maxlen=history_size)
         self._lock = threading.Lock()
@@ -599,11 +669,27 @@ class RigidBodyTracker:
         self.lost_frames = 0
         self.total_frames = 0
         self.stats = TrackingStats()
+
+        # Mode transition state. This is intentionally diagnostic-first in
+        # Phase 3: pose acceptance remains owned by the estimator.
+        self._mode = TrackMode.BOOT
+        self._mode_entered_timestamp: int = 0
+        self._mode_frame_count = 0
+        self._mode_consecutive_accepts = 0
+        self._mode_consecutive_rejects = 0
+        self._mode_transition_count = 0
+        self._last_mode_transition = "init:boot"
+        self._last_position_innovation_m = 0.0
+        self._max_position_innovation_m = 0.0
+        self._last_rotation_innovation_deg = 0.0
+        self._max_rotation_innovation_deg = 0.0
+        self._last_mode_reason = "initializing"
     
     def update(self, pose: RigidBodyPose) -> None:
         """Update tracker with new pose estimate, including velocity estimation."""
         with self._lock:
             previous_valid = self._pose_history[-1].valid if self._pose_history else False
+            self._update_mode_locked(pose)
             self._pose_history.append(pose)
             self.total_frames += 1
             self.stats.record(pose, previous_valid=previous_valid)
@@ -650,6 +736,47 @@ class RigidBodyTracker:
                 observed_markers=0,
                 valid=False  # Mark as prediction
             )
+
+    def peek_prediction(self, timestamp_us: int) -> PredictedPose:
+        """Predict pose at timestamp_us without mutating tracker state."""
+        with self._lock:
+            if self.track_count == 0 or self._last_valid_timestamp <= 0:
+                quat = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
+                return PredictedPose(
+                    timestamp=int(timestamp_us),
+                    position=np.zeros(3, dtype=np.float64),
+                    rotation=np.eye(3, dtype=np.float64),
+                    quaternion=quat,
+                    velocity=np.zeros(3, dtype=np.float64),
+                    valid=False,
+                    confidence=0.0,
+                    position_sigma_m=1.0,
+                    rotation_sigma_deg=180.0,
+                    lost_frames=int(self.lost_frames),
+                )
+
+            dt_s = max(0.0, float(timestamp_us - self._last_valid_timestamp) / 1_000_000.0)
+            velocity = self._velocity.copy()
+            if dt_s > 0.5:
+                # Long gaps make constant velocity less trustworthy; do not mutate
+                # the stored velocity here because this is a pure peek.
+                velocity = np.zeros(3, dtype=np.float64)
+            position = self._position + velocity * min(dt_s, 0.5)
+            quaternion = _normalize_quaternion(self._quaternion)
+            confidence = self._rolling_confidence_locked()
+            return PredictedPose(
+                timestamp=int(timestamp_us),
+                position=position.copy(),
+                rotation=_rotation_from_wxyz(quaternion),
+                quaternion=quaternion.copy(),
+                velocity=velocity.copy(),
+                dt_s=float(dt_s),
+                valid=True,
+                confidence=confidence,
+                position_sigma_m=self._position_sigma_m(dt_s, confidence),
+                rotation_sigma_deg=self._rotation_sigma_deg(dt_s, confidence),
+                lost_frames=int(self.lost_frames),
+            )
     
     def get_latest_pose(self) -> Optional[RigidBodyPose]:
         """Get most recent valid pose."""
@@ -662,7 +789,7 @@ class RigidBodyTracker:
     @property
     def is_tracking(self) -> bool:
         """Check if tracker is actively tracking."""
-        return self.lost_frames < 10  # Lost for less than 10 frames
+        return self._mode in {TrackMode.BOOT, TrackMode.CONTINUE, TrackMode.REACQUIRE}
     
     @property
     def confidence(self) -> float:
@@ -671,25 +798,193 @@ class RigidBodyTracker:
             return 0.0
         return self.track_count / self.total_frames
 
+    @property
+    def rolling_confidence(self) -> float:
+        """Recent confidence for gating diagnostics without changing behavior."""
+        with self._lock:
+            return self._rolling_confidence_locked()
+
+    def get_prediction_diagnostics(self, timestamp_us: Optional[int] = None) -> Dict[str, Any]:
+        """Return side-effect-free prediction diagnostics for status/replay logs."""
+        with self._lock:
+            target_ts = int(timestamp_us if timestamp_us is not None else self._last_valid_timestamp)
+        prediction = self.peek_prediction(target_ts)
+        return prediction.to_dict()
+
     def get_diagnostics(self) -> Dict[str, Any]:
         """Return diagnostics used by tracking logs and replay summaries."""
         latest = self._pose_history[-1] if self._pose_history else None
         latest_valid = bool(latest.valid) if latest is not None else False
         latest_rms = float(latest.rms_error) if latest is not None else 0.0
         latest_observed = int(latest.observed_markers) if latest is not None else 0
+        prediction = self.get_prediction_diagnostics(
+            latest.timestamp if latest is not None else self._last_valid_timestamp
+        )
         return {
             "valid": latest_valid,
-            "mode": "tracking" if self.is_tracking else "lost",
+            "mode": self._mode.value,
+            "mode_transition_count": int(self._mode_transition_count),
+            "last_mode_transition": self._last_mode_transition,
+            "mode_frame_count": int(self._mode_frame_count),
+            "mode_consecutive_accepts": int(self._mode_consecutive_accepts),
+            "mode_consecutive_rejects": int(self._mode_consecutive_rejects),
+            "last_mode_reason": self._last_mode_reason,
             "confidence": float(self.confidence),
+            "rolling_confidence": float(prediction["confidence"]),
+            "prediction": prediction,
             "lost_frames": int(self.lost_frames),
             "track_count": int(self.track_count),
             "total_frames": int(self.total_frames),
+            "last_position_innovation_m": float(self._last_position_innovation_m),
+            "max_position_innovation_m": float(self._max_position_innovation_m),
+            "last_rotation_innovation_deg": float(self._last_rotation_innovation_deg),
+            "max_rotation_innovation_deg": float(self._max_rotation_innovation_deg),
             "rms_error_m": latest_rms,
             "observed_markers": latest_observed,
             "real_ray_count": latest_observed,
             "virtual_marker_count": 0,
             **self.stats.snapshot(),
         }
+
+    def _rolling_confidence_locked(self) -> float:
+        history = list(self._pose_history)
+        if not history:
+            return 0.0
+        window = history[-min(len(history), self.history_size):]
+        valid_window = [pose for pose in window if pose.valid]
+        valid_ratio = len(valid_window) / len(window)
+        lost_penalty = min(1.0, self.lost_frames / 10.0)
+
+        if valid_window:
+            rms_values = [max(0.0, float(pose.rms_error)) for pose in valid_window]
+            median_rms = float(np.median(rms_values))
+            rms_score = 1.0 / (1.0 + median_rms / 0.010)
+        else:
+            rms_score = 0.0
+
+        pose_jump_penalty = min(0.35, self.stats.last_pose_jump_m / 0.30)
+        flip_penalty = min(0.35, self.stats.last_pose_flip_deg / 360.0)
+        confidence = (
+            0.60 * valid_ratio
+            + 0.25 * rms_score
+            + 0.15 * (1.0 - lost_penalty)
+            - pose_jump_penalty
+            - flip_penalty
+        )
+        return float(np.clip(confidence, 0.0, 1.0))
+
+    def _position_sigma_m(self, dt_s: float, confidence: float) -> float:
+        speed = float(np.linalg.norm(self._velocity))
+        return float(0.003 + 0.020 * (1.0 - confidence) + min(0.20, speed * dt_s * 0.25))
+
+    @staticmethod
+    def _rotation_sigma_deg(dt_s: float, confidence: float) -> float:
+        return float(1.0 + 20.0 * (1.0 - confidence) + min(45.0, dt_s * 30.0))
+
+    def _update_mode_locked(self, pose: RigidBodyPose) -> None:
+        if pose.valid:
+            self._mode_consecutive_accepts += 1
+            self._mode_consecutive_rejects = 0
+            self._record_innovation_locked(pose)
+        else:
+            self._mode_consecutive_rejects += 1
+            self._mode_consecutive_accepts = 0
+            self._last_mode_reason = "measurement_rejected"
+
+        next_mode = self._mode
+        reason = self._last_mode_reason
+
+        if self._mode == TrackMode.BOOT:
+            if pose.valid:
+                reason = "boot_accepting"
+                if self._mode_consecutive_accepts >= self.mode_config.boot_consecutive_accepts:
+                    next_mode = TrackMode.CONTINUE
+                    reason = "boot_confirmed"
+            else:
+                reason = "boot_waiting_for_shape"
+
+        elif self._mode == TrackMode.CONTINUE:
+            if pose.valid:
+                reason = "continue_measurement_accepted"
+            else:
+                next_mode = TrackMode.REACQUIRE
+                reason = "continue_measurement_rejected"
+
+        elif self._mode == TrackMode.REACQUIRE:
+            if pose.valid:
+                if self._measurement_matches_prediction_locked(pose):
+                    reason = "reacquire_candidate_consistent"
+                    if (
+                        self._mode_consecutive_accepts
+                        >= self.mode_config.reacquire_consecutive_accepts
+                    ):
+                        next_mode = TrackMode.CONTINUE
+                        reason = "reacquire_confirmed"
+                else:
+                    reason = "reacquire_candidate_large_innovation"
+            elif self._mode_consecutive_rejects >= self.mode_config.reacquire_lost_frames:
+                next_mode = TrackMode.LOST
+                reason = "reacquire_timeout"
+            else:
+                reason = "reacquire_waiting"
+
+        elif self._mode == TrackMode.LOST:
+            if pose.valid:
+                next_mode = TrackMode.BOOT
+                reason = "lost_shape_found"
+            else:
+                reason = "lost_waiting_for_shape"
+
+        self._last_mode_reason = reason
+        self._mode_frame_count += 1
+        if next_mode != self._mode:
+            self._transition_mode_locked(next_mode, pose.timestamp, reason)
+
+    def _transition_mode_locked(
+        self,
+        next_mode: TrackMode,
+        timestamp_us: int,
+        reason: str,
+    ) -> None:
+        previous = self._mode
+        self._mode = next_mode
+        self._mode_entered_timestamp = int(timestamp_us)
+        self._mode_frame_count = 0
+        self._mode_transition_count += 1
+        self._last_mode_transition = f"{previous.value}->{next_mode.value}:{reason}"
+
+    def _record_innovation_locked(self, pose: RigidBodyPose) -> None:
+        if self.track_count == 0 or self._last_valid_timestamp <= 0:
+            self._last_position_innovation_m = 0.0
+            self._last_rotation_innovation_deg = 0.0
+            self._last_mode_reason = "first_measurement"
+            return
+
+        dt_s = max(0.0, float(pose.timestamp - self._last_valid_timestamp) / 1_000_000.0)
+        velocity = self._velocity if dt_s <= 0.5 else np.zeros(3, dtype=np.float64)
+        predicted_position = self._position + velocity * min(dt_s, 0.5)
+        self._last_position_innovation_m = float(np.linalg.norm(pose.position - predicted_position))
+        self._max_position_innovation_m = max(
+            self._max_position_innovation_m,
+            self._last_position_innovation_m,
+        )
+        self._last_rotation_innovation_deg = _quaternion_angle_deg(
+            self._quaternion,
+            pose.quaternion,
+        )
+        self._max_rotation_innovation_deg = max(
+            self._max_rotation_innovation_deg,
+            self._last_rotation_innovation_deg,
+        )
+        self._last_mode_reason = "measurement_innovation_recorded"
+
+    def _measurement_matches_prediction_locked(self, pose: RigidBodyPose) -> bool:
+        if self.track_count == 0 or self._last_valid_timestamp <= 0:
+            return True
+        return (
+            self._last_position_innovation_m <= self.mode_config.continue_position_gate_m
+            and self._last_rotation_innovation_deg <= self.mode_config.continue_rotation_gate_deg
+        )
 
 
 class RigidBodyEstimator:
