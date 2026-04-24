@@ -1,3 +1,4 @@
+- Phase 1 rigid stabilization pattern evaluator now reports self-symmetry, subset ambiguity, and cross-pattern match risks for built-in and custom rigid bodies
 - Phase 0.5 rigid stabilization provenance now carries per-camera 2D observations and per-point triangulation sources through `src/host/geo.py` and `src/host/pipeline.py`
 - rigid body stabilization progress notes now record Phase 0 replay results and Phase 0.5 expectations in `docs/10_in_progress/rigid_body_stabilization_log.md`
 - Phase 0 rigid stabilization diagnostics now track valid/lost runs and add a same-path tracking replay harness for `logs/tracking_gui.jsonl`

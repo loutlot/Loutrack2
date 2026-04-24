@@ -199,3 +199,100 @@ Phase 0.5 では tracking ロジックを変えていないので、Phase 0 の 
 - 4 marker pattern は permutation が少なく、偶然かなり低 RMS で自己一致することがある。`min_self_symmetry_mm` だけでなく、該当 permutation と rotation angle も report する。
 - 3 marker subset は平面/鏡像が曖昧になりやすいので、subset ambiguity は Phase 4/5 の hypothesis 採点に渡せる形式で保存する。
 - GUI warning 連携は後回しでよい。まず CLI / tests / replay note で数値を出す。
+
+## 2026-04-24 - Phase 1 Pattern Ambiguity Evaluator
+
+### 実装結果
+
+- `src/host/pattern_evaluator.py` を追加し、rigid body marker pattern の trackability を live tracking hot path から独立して評価できるようにした。
+- built-in pattern (`waist`, `head`, `chest`, `left_foot`, `right_foot`) と `calibration/tracking_rigids.json` の custom rigids を同じ evaluator で読めるようにした。
+- `self_symmetry_score()` で identity 以外の marker permutation による最小 Kabsch RMS、best permutation、rotation angle、verdict を出すようにした。
+- `subset_ambiguity_score()` で 3 marker subset の距離プロファイル衝突数と closest pair を出すようにした。
+- `cross_pattern_match_distance()` で pattern 間の最小 RMS と subset 対応を出すようにした。
+- CLI は markdown report と `--json` の両方をサポートする。
+- `tests/test_pattern_evaluator.py` を追加し、対称 pattern が ambiguous になること、built-in pattern が評価できること、custom rigids JSON を読めること、CLI JSON が出ることを確認した。
+
+### 評価コマンド
+
+```bash
+/tmp/loutrack-py313-test/bin/python -m src.host.pattern_evaluator \
+  --rigids calibration/tracking_rigids.json \
+  --json > /tmp/loutrack_pattern_eval.json
+```
+
+### Built-in pattern 評価結果
+
+Self symmetry:
+
+| pattern | min self RMS mm | best permutation | rotation deg | verdict |
+|---|---:|---|---:|---|
+| waist | `4.652` | `[2, 3, 0, 1]` | `180.0` | `ambiguous` |
+| head | `0.292` | `[1, 0, 3, 2]` | `180.0` | `ambiguous` |
+| chest | `5.732` | `[2, 3, 0, 1]` | `180.0` | `ambiguous` |
+| left_foot | `9.057` | `[2, 3, 0, 1]` | `180.0` | `ambiguous` |
+| right_foot | `4.057` | `[3, 2, 1, 0]` | `180.0` | `ambiguous` |
+
+3-marker subset ambiguity:
+
+| pattern | ambiguous pairs | closest delta mm | closest pair |
+|---|---:|---:|---|
+| waist | `0` | `5.549` | `{a: [0, 1, 2], b: [0, 2, 3]}` |
+| head | `6` | `0.343` | `{a: [0, 1, 2], b: [0, 1, 3]}` |
+| chest | `0` | `6.448` | `{a: [0, 1, 2], b: [1, 2, 3]}` |
+| left_foot | `1` | `2.818` | `{a: [0, 1, 2], b: [0, 2, 3]}` |
+| right_foot | `2` | `2.816` | `{a: [0, 1, 3], b: [0, 2, 3]}` |
+
+Closest cross-pattern matches:
+
+| pattern A | pattern B | min RMS mm | verdict |
+|---|---|---:|---|
+| left_foot | right_foot | `6.572` | `ambiguous` |
+| head | right_foot | `9.987` | `ambiguous` |
+| head | chest | `10.239` | `ambiguous` |
+| head | left_foot | `11.959` | `ambiguous` |
+| chest | left_foot | `12.798` | `ambiguous` |
+
+### 読み取り
+
+Built-in pattern は全て 180 度回転に近い permutation で `15mm` 未満の self symmetry RMS になった。これは Phase 0 replay の `max_pose_flip_deg = 138.43282502436344 deg` と整合する。特に `head` は self symmetry RMS が `0.292mm` とほぼ完全に近く、3-marker subset ambiguity も `6` pair あるため、tracking 側で反転や再取得の曖昧性が出やすい。
+
+現時点での重要な結論は、**rigid body 認識の甘さはアルゴリズムだけでなく、pattern geometry 自体の曖昧さも強く関係している可能性が高い**ということ。次の tracking 改善では、pose predictor や 2D score に ambiguity penalty を入れるだけでなく、物理 marker 配置の見直しも検討対象にする。
+
+### 検証
+
+OpenCV が入っている Python 3.13 の一時 venv で検証した。
+
+```bash
+/tmp/loutrack-py313-test/bin/python -m pytest \
+  tests/test_pattern_evaluator.py \
+  tests/test_geo_blob_assignment.py \
+  tests/test_tracking_pipeline_diagnostics.py \
+  tests/test_rigid_body_tracker_stats.py \
+  tests/test_tracking_replay_harness.py
+```
+
+結果: `24 passed`
+
+### 次に期待すること
+
+- 次フェーズは **Phase 2 - Pose Predictor と rolling confidence** を推奨する。
+- predictor は tracking 挙動を即座に大きく変えるのではなく、まず `peek_prediction(timestamp_us)` と rolling confidence を追加して、Phase 3 以降の mode transition / 2D scoring / object-conditioned gating が参照できる state を作る。
+- `predict()` が state を進める設計は避ける。candidate scoring で何度も呼ばれるため、Phase 2 では side-effect-free な prediction API を先に作る。
+- confidence は現在の `track_count / total_frames` ではなく、直近 valid ratio、lost run、reacquire、pose jump、pose flip candidate、RMS を使った rolling 指標にする。
+- Phase 1 の ambiguity report は Phase 4/5 の scoring に `ambiguity_penalty` として渡せるよう、後続で structured diagnostics に接続する。
+
+### 次フェーズの実装可否
+
+次フェーズも実装可能。ただし Phase 2 は tracker state API に触るため、Phase 0/0.5/1 より少し慎重に進める。
+
+実装可能な理由:
+
+- `RigidBodyTracker` は既に position / velocity / quaternion / last valid timestamp を保持している。
+- Phase 0 で rolling stats が入っているため、confidence の材料は揃っている。
+- `process_points()` の外部 API を変えずに `peek_prediction()` と `get_prediction_diagnostics()` を追加できる。
+
+注意点:
+
+- Phase 2 ではまだ object-conditioned gating を入れない。予測 pose と confidence を観測可能にするだけに留める。
+- `RigidBodyTracker.predict(dt=...)` は既存互換として残し、新 API は `peek_prediction(timestamp_us)` にする。
+- replay で `valid/reacquire/pose_flip` 指標が Phase 1 と変わらないことを受入条件にする。
