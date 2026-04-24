@@ -66,6 +66,12 @@ def _rigid_stabilization_configs(settings: Optional[Dict[str, Any]]) -> Dict[str
         "reacquire_guard_config": ReacquireGuardConfig(
             shadow_enabled=bool(payload.get("reacquire_guard_shadow_enabled", True)),
             enforced=bool(payload.get("reacquire_guard_enforced", False)),
+            post_reacquire_continue_frames=int(
+                payload.get("reacquire_guard_post_reacquire_frames", 0)
+            ),
+            max_rotation_innovation_deg=float(
+                payload.get("reacquire_guard_max_rotation_deg", 136.0)
+            ),
         ),
         "object_gating_config": ObjectGatingConfig(
             enabled=bool(payload.get("object_conditioned_gating", True)),

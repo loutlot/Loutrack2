@@ -108,6 +108,8 @@ def replay_tracking_log(
     reacquire_guard_enforced: bool = False,
     reacquire_guard_shadow_enabled: bool = True,
     reacquire_guard_event_logging: bool = False,
+    reacquire_guard_post_reacquire_frames: int = 0,
+    reacquire_guard_max_rotation_deg: float = 136.0,
     object_gating_enforced: bool = False,
     start_timestamp_us: Optional[int] = None,
     end_timestamp_us: Optional[int] = None,
@@ -130,6 +132,8 @@ def replay_tracking_log(
         reacquire_guard_config=ReacquireGuardConfig(
             shadow_enabled=bool(reacquire_guard_shadow_enabled),
             enforced=bool(reacquire_guard_enforced),
+            post_reacquire_continue_frames=int(reacquire_guard_post_reacquire_frames),
+            max_rotation_innovation_deg=float(reacquire_guard_max_rotation_deg),
         ),
         object_gating_config=ObjectGatingConfig(enforce=bool(object_gating_enforced)),
         reacquire_guard_event_logging=bool(reacquire_guard_event_logging),
@@ -393,6 +397,8 @@ def compare_reacquire_guard_enforcement(
     start_received_at: Optional[str] = None,
     end_received_at: Optional[str] = None,
     max_frames: Optional[int] = None,
+    reacquire_guard_post_reacquire_frames: int = 0,
+    reacquire_guard_max_rotation_deg: float = 136.0,
 ) -> Dict[str, Any]:
     """Run shadow and enforced guard replays and compare Phase 4.5 go/no-go."""
     shadow = replay_tracking_log(
@@ -408,6 +414,8 @@ def compare_reacquire_guard_enforcement(
         start_received_at=start_received_at,
         end_received_at=end_received_at,
         max_frames=max_frames,
+        reacquire_guard_post_reacquire_frames=reacquire_guard_post_reacquire_frames,
+        reacquire_guard_max_rotation_deg=reacquire_guard_max_rotation_deg,
     ).to_dict()
     enforced = replay_tracking_log(
         log_path=log_path,
@@ -422,11 +430,63 @@ def compare_reacquire_guard_enforcement(
         start_received_at=start_received_at,
         end_received_at=end_received_at,
         max_frames=max_frames,
+        reacquire_guard_post_reacquire_frames=reacquire_guard_post_reacquire_frames,
+        reacquire_guard_max_rotation_deg=reacquire_guard_max_rotation_deg,
     ).to_dict()
     return {
         "shadow": shadow,
         "enforced": enforced,
         "phase45_go_no_go": _compare_phase45_go_no_go(shadow, enforced),
+    }
+
+
+def compare_object_gating_enforcement(
+    *,
+    log_path: str | Path,
+    calibration_path: str | Path,
+    patterns: Optional[Iterable[str]] = None,
+    rigids_path: str | Path | None = None,
+    epipolar_threshold_px: Optional[float] = None,
+    start_timestamp_us: Optional[int] = None,
+    end_timestamp_us: Optional[int] = None,
+    start_received_at: Optional[str] = None,
+    end_received_at: Optional[str] = None,
+    max_frames: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Run diagnostics-only and enforced object-gating replays side by side."""
+    diagnostics_only = replay_tracking_log(
+        log_path=log_path,
+        calibration_path=calibration_path,
+        patterns=patterns,
+        rigids_path=rigids_path,
+        epipolar_threshold_px=epipolar_threshold_px,
+        object_gating_enforced=False,
+        start_timestamp_us=start_timestamp_us,
+        end_timestamp_us=end_timestamp_us,
+        start_received_at=start_received_at,
+        end_received_at=end_received_at,
+        max_frames=max_frames,
+    ).to_dict()
+    enforced = replay_tracking_log(
+        log_path=log_path,
+        calibration_path=calibration_path,
+        patterns=patterns,
+        rigids_path=rigids_path,
+        epipolar_threshold_px=epipolar_threshold_px,
+        object_gating_enforced=True,
+        start_timestamp_us=start_timestamp_us,
+        end_timestamp_us=end_timestamp_us,
+        start_received_at=start_received_at,
+        end_received_at=end_received_at,
+        max_frames=max_frames,
+    ).to_dict()
+    return {
+        "diagnostics_only": diagnostics_only,
+        "enforced": enforced,
+        "object_gating_go_no_go": _compare_object_gating_go_no_go(
+            diagnostics_only,
+            enforced,
+        ),
     }
 
 
@@ -957,6 +1017,18 @@ def _tracking_metric(summary: Dict[str, Any], key: str, default: float = 0.0) ->
         return float(default)
 
 
+def _subset_rotation_max(summary: Dict[str, Any]) -> float:
+    try:
+        return float(
+            summary.get("subset_hypothesis_summary", {})
+            .get("totals", {})
+            .get("best_rotation_delta_deg_summary", {})
+            .get("max", 0.0)
+        )
+    except Exception:
+        return 0.0
+
+
 def _compare_phase45_go_no_go(shadow: Dict[str, Any], enforced: Dict[str, Any]) -> Dict[str, Any]:
     shadow_valid = float(shadow.get("poses_estimated", 0) or 0)
     enforced_valid = float(enforced.get("poses_estimated", 0) or 0)
@@ -1002,6 +1074,71 @@ def _compare_phase45_go_no_go(shadow: Dict[str, Any], enforced: Dict[str, Any]) 
             "max_valid_drop_ratio": 0.02,
             "pose_flip_not_worse": bool(flip_not_worse),
             "pose_jump_not_worse": bool(jumps_not_worse),
+        },
+    }
+
+
+def _compare_object_gating_go_no_go(
+    diagnostics_only: Dict[str, Any],
+    enforced: Dict[str, Any],
+) -> Dict[str, Any]:
+    baseline_valid = float(diagnostics_only.get("poses_estimated", 0) or 0)
+    enforced_valid = float(enforced.get("poses_estimated", 0) or 0)
+    valid_drop_ratio = (
+        max(0.0, baseline_valid - enforced_valid) / baseline_valid
+        if baseline_valid > 0.0
+        else 0.0
+    )
+    baseline_flip = _tracking_metric(diagnostics_only, "max_pose_flip_deg")
+    enforced_flip = _tracking_metric(enforced, "max_pose_flip_deg")
+    baseline_jumps = _tracking_metric(diagnostics_only, "pose_jump_count")
+    enforced_jumps = _tracking_metric(enforced, "pose_jump_count")
+    baseline_transitions = _tracking_metric(diagnostics_only, "mode_transition_count")
+    enforced_transitions = _tracking_metric(enforced, "mode_transition_count")
+    baseline_subset_rotation = _subset_rotation_max(diagnostics_only)
+    enforced_subset_rotation = _subset_rotation_max(enforced)
+    max_flip_regression_deg = 1.0
+    valid_ok = valid_drop_ratio <= 0.02
+    flip_delta_deg = float(enforced_flip - baseline_flip)
+    flip_not_worse = flip_delta_deg <= max_flip_regression_deg
+    jumps_not_worse = enforced_jumps <= baseline_jumps + 1e-9
+    transitions_not_worse = enforced_transitions <= baseline_transitions + 1e-9
+    subset_rotation_improved = enforced_subset_rotation < baseline_subset_rotation - 1e-9
+    go_candidate = bool(
+        valid_ok and flip_not_worse and jumps_not_worse and transitions_not_worse
+    )
+    if go_candidate and subset_rotation_improved:
+        decision = "go_candidate"
+        reason = "enforcement is stable and reduces subset rotation mismatch"
+    elif go_candidate:
+        decision = "go_candidate"
+        reason = "enforcement stays within flip tolerance and does not worsen valid frames, jumps, or mode transitions"
+    else:
+        decision = "no_go_tune_object_gating"
+        reason = "enforcement worsened valid frames, flips beyond tolerance, jumps, or mode transitions"
+    return {
+        "decision": decision,
+        "reason": reason,
+        "valid_drop_ratio": float(valid_drop_ratio),
+        "valid_drop_frames": int(max(0.0, baseline_valid - enforced_valid)),
+        "diagnostics_only_valid_frames": int(baseline_valid),
+        "enforced_valid_frames": int(enforced_valid),
+        "diagnostics_only_max_pose_flip_deg": float(baseline_flip),
+        "enforced_max_pose_flip_deg": float(enforced_flip),
+        "max_pose_flip_delta_deg": float(flip_delta_deg),
+        "diagnostics_only_pose_jump_count": int(baseline_jumps),
+        "enforced_pose_jump_count": int(enforced_jumps),
+        "diagnostics_only_mode_transition_count": int(baseline_transitions),
+        "enforced_mode_transition_count": int(enforced_transitions),
+        "diagnostics_only_subset_rotation_max_deg": float(baseline_subset_rotation),
+        "enforced_subset_rotation_max_deg": float(enforced_subset_rotation),
+        "criteria": {
+            "max_valid_drop_ratio": 0.02,
+            "max_flip_regression_deg": float(max_flip_regression_deg),
+            "pose_flip_within_tolerance": bool(flip_not_worse),
+            "pose_jump_not_worse": bool(jumps_not_worse),
+            "mode_transition_not_worse": bool(transitions_not_worse),
+            "subset_rotation_improved": bool(subset_rotation_improved),
         },
     }
 
@@ -1090,8 +1227,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--reacquire-guard-enforced", action="store_true", help="Replay with Phase 4.5 guard enforcement enabled.")
     parser.add_argument("--disable-reacquire-guard-shadow", action="store_true", help="Disable Phase 4.5 shadow guard diagnostics.")
     parser.add_argument("--reacquire-guard-event-logging", action="store_true", help="Enable live logger guard events during replay.")
+    parser.add_argument("--reacquire-guard-post-reacquire-frames", type=int, default=0, help="Also evaluate the guard for this many continue frames after reacquire confirmation.")
+    parser.add_argument("--reacquire-guard-max-rotation-deg", type=float, default=136.0, help="Rotation innovation threshold used by the guard.")
     parser.add_argument("--object-gating-enforced", action="store_true", help="Replay with Phase 5 object-gating rigid-hint pose enforcement enabled.")
     parser.add_argument("--compare-reacquire-guard-enforcement", action="store_true", help="Run both shadow and enforced Phase 4.5 replays and compare go/no-go.")
+    parser.add_argument("--compare-object-gating-enforcement", action="store_true", help="Run diagnostics-only and enforced object-gating replays and compare go/no-go.")
     parser.add_argument("--diagnostics-summary", action="store_true", help="Summarize live tracking_diagnostics events without replaying frames.")
     parser.add_argument("--min-accepted-points", type=int, default=4, help="Minimum accepted points before a diagnostics event is flagged.")
     parser.add_argument("--jump-threshold-m", type=float, default=0.10, help="Pose jump threshold for diagnostics failure extraction.")
@@ -1102,6 +1242,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--start-received-at", default=None, help="Replay only frames received at or after this ISO timestamp.")
     parser.add_argument("--end-received-at", default=None, help="Replay only frames received at or before this ISO timestamp.")
     parser.add_argument("--max-frames", type=int, default=None, help="Replay at most this many frames after filtering.")
+    parser.add_argument("--quiet", action="store_true", help="Do not print the JSON summary when --out is set.")
     parser.add_argument("--out", default=None, help="Optional summary JSON output path.")
     args = parser.parse_args(argv)
 
@@ -1126,6 +1267,21 @@ def main(argv: Optional[List[str]] = None) -> int:
             start_received_at=args.start_received_at,
             end_received_at=args.end_received_at,
             max_frames=args.max_frames,
+            reacquire_guard_post_reacquire_frames=int(args.reacquire_guard_post_reacquire_frames),
+            reacquire_guard_max_rotation_deg=args.reacquire_guard_max_rotation_deg,
+        )
+    elif args.compare_object_gating_enforcement:
+        summary = compare_object_gating_enforcement(
+            log_path=args.log,
+            calibration_path=args.calibration,
+            patterns=_parse_pattern_names(args.patterns),
+            rigids_path=args.rigids,
+            epipolar_threshold_px=args.epipolar_threshold_px,
+            start_timestamp_us=args.start_timestamp_us,
+            end_timestamp_us=args.end_timestamp_us,
+            start_received_at=args.start_received_at,
+            end_received_at=args.end_received_at,
+            max_frames=args.max_frames,
         )
     else:
         summary = replay_tracking_log(
@@ -1137,6 +1293,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             reacquire_guard_enforced=bool(args.reacquire_guard_enforced),
             reacquire_guard_shadow_enabled=not bool(args.disable_reacquire_guard_shadow),
             reacquire_guard_event_logging=bool(args.reacquire_guard_event_logging),
+            reacquire_guard_post_reacquire_frames=int(args.reacquire_guard_post_reacquire_frames),
+            reacquire_guard_max_rotation_deg=args.reacquire_guard_max_rotation_deg,
             object_gating_enforced=bool(args.object_gating_enforced),
             start_timestamp_us=args.start_timestamp_us,
             end_timestamp_us=args.end_timestamp_us,
@@ -1149,7 +1307,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.out:
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
         Path(args.out).write_text(text + "\n", encoding="utf-8")
-    print(text)
+    if not (args.quiet and args.out):
+        print(text)
     return 0
 
 

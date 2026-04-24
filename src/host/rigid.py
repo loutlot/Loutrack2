@@ -216,6 +216,7 @@ class ReacquireGuardConfig:
 
     shadow_enabled: bool = True
     enforced: bool = False
+    post_reacquire_continue_frames: int = 0
     min_matched_marker_views: int = 6
     max_missing_marker_views: int = 2
     max_mean_reprojection_error_px: float = 4.0
@@ -233,6 +234,7 @@ class ReacquireGuardConfig:
             "allow_duplicate_assignment": bool(self.allow_duplicate_assignment),
             "max_position_innovation_m": float(self.max_position_innovation_m),
             "max_rotation_innovation_deg": float(self.max_rotation_innovation_deg),
+            "post_reacquire_continue_frames": int(self.post_reacquire_continue_frames),
         }
 
 
@@ -1141,6 +1143,17 @@ class RigidBodyTracker:
         with self._lock:
             return self._mode
 
+    def should_guard_post_reacquire_continue(self, frame_count: int) -> bool:
+        """Return true for the first continue frames after reacquire confirmation."""
+        if frame_count <= 0:
+            return False
+        with self._lock:
+            return (
+                self._mode == TrackMode.CONTINUE
+                and self._mode_frame_count < int(frame_count)
+                and self._last_mode_transition.startswith("reacquire->continue:")
+            )
+
     def record_reacquire_guard(self, guard: Dict[str, Any]) -> None:
         """Attach latest reacquire guard diagnostics without affecting tracking state."""
         with self._lock:
@@ -1900,14 +1913,24 @@ class RigidBodyEstimator:
                         generic_score=score,
                     )
                 )
-                tracker.record_reacquire_guard(
-                    _empty_reacquire_guard(
+                if selected_pose.valid:
+                    guard = self._evaluate_reacquire_guard(tracker, selected_pose, score)
+                else:
+                    guard = _empty_reacquire_guard(
                         enabled=self.reacquire_guard_config.shadow_enabled,
                         enforced=self.reacquire_guard_config.enforced,
                         reason="no_valid_pose",
                         thresholds=self.reacquire_guard_config.thresholds_dict(),
                     )
-                )
+                tracker.record_reacquire_guard(guard)
+                if guard.get("enforced") and guard.get("would_reject"):
+                    rejected_pose = self._invalid_pose(timestamp)
+                    poses[pattern.name] = rejected_pose
+                    tracker.update(
+                        rejected_pose,
+                        invalid_reason="reprojection_guard_rejected",
+                    )
+                    continue
                 self.trackers[pattern.name].update(selected_pose)
         
         return poses
@@ -2664,11 +2687,14 @@ class RigidBodyEstimator:
                 reason="disabled",
                 thresholds=thresholds,
             )
-        if tracker.mode != TrackMode.REACQUIRE:
+        guarded_continue = tracker.should_guard_post_reacquire_continue(
+            int(config.post_reacquire_continue_frames)
+        )
+        if tracker.mode != TrackMode.REACQUIRE and not guarded_continue:
             return _empty_reacquire_guard(
                 enabled=config.shadow_enabled,
                 enforced=config.enforced,
-                reason="not_reacquire_mode",
+                reason="not_guarded_mode",
                 thresholds=thresholds,
             )
         if not pose.valid:

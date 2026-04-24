@@ -392,6 +392,91 @@ def test_compare_reacquire_guard_enforcement_returns_go_no_go(
     assert "decision" in comparison["phase45_go_no_go"]
 
 
+def test_compare_object_gating_enforcement_returns_go_no_go(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(harness, "FrameReplay", _FakeReplay)
+    monkeypatch.setattr(harness, "TrackingPipeline", _FakePipeline)
+
+    comparison = harness.compare_object_gating_enforcement(
+        log_path=tmp_path / "tracking_gui.jsonl",
+        calibration_path=tmp_path,
+        patterns=["waist"],
+    )
+
+    assert set(comparison) == {
+        "diagnostics_only",
+        "enforced",
+        "object_gating_go_no_go",
+    }
+    assert comparison["diagnostics_only"]["poses_estimated"] == 1
+    assert comparison["enforced"]["poses_estimated"] == 1
+    assert comparison["object_gating_go_no_go"]["decision"] == "go_candidate"
+
+
+def test_object_gating_go_no_go_allows_tiny_max_flip_regression() -> None:
+    baseline = {
+        "poses_estimated": 100,
+        "tracking": {
+            "waist": {
+                "max_pose_flip_deg": 177.80,
+                "pose_jump_count": 2,
+                "mode_transition_count": 10,
+            }
+        },
+        "subset_hypothesis_summary": {
+            "totals": {"best_rotation_delta_deg_summary": {"max": 170.0}}
+        },
+    }
+    enforced = {
+        "poses_estimated": 101,
+        "tracking": {
+            "waist": {
+                "max_pose_flip_deg": 177.81,
+                "pose_jump_count": 2,
+                "mode_transition_count": 9,
+            }
+        },
+        "subset_hypothesis_summary": {
+            "totals": {"best_rotation_delta_deg_summary": {"max": 1.0}}
+        },
+    }
+
+    decision = harness._compare_object_gating_go_no_go(baseline, enforced)
+
+    assert decision["decision"] == "go_candidate"
+    assert decision["criteria"]["pose_flip_within_tolerance"] is True
+    assert decision["max_pose_flip_delta_deg"] > 0.0
+
+
+def test_object_gating_go_no_go_rejects_large_max_flip_regression() -> None:
+    baseline = {
+        "poses_estimated": 100,
+        "tracking": {
+            "waist": {
+                "max_pose_flip_deg": 30.0,
+                "pose_jump_count": 2,
+                "mode_transition_count": 10,
+            }
+        },
+    }
+    enforced = {
+        "poses_estimated": 100,
+        "tracking": {
+            "waist": {
+                "max_pose_flip_deg": 35.0,
+                "pose_jump_count": 2,
+                "mode_transition_count": 10,
+            }
+        },
+    }
+
+    decision = harness._compare_object_gating_go_no_go(baseline, enforced)
+
+    assert decision["decision"] == "no_go_tune_object_gating"
+    assert decision["criteria"]["pose_flip_within_tolerance"] is False
+
+
 def test_subset_adoption_shadow_handles_low_coverage_and_missing_generic_valid() -> None:
     summary = harness._summarize_subset_adoption_shadow(
         [

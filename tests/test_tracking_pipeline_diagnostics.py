@@ -296,6 +296,8 @@ def test_tracking_pipeline_maps_rigid_stabilization_flags_to_configs() -> None:
         rigid_stabilization={
             "reacquire_guard_shadow_enabled": False,
             "reacquire_guard_enforced": True,
+            "reacquire_guard_post_reacquire_frames": 1,
+            "reacquire_guard_max_rotation_deg": 90.0,
             "object_conditioned_gating": False,
             "object_gating_enforced": True,
             "subset_ransac": False,
@@ -306,6 +308,8 @@ def test_tracking_pipeline_maps_rigid_stabilization_flags_to_configs() -> None:
     assert pipeline.reacquire_guard_event_logging is True
     assert pipeline.rigid_estimator.reacquire_guard_config.shadow_enabled is False
     assert pipeline.rigid_estimator.reacquire_guard_config.enforced is True
+    assert pipeline.rigid_estimator.reacquire_guard_config.post_reacquire_continue_frames == 1
+    assert pipeline.rigid_estimator.reacquire_guard_config.max_rotation_innovation_deg == 90.0
     assert pipeline.rigid_estimator.object_gating_config.enabled is False
     assert pipeline.rigid_estimator.object_gating_config.enforce is True
     assert pipeline.rigid_estimator.subset_solve_config.enabled is False
