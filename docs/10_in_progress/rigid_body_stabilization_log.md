@@ -1981,3 +1981,286 @@ PY
 今回の短い実ログでは、object-gating enforcement を有効にしても valid pose 数、pose flip、pose jump は悪化しなかった。一方で `hint_pose_adoption_ready` は false のままなので、まだ runtime default を on にする判断ではない。次は stress log / 静止 log でも `object_gating_enforced=True` replay を比較する。
 
 Subset solve については、`diagnostics_only=False` が実採択を意味するように見える問題を、いったん明示的な unsupported error にした。subset adoption は `subset_adoption_shadow.ready_for_enforcement_replay` が true になるまで別フェーズで扱う。
+
+## 2026-04-25 - Phase 6.8 Failure-log PDCA / object-gating enforcement replay
+
+### 実装済みの範囲
+
+- GUI start payload は live tracking 中の rigid stabilization enforcement を off にしている。
+  - `object_conditioned_gating: false`
+  - `object_gating_enforced: false`
+  - `subset_ransac: false`
+  - `reacquire_guard_enforced: false`
+  - `reacquire_guard_event_logging: false`
+- live tracking log には `tracking_diagnostics` event を残し、後から replay / failure segment 抽出に使える。
+- `tracking_replay_harness` は `--diagnostics-summary` で live diagnostics の failure segment を抽出できる。
+- replay は `calibration/extrinsics_pose_v2.json` を渡しても親の `calibration` directory に解決できる。
+- replay は `--start-received-at` / `--end-received-at` / `--max-frames` で failure window だけを高速に切り出せる。
+- `--compare-object-gating-enforcement` を追加し、diagnostics-only と `object_gating_enforced=True` のA/B比較、go/no-go判定を自動化した。
+- object-gating go/no-go は valid frame drop、pose jump count、mode transition count、max flip tolerance、subset rotation mismatch を見る。
+- max flip は完全非悪化ではなく、`max_flip_regression_deg = 1.0` 以内の微小差を許容する。旧ログ全体で出た `+0.008 deg` は数値ノイズ扱いで go にする。
+- reacquire guard は全 `CONTINUE` frame へ広げるのではなく、必要な場合に `post_reacquire_continue_frames` で reacquire 直後だけ評価できる hook に留めた。
+- generic pose がなく `rigid_hint` pose だけを採用する経路でも、valid pose なら reacquire guard を同じように評価する。
+
+### 退避済みデータ
+
+- 旧ログ / PDCA比較:
+  - `logs/archive/rigid_stabilization_pdca_20260425_042805/tracking_gui_baseline.jsonl`
+  - `logs/archive/rigid_stabilization_pdca_20260425_042805/full_compare_object_tolerant.json`
+  - `logs/archive/rigid_stabilization_pdca_20260425_042805/pdca_segments/`
+  - `logs/archive/rigid_stabilization_pdca_20260425_042805/pdca_post_guard/`
+- 新ログ / 比較:
+  - `logs/archive/rigid_stabilization_new_tracking_20260425_043548/tracking_gui_new.jsonl`
+  - `logs/archive/rigid_stabilization_new_tracking_20260425_043548/diagnostics_summary.json`
+  - `logs/archive/rigid_stabilization_new_tracking_20260425_043548/full_compare_object.json`
+  - `logs/archive/rigid_stabilization_new_tracking_20260425_043548/failure_compare_object.json`
+
+### 旧ログ failure window PDCA
+
+旧 `logs/tracking_gui.jsonl` は `30452` frames、duration `129.76 s`。live diagnostics から `waist` の failure segment が4つ抽出された。
+
+主要 failure window:
+
+- `2026-04-25T02:46:15.064968` - `2026-04-25T02:46:32.478600`
+
+baseline / object-gating enforced 比較:
+
+| metric | diagnostics-only | object-gating enforced |
+|---|---:|---:|
+| poses | `1765` | `1768` |
+| valid ratio | `0.874628` | `0.876115` |
+| reacquire count | `68` | `66` |
+| mode transitions | `145` | `141` |
+| pose jumps | `12` | `12` |
+| max pose jump m | `0.232616` | `0.232616` |
+| max pose flip deg | `177.805626` | `177.805626` |
+| max position innovation m | `0.556920` | `0.500697` |
+| max rotation innovation deg | `179.984083` | `178.373793` |
+| subset rotation max deg | `178.385586` | `2.295753` |
+
+読み取り:
+
+- object-gating enforcement は failure window で有効姿勢数、reacquire、mode transition、position innovation、subset rotation mismatch を改善した。
+- max flip / pose jump は悪化しなかった。
+- `subset rotation max` は subset RANSAC候補が通常経路 pose から最大何度ズレたかを見る内部診断で、最終採用 pose そのもののズレではない。ただし `178 deg -> 2.3 deg` は、marker対応や対称性由来の反転候補が大きく減った兆候として有用。
+
+4つの failure segment 全体で見ると、object-gating enforcement は全区間で `subset rotation max` の180度級ズレを大幅に抑えた。seg3 では実際の `max_pose_flip_deg` も `146.058560 -> 48.306846` まで下がった。
+
+一方、`object_gating_enforced + reacquire_guard_enforced` は seg1/seg2 で valid poses を減らした。
+
+- seg1: `1391 -> 1386`
+- seg2: `1768 -> 1766`
+
+`post_reacquire_continue_frames = 1/2` も object-only より改善せず、seg1/seg2 では valid poses を削った。結論として、現ログでは **reacquire guard enforcement を足すより object-gating enforcement 単独が最良**。
+
+### 旧ログ全体 replay
+
+`--compare-object-gating-enforcement` を旧ログ全体へ適用した結果:
+
+| metric | diagnostics-only | object-gating enforced |
+|---|---:|---:|
+| poses | `13644` | `13649` |
+| valid ratio | `0.919593` | `0.919930` |
+| reacquire count | `141` | `137` |
+| mode transitions | `313` | `305` |
+| pose jumps | `25` | `25` |
+| max pose jump m | `0.437989` | `0.437989` |
+| max pose flip deg | `177.805626` | `177.813651` |
+| max pose flip delta deg | - | `+0.008025` |
+| max position innovation m | `0.765045` | `0.500697` |
+| max rotation innovation deg | `179.984083` | `178.894527` |
+| subset rotation max deg | `167.793273` | `0.491559` |
+| rigid p95 ms | `22.563500` | `29.926458` |
+| pipeline pair p95 ms | `25.661958` | `33.142208` |
+
+読み取り:
+
+- 品質指標は概ね改善。valid ratio、reacquire、mode transition、position innovation、rotation innovation、subset rotation mismatch は良化した。
+- `max_pose_flip_deg` は `+0.008 deg` 悪化したが、これは replay 数値ノイズ級のため `1.0 deg` tolerance 内として go。
+- ただし performance cost は大きい。`pipeline_pair_ms.p95` が約 `+7.48 ms` 増えており、120fps 近辺の live tracking では無視しにくい。
+
+### 新ログ replay
+
+新 `logs/tracking_gui.jsonl` は `3272` frames、duration `14.03 s`。diagnostics event は `14`、failure segment は1つ。
+
+failure window:
+
+- `2026-04-25T04:32:57.196385` - `2026-04-25T04:33:08.365721`
+- live diagnostics 上の最大 pose jump: `0.9483518087691913 m`
+- live diagnostics 上の最大 pose flip: `177.85746626099103 deg`
+
+新ログ全体の object-gating A/B:
+
+| metric | diagnostics-only | object-gating enforced |
+|---|---:|---:|
+| poses | `1469` | `1469` |
+| valid ratio | `0.915265` | `0.915265` |
+| reacquire count | `44` | `44` |
+| mode transitions | `89` | `89` |
+| pose jumps | `6` | `6` |
+| max pose jump m | `0.948352` | `0.952086` |
+| max pose flip deg | `177.857466` | `176.670558` |
+| max position innovation m | `1.232591` | `1.320411` |
+| max rotation innovation deg | `179.936761` | `179.978517` |
+| subset rotation max deg | `174.980230` | `63.969446` |
+| rigid p95 ms | `23.251709` | `24.567416` |
+| pipeline pair p95 ms | `26.558458` | `28.072958` |
+
+新ログ failure window の object-gating A/B:
+
+| metric | diagnostics-only | object-gating enforced |
+|---|---:|---:|
+| poses | `1132` | `1132` |
+| valid ratio | `0.892744` | `0.892744` |
+| reacquire count | `44` | `44` |
+| mode transitions | `89` | `89` |
+| pose jumps | `6` | `6` |
+| max pose jump m | `0.948352` | `0.952086` |
+| max pose flip deg | `177.857466` | `176.670558` |
+| max position innovation m | `1.232591` | `1.320411` |
+| max rotation innovation deg | `179.804892` | `179.978517` |
+| subset rotation max deg | `174.980230` | `63.969446` |
+| rigid p95 ms | `22.536750` | `22.425375` |
+| pipeline pair p95 ms | `25.872833` | `25.758000` |
+
+読み取り:
+
+- 新ログでも go/no-go は `go_candidate`。
+- max flip と subset rotation mismatch は改善。
+- valid ratio、reacquire、mode transition、pose jump count は変化なし。
+- ただし max pose jump は約 `+0.0037 m`、max position innovation は約 `+0.0878 m` 悪化した。
+- 新ログの performance cost は旧ログより小さく、全体で `pipeline_pair_ms.p95 +1.51 ms` 程度、failure window ではむしろ微減した。
+
+### 現時点の判断
+
+object-gating enforcement は **offline replay / failure解析では採用候補**。
+
+理由:
+
+- 2本のログで go/no-go は `go_candidate`。
+- 旧ログ failure segment では valid pose、reacquire、mode transition、position innovation が改善。
+- 旧ログ全体でも valid ratio、reacquire、mode transition が改善。
+- 新ログでは valid/reacquire/mode transition は維持しつつ max flip を改善。
+- subset rotation max は両ログで大幅に減り、反転候補の探索空間がかなり締まった。
+
+一方、**live GUI / real-time tracking の常時ONは保留**。
+
+保留理由:
+
+- 旧ログ全体で `pipeline_pair_ms.p95` が `25.66 ms -> 33.14 ms` へ増え、120fps 目標に対して重い。
+- 新ログでは cost 増が小さいため、負荷はログ内容や failure 状態に依存して揺れる。
+- 新ログでは max pose jump と max position innovation が少し悪化しており、現在の go/no-go は jump magnitude / position innovation の悪化を直接基準にしていない。
+- live path では通常 `CONTINUE` 中の全フレームに enforcement をかけるより、`REACQUIRE` / `BOOT` / high-risk window に限定する方が性能面で現実的。
+
+### 次の推奨作業
+
+1. object-gating go/no-go に `max_pose_jump_m` と `max_position_innovation_m` の許容条件を追加する。
+   - 今は `pose_jump_count` は見ているが、jump magnitude の微増は見ていない。
+   - 新ログの `0.948352 -> 0.952086 m` は微小だが、`max_position_innovation_m 1.232591 -> 1.320411 m` は監視対象にしたい。
+2. `object_gating_enforced` の限定発火モードを追加する。
+   - 候補: `reacquire_only`, `boot_or_reacquire`, `risk_window`
+   - 通常 `CONTINUE` では diagnostics-only を維持し、reacquire / lost recovery / flip-risk 近辺だけ enforcement する。
+3. A/B/C比較を replay harness に追加する。
+   - A: diagnostics-only
+   - B: always object-gating enforced
+   - C: limited object-gating enforced
+4. 旧ログ全体、新ログ全体、旧 failure segments、新 failure window で同じ比較を回す。
+5. live GUI でONにする判断は、limited enforcement が performance p95 と quality 指標の両方で always enforcement より良いことを確認してからにする。
+
+### 実装ステータスまとめ
+
+| 項目 | 状態 | 備考 |
+|---|---|---|
+| same-path replay | 実装済み | frame log を UDP後段と同じ経路へ注入 |
+| diagnostics failure extraction | 実装済み | `--diagnostics-summary` |
+| calibration file auto-resolve | 実装済み | `extrinsics_pose_v2.json` -> parent dir |
+| replay window filter | 実装済み | received_at / timestamp / max_frames |
+| object-gating diagnostics | 実装済み | live defaultはGUI payloadでoff |
+| object-gating enforcement | 実装済み | replay / runtime flagあり、default off |
+| object-gating A/B go/no-go | 実装済み | flip tolerance 1deg を含む |
+| reacquire guard enforcement | 実装済みだが保留 | object-onlyよりvalidを削る傾向 |
+| post-reacquire guard hook | 実装済みだが保留 | seg1/seg2で改善せず |
+| subset RANSAC diagnostics | 実装済み | shadow summaryのみ |
+| subset pose adoption | 未採用 | coverage / risk 条件未達 |
+| live GUI enforcement ON | 保留 | performance p95 と innovation悪化を確認中 |
+| limited object-gating enforcement | 未実装 | 次の有力候補 |
+
+## 2026-04-25 - Phase 6.9 Limited object-gating enforcement exploration
+
+### 実装結果
+
+- `ObjectGatingConfig.activation_mode` を追加した。
+- replay CLI に `--object-gating-activation-mode` を追加した。
+  - `always`: 従来どおり全フレームで object gating を評価する。
+  - `reacquire_only`: tracker mode が `REACQUIRE` の frame だけ object gating を評価する。
+  - `boot_or_reacquire`: tracker mode が `BOOT` または `REACQUIRE` の frame だけ object gating を評価する。
+- `TrackingPipeline` の `rigid_stabilization` payload から `object_gating_activation_mode` を `ObjectGatingConfig` へ渡せるようにした。
+- `rigid_hint_pose` replay event に tracker `mode` を追加した。今後、always enforcement で採用された hint pose がどの mode で効いているかを追いやすくする。
+- `tests/test_rigid_reprojection_scoring.py` に、`reacquire_only` が `CONTINUE` では inactive になり、`REACQUIRE` では active になる regression test を追加した。
+
+### 退避済みデータ
+
+- `logs/archive/rigid_stabilization_limited_object_gating_20260425_050441/new_full_reacquire_only.json`
+- `logs/archive/rigid_stabilization_limited_object_gating_20260425_050441/new_full_boot_or_reacquire.json`
+- `logs/archive/rigid_stabilization_limited_object_gating_20260425_050441/old_seg2_reacquire_only.json`
+- `logs/archive/rigid_stabilization_limited_object_gating_20260425_050441/old_seg2_boot_or_reacquire.json`
+
+### 比較結果
+
+旧ログ seg2 failure window:
+
+| mode | poses delta | reacquire delta | mode transition delta | selected hints | object events | subset rot max deg | rigid p95 ms | pair p95 ms |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `always` | `+3` | `-2` | `-4` | `1680` | `2000` | `2.295753` | `22.433667` | `25.712750` |
+| `reacquire_only` | `0` | `0` | `0` | `62` | `192` | `169.191443` | `21.871708` | `24.376459` |
+| `boot_or_reacquire` | `0` | `0` | `0` | `91` | `242` | `169.191443` | `22.513333` | `25.394000` |
+
+新ログ全体:
+
+| mode | poses delta | reacquire delta | mode transition delta | selected hints | object events | max jump m | max flip deg | max pos innov m | subset rot max deg | rigid p95 ms | pair p95 ms |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `always` | `0` | `0` | `0` | `1374` | `1635` | `0.952086` | `176.670558` | `1.320411` | `63.969446` | `24.567416` | `28.072958` |
+| `reacquire_only` | `0` | `0` | `0` | `37` | `122` | `0.948352` | `177.857466` | `1.232591` | `151.507740` | `28.196875` | `30.418792` |
+| `boot_or_reacquire` | `0` | `0` | `0` | `47` | `150` | `0.948352` | `177.857466` | `1.232591` | `151.507740` | `28.094750` | `30.347625` |
+
+### 読み取り
+
+- 単純な mode 限定は object events / selected hints を大幅に減らす。
+  - 旧 seg2: `2000 -> 192/242`
+  - 新ログ: `1635 -> 122/150`
+- ただし、品質改善もほぼ消える。
+  - 旧 seg2 の `always` は poses `+3`, reacquire `-2`, mode transition `-4`, subset rot max `2.30 deg` まで改善。
+  - `reacquire_only` / `boot_or_reacquire` は poses/reacquire/mode transition が baseline と同じで、subset rot max も `169 deg` 近辺に残った。
+- 新ログでは限定モードが max jump / max position innovation を baseline に戻す一方、max flip 改善と subset rot max 改善は `always` より弱い。
+- 新ログの p95 は限定モードの方が悪く見える。これは object gating を評価する frame が failure/reacquire 近辺に偏るため、単純な全体 p95 比較では「軽くなった」と出ない可能性がある。object events は減っているので、今後は object-gating stage の個別 timing も欲しい。
+
+### 現時点の判断
+
+`reacquire_only` / `boot_or_reacquire` は、**安全だが効きが弱い**。
+
+live 常時ONの代替としてはまだ不十分。今回のログで object-gating enforcement が効いていた frame は、単純な `REACQUIRE` / `BOOT` だけでなく、`CONTINUE` 中の危険フレームにも多いと考えられる。
+
+次の候補は **risk-window activation**。
+
+条件案:
+
+- tracker mode が `REACQUIRE` / `BOOT`
+- または `CONTINUE` 中でも直近の innovation が大きい
+  - `last_position_innovation_m`
+  - `last_rotation_innovation_deg`
+- または rolling confidence が低い
+- または直近に invalid / reacquire transition があった post-reacquire window
+- または subset diagnostics の `flip_risk_count` / large `best_rotation_delta_deg` が出た後の短い window
+
+実装する場合は、`always` と単純 mode 限定の中間として `activation_mode = "risk_window"` を追加し、A/B/C/D比較を行う。
+
+### 検証
+
+```bash
+PYTHONPATH=src .venv/bin/python -m pytest \
+  tests/test_rigid_reprojection_scoring.py \
+  tests/test_tracking_pipeline_diagnostics.py \
+  tests/test_tracking_replay_harness.py -q
+```
+
+結果: `30 passed`

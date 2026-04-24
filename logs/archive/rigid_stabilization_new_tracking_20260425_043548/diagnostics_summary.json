@@ -1,0 +1,202 @@
+{
+  "log_path": "logs/tracking_gui.jsonl",
+  "frame_count": 3272,
+  "diagnostics_event_count": 14,
+  "duration_s": 14.03035,
+  "patterns": [
+    "waist"
+  ],
+  "thresholds": {
+    "min_accepted_points": 4,
+    "jump_threshold_m": 0.1,
+    "flip_threshold_deg": 90.0,
+    "window_padding_s": 2.0
+  },
+  "by_rigid": {
+    "waist": {
+      "event_count": 14,
+      "valid_count": 13,
+      "invalid_count": 1,
+      "valid_ratio": 0.9285714285714286,
+      "accepted_points": {
+        "count": 14,
+        "mean": 3.4285714285714284,
+        "p95": 4.0,
+        "max": 4.0
+      },
+      "reprojection_mean_px": {
+        "count": 14,
+        "mean": 0.5310213135697822,
+        "p95": 0.8865588350643084,
+        "max": 1.025689040845694
+      },
+      "epipolar_mean_px": {
+        "count": 14,
+        "mean": 1.265205787923364,
+        "p95": 2.1468168318513383,
+        "max": 2.320197597856505
+      },
+      "rigid_ms": {
+        "count": 14,
+        "mean": 1.4663659285714286,
+        "p95": 2.707125,
+        "max": 2.729792
+      },
+      "pipeline_pair_ms": {
+        "count": 14,
+        "mean": 6.769157714285714,
+        "p95": 7.431375,
+        "max": 13.635959
+      },
+      "failure_event_count": 7,
+      "failure_segments": [
+        {
+          "start": "2026-04-25T04:32:57.196385",
+          "end": "2026-04-25T04:33:08.365721",
+          "event_count": 7,
+          "reasons": [
+            "invalid",
+            "low_accepted_points",
+            "pose_flip",
+            "pose_jump"
+          ],
+          "max_pose_jump_m": 0.9483518087691913,
+          "max_pose_flip_deg": 177.85746626099103,
+          "min_accepted_points": 0
+        }
+      ],
+      "failure_events": [
+        {
+          "event_index": 4,
+          "timestamp": "2026-04-25T04:32:59.196385",
+          "window_start": "2026-04-25T04:32:57.196385",
+          "window_end": "2026-04-25T04:33:01.196385",
+          "reasons": [
+            "pose_jump"
+          ],
+          "mode": "continue",
+          "valid": true,
+          "accepted_points": 4,
+          "observed_markers": 4,
+          "invalid_reason": "continue_measurement_accepted",
+          "max_pose_jump_m": 0.12910862795930508,
+          "max_pose_flip_deg": 25.401633309711336,
+          "jump_increase_m": 0.12910862795930508,
+          "flip_increase_deg": 25.401633309711336
+        },
+        {
+          "event_index": 5,
+          "timestamp": "2026-04-25T04:33:00.218363",
+          "window_start": "2026-04-25T04:32:58.218363",
+          "window_end": "2026-04-25T04:33:02.218363",
+          "reasons": [
+            "invalid",
+            "low_accepted_points",
+            "pose_jump"
+          ],
+          "mode": "lost",
+          "valid": false,
+          "accepted_points": 0,
+          "observed_markers": 0,
+          "invalid_reason": "no_valid_candidate",
+          "max_pose_jump_m": 0.2854340735606569,
+          "max_pose_flip_deg": 52.30559434183745,
+          "jump_increase_m": 0.15632544560135184,
+          "flip_increase_deg": 26.903961032126112
+        },
+        {
+          "event_index": 6,
+          "timestamp": "2026-04-25T04:33:01.244693",
+          "window_start": "2026-04-25T04:32:59.244693",
+          "window_end": "2026-04-25T04:33:03.244693",
+          "reasons": [
+            "pose_jump",
+            "pose_flip"
+          ],
+          "mode": "continue",
+          "valid": true,
+          "accepted_points": 4,
+          "observed_markers": 4,
+          "invalid_reason": "continue_measurement_accepted",
+          "max_pose_jump_m": 0.9483518087691913,
+          "max_pose_flip_deg": 117.2177638694972,
+          "jump_increase_m": 0.6629177352085345,
+          "flip_increase_deg": 64.91216952765976
+        },
+        {
+          "event_index": 7,
+          "timestamp": "2026-04-25T04:33:02.268821",
+          "window_start": "2026-04-25T04:33:00.268821",
+          "window_end": "2026-04-25T04:33:04.268821",
+          "reasons": [
+            "low_accepted_points"
+          ],
+          "mode": "continue",
+          "valid": true,
+          "accepted_points": 3,
+          "observed_markers": 3,
+          "invalid_reason": "continue_measurement_accepted",
+          "max_pose_jump_m": 0.9483518087691913,
+          "max_pose_flip_deg": 117.2177638694972,
+          "jump_increase_m": 0.0,
+          "flip_increase_deg": 0.0
+        },
+        {
+          "event_index": 8,
+          "timestamp": "2026-04-25T04:33:03.294009",
+          "window_start": "2026-04-25T04:33:01.294009",
+          "window_end": "2026-04-25T04:33:05.294009",
+          "reasons": [
+            "low_accepted_points",
+            "pose_flip"
+          ],
+          "mode": "continue",
+          "valid": true,
+          "accepted_points": 3,
+          "observed_markers": 3,
+          "invalid_reason": "continue_measurement_accepted",
+          "max_pose_jump_m": 0.9483518087691913,
+          "max_pose_flip_deg": 177.85746626099103,
+          "jump_increase_m": 0.0,
+          "flip_increase_deg": 60.63970239149383
+        },
+        {
+          "event_index": 9,
+          "timestamp": "2026-04-25T04:33:04.317755",
+          "window_start": "2026-04-25T04:33:02.317755",
+          "window_end": "2026-04-25T04:33:06.317755",
+          "reasons": [
+            "low_accepted_points"
+          ],
+          "mode": "continue",
+          "valid": true,
+          "accepted_points": 3,
+          "observed_markers": 3,
+          "invalid_reason": "continue_measurement_accepted",
+          "max_pose_jump_m": 0.9483518087691913,
+          "max_pose_flip_deg": 177.85746626099103,
+          "jump_increase_m": 0.0,
+          "flip_increase_deg": 0.0
+        },
+        {
+          "event_index": 11,
+          "timestamp": "2026-04-25T04:33:06.365721",
+          "window_start": "2026-04-25T04:33:04.365721",
+          "window_end": "2026-04-25T04:33:08.365721",
+          "reasons": [
+            "low_accepted_points"
+          ],
+          "mode": "continue",
+          "valid": true,
+          "accepted_points": 3,
+          "observed_markers": 3,
+          "invalid_reason": "continue_measurement_accepted",
+          "max_pose_jump_m": 0.9483518087691913,
+          "max_pose_flip_deg": 177.85746626099103,
+          "jump_increase_m": 0.0,
+          "flip_increase_deg": 0.0
+        }
+      ]
+    }
+  }
+}

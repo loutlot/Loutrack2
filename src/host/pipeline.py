@@ -76,6 +76,7 @@ def _rigid_stabilization_configs(settings: Optional[Dict[str, Any]]) -> Dict[str
         "object_gating_config": ObjectGatingConfig(
             enabled=bool(payload.get("object_conditioned_gating", True)),
             enforce=bool(payload.get("object_gating_enforced", False)),
+            activation_mode=str(payload.get("object_gating_activation_mode", "always")),
         ),
         "subset_solve_config": SubsetSolveConfig(
             enabled=bool(payload.get("subset_ransac", True)),
@@ -638,6 +639,7 @@ class TrackingPipeline:
                 {
                     "timestamp": int(timestamp),
                     "rigid_name": str(rigid_name),
+                    "mode": str(status.get("mode", "")),
                     "reason": str(hint_pose.get("reason", "")),
                     "valid": bool(hint_pose.get("valid", False)),
                     "enforced": bool(hint_pose.get("enforced", False)),

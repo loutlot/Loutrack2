@@ -111,6 +111,7 @@ def replay_tracking_log(
     reacquire_guard_post_reacquire_frames: int = 0,
     reacquire_guard_max_rotation_deg: float = 136.0,
     object_gating_enforced: bool = False,
+    object_gating_activation_mode: str = "always",
     start_timestamp_us: Optional[int] = None,
     end_timestamp_us: Optional[int] = None,
     start_received_at: Optional[str] = None,
@@ -135,7 +136,10 @@ def replay_tracking_log(
             post_reacquire_continue_frames=int(reacquire_guard_post_reacquire_frames),
             max_rotation_innovation_deg=float(reacquire_guard_max_rotation_deg),
         ),
-        object_gating_config=ObjectGatingConfig(enforce=bool(object_gating_enforced)),
+        object_gating_config=ObjectGatingConfig(
+            enforce=bool(object_gating_enforced),
+            activation_mode=str(object_gating_activation_mode),
+        ),
         reacquire_guard_event_logging=bool(reacquire_guard_event_logging),
     )
     if not pipeline._calibration_loaded:
@@ -452,6 +456,7 @@ def compare_object_gating_enforcement(
     start_received_at: Optional[str] = None,
     end_received_at: Optional[str] = None,
     max_frames: Optional[int] = None,
+    object_gating_activation_mode: str = "always",
 ) -> Dict[str, Any]:
     """Run diagnostics-only and enforced object-gating replays side by side."""
     diagnostics_only = replay_tracking_log(
@@ -461,6 +466,7 @@ def compare_object_gating_enforcement(
         rigids_path=rigids_path,
         epipolar_threshold_px=epipolar_threshold_px,
         object_gating_enforced=False,
+        object_gating_activation_mode=object_gating_activation_mode,
         start_timestamp_us=start_timestamp_us,
         end_timestamp_us=end_timestamp_us,
         start_received_at=start_received_at,
@@ -474,6 +480,7 @@ def compare_object_gating_enforcement(
         rigids_path=rigids_path,
         epipolar_threshold_px=epipolar_threshold_px,
         object_gating_enforced=True,
+        object_gating_activation_mode=object_gating_activation_mode,
         start_timestamp_us=start_timestamp_us,
         end_timestamp_us=end_timestamp_us,
         start_received_at=start_received_at,
@@ -1230,6 +1237,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--reacquire-guard-post-reacquire-frames", type=int, default=0, help="Also evaluate the guard for this many continue frames after reacquire confirmation.")
     parser.add_argument("--reacquire-guard-max-rotation-deg", type=float, default=136.0, help="Rotation innovation threshold used by the guard.")
     parser.add_argument("--object-gating-enforced", action="store_true", help="Replay with Phase 5 object-gating rigid-hint pose enforcement enabled.")
+    parser.add_argument("--object-gating-activation-mode", default="always", choices=["always", "reacquire_only", "boot_or_reacquire"], help="Limit object-gating evaluation to selected tracker modes.")
     parser.add_argument("--compare-reacquire-guard-enforcement", action="store_true", help="Run both shadow and enforced Phase 4.5 replays and compare go/no-go.")
     parser.add_argument("--compare-object-gating-enforcement", action="store_true", help="Run diagnostics-only and enforced object-gating replays and compare go/no-go.")
     parser.add_argument("--diagnostics-summary", action="store_true", help="Summarize live tracking_diagnostics events without replaying frames.")
@@ -1282,6 +1290,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             start_received_at=args.start_received_at,
             end_received_at=args.end_received_at,
             max_frames=args.max_frames,
+            object_gating_activation_mode=args.object_gating_activation_mode,
         )
     else:
         summary = replay_tracking_log(
@@ -1296,6 +1305,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             reacquire_guard_post_reacquire_frames=int(args.reacquire_guard_post_reacquire_frames),
             reacquire_guard_max_rotation_deg=args.reacquire_guard_max_rotation_deg,
             object_gating_enforced=bool(args.object_gating_enforced),
+            object_gating_activation_mode=args.object_gating_activation_mode,
             start_timestamp_us=args.start_timestamp_us,
             end_timestamp_us=args.end_timestamp_us,
             start_received_at=args.start_received_at,

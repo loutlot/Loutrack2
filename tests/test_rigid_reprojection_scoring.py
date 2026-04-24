@@ -259,6 +259,48 @@ def test_object_conditioned_gating_assigns_predicted_marker_windows() -> None:
     assert estimator.get_tracking_status()["waist"]["object_gating"]["assigned_marker_views"] == 8
 
 
+def test_object_conditioned_gating_can_stay_inactive_outside_reacquire() -> None:
+    cameras = create_dummy_calibration(["cam0", "cam1"], focal_length=800.0)
+    points_world = WAIST_PATTERN.marker_positions + np.array([0.0, 0.0, 2.5])
+    observations = _observations_for_points(cameras, points_world)
+    estimator = RigidBodyEstimator(
+        patterns=[WAIST_PATTERN],
+        object_gating_config=ObjectGatingConfig(activation_mode="reacquire_only"),
+    )
+    for index in range(3):
+        estimator.process_context(
+            points_world,
+            1_000_000 + index * 16_000,
+            camera_params=cameras,
+            observations_by_camera=observations,
+        )
+    frames = {
+        camera_id: _Frame([
+            {"x": float(obs["raw_uv"][0]), "y": float(obs["raw_uv"][1]), "area": 4.0}
+            for obs in camera_observations
+        ])
+        for camera_id, camera_observations in observations.items()
+    }
+
+    inactive = estimator.evaluate_object_conditioned_gating(
+        timestamp=1_048_000,
+        camera_params=cameras,
+        frames_by_camera=frames,
+    )["waist"]
+    estimator.trackers["waist"].update(_invalid_pose(1_064_000))
+    active = estimator.evaluate_object_conditioned_gating(
+        timestamp=1_080_000,
+        camera_params=cameras,
+        frames_by_camera=frames,
+    )["waist"]
+
+    assert inactive["evaluated"] is False
+    assert inactive["reason"] == "inactive_mode"
+    assert inactive["mode"] == "continue"
+    assert active["evaluated"] is True
+    assert active["mode"] == "reacquire"
+
+
 def test_object_gating_enforcement_selects_valid_rigid_hint_pose() -> None:
     cameras = create_dummy_calibration(["cam0", "cam1"], focal_length=800.0)
     points_world = WAIST_PATTERN.marker_positions + np.array([0.0, 0.0, 2.5])

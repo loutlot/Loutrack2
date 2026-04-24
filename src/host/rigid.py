@@ -244,6 +244,7 @@ class ObjectGatingConfig:
 
     enabled: bool = True
     enforce: bool = False
+    activation_mode: str = "always"
     min_enforced_markers: int = 3
     pixel_min: float = 4.0
     pixel_max: float = 16.0
@@ -255,6 +256,7 @@ class ObjectGatingConfig:
             "pixel_max": float(self.pixel_max),
             "single_ray_confidence_min": float(self.single_ray_confidence_min),
             "enforce": bool(self.enforce),
+            "activation_mode": str(self.activation_mode),
             "min_enforced_markers": int(self.min_enforced_markers),
         }
 
@@ -1465,6 +1467,16 @@ class RigidBodyEstimator:
                 reason="disabled",
                 thresholds=thresholds,
             )
+        active, inactive_reason = self._object_gating_active_for_tracker(tracker)
+        if not active:
+            result = _empty_object_gating(
+                enabled=True,
+                enforced=config.enforce,
+                reason=inactive_reason,
+                thresholds=thresholds,
+            )
+            result["mode"] = tracker.mode.value
+            return result
         if not camera_params or not frames_by_camera:
             return _empty_object_gating(
                 enabled=True,
@@ -1587,6 +1599,20 @@ class RigidBodyEstimator:
             "per_marker_ray_count": [int(value) for value in marker_ray_counts],
             "per_camera": per_camera,
         }
+
+    def _object_gating_active_for_tracker(
+        self,
+        tracker: RigidBodyTracker,
+    ) -> Tuple[bool, str]:
+        mode = str(self.object_gating_config.activation_mode or "always")
+        tracker_mode = tracker.mode
+        if mode == "always":
+            return True, "ok"
+        if mode == "reacquire_only":
+            return tracker_mode == TrackMode.REACQUIRE, "inactive_mode"
+        if mode == "boot_or_reacquire":
+            return tracker_mode in {TrackMode.BOOT, TrackMode.REACQUIRE}, "inactive_mode"
+        return True, "unknown_activation_mode"
 
     @staticmethod
     def _object_gate_px(prediction: PredictedPose, config: ObjectGatingConfig) -> float:
