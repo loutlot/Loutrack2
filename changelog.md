@@ -1,3 +1,4 @@
+- Phase 4.5 reacquire guard tuning now uses a 136 degree rotation-innovation threshold that keeps replay valid-frame loss under the go/no-go budget
 - Phase 4.5 rigid stabilization replay now records per-frame reacquire guard events and compares shadow versus enforced guard outcomes before Phase 5
 - rigid body stabilization planning now folds Phase 5 prerequisites into Phase 4.5 sub-steps instead of adding a separate Phase 4.6
 - Phase 4.5 rigid stabilization now adds shadow-first reacquire candidate guard diagnostics with optional enforcement hooks

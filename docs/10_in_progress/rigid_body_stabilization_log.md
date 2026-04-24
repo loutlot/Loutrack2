@@ -945,3 +945,90 @@ Phase 5 の実装には進める。ただし、Phase 4.5 enforcement を default
 - Phase 5 に入る前に、1 回だけ threshold tuning replay を試す。
 - tuning で `valid_drop_ratio <= 2%` に収まれば enforcement candidate として残す。
 - 収まらなければ enforcement は off のまま、Phase 5 の object-conditioned gating で改善を狙う。
+
+## 2026-04-24 - Phase 4.5 Guard Threshold Tuning
+
+### 実装結果
+
+- 実ログ `logs/tracking_gui.jsonl` に対して Phase 4.5 guard の閾値探索を行った。
+- 探索対象は主に `max_rotation_innovation_deg`, `max_mean_reprojection_error_px`, `max_p95_reprojection_error_px`, `max_missing_marker_views`, `allow_duplicate_assignment`, `min_matched_marker_views`。
+- 結果として、2D 側の閾値を緩めても valid drop はほぼ変わらず、flip 改善の有無は `max_rotation_innovation_deg` が支配的だった。
+- `max_rotation_innovation_deg = 120 deg` は flip 改善が大きいが valid drop が `2.23%` で暫定基準 `2%` を超えた。
+- `max_rotation_innovation_deg >= 139 deg` は valid drop が `1.42%` と軽いが、flip 改善が消えた。
+- 最良バランスとして `max_rotation_innovation_deg = 136 deg` を採用した。
+- `src/host/rigid.py` の `ReacquireGuardConfig.max_rotation_innovation_deg` default を `136.0` に更新した。
+- `docs/10_in_progress/rigid_body_stabilization_plan.md` の Phase 4.5 guard 条件と feature flag 例も `136.0` に更新した。
+- `changelog.md` に Phase 4.5 tuning の結果を記録した。
+
+### 探索結果
+
+Baseline shadow:
+
+- valid poses: `493`
+- max pose flip candidate: `138.43282502436344 deg`
+- pose jump count: `0`
+
+代表候補:
+
+| max rotation innovation | valid poses | valid drop | valid drop ratio | max flip deg | flip improvement | rejected |
+|---:|---:|---:|---:|---:|---:|---:|
+| `120 deg` | `482` | `11` | `2.231%` | `132.52457336011963` | `5.908` | `11` |
+| `135 deg` | `483` | `10` | `2.028%` | `134.0456763538021` | `4.387` | `10` |
+| `136 deg` | `484` | `9` | `1.826%` | `135.53086180165727` | `2.902` | `9` |
+| `137 deg` | `484` | `9` | `1.826%` | `135.53086180165727` | `2.902` | `9` |
+| `138 deg` | `485` | `8` | `1.623%` | `137.00034352167532` | `1.432` | `8` |
+| `139 deg` | `486` | `7` | `1.420%` | `138.43282502436344` | `0.000` | `7` |
+
+`136 deg` と `137 deg` は同じ replay 結果だった。閾値として少し厳しい側の `136 deg` を採用する。
+
+### 採用設定での Phase 4.5 comparison
+
+```bash
+/tmp/loutrack-py313-test/bin/python - <<'PY'
+from src.host.tracking_replay_harness import compare_reacquire_guard_enforcement
+c = compare_reacquire_guard_enforcement(
+    log_path='logs/tracking_gui.jsonl',
+    calibration_path='calibration',
+    patterns=['waist'],
+    rigids_path='calibration/tracking_rigids.json',
+)
+print(c['phase45_go_no_go'])
+PY
+```
+
+Shadow replay:
+
+- valid poses: `493`
+- max pose flip candidate: `138.43282502436344 deg`
+- pose jump count: `0`
+- guard would reject event count: `5`
+
+Enforcement replay with `136 deg`:
+
+- valid poses: `484`
+- valid drop frames: `9`
+- valid drop ratio: `0.018255578093306288`
+- max pose flip candidate: `135.53086180165727 deg`
+- pose jump count: `0`
+- enforced reject count: `9`
+
+Go / no-go:
+
+- decision: `go_candidate`
+- reason: `enforcement did not worsen replay metrics beyond configured thresholds`
+- max valid drop criterion: `0.02`
+- pose flip not worse: `true`
+- pose jump not worse: `true`
+
+### 読み取り
+
+今回のログでは、`136 deg` が「valid を落としすぎず、flip も少し改善する」バランスだった。`120 deg` の方が flip 改善は大きいが、valid drop が基準を超える。`139 deg` 以上は安全だが flip 改善が出ない。
+
+ただし、この結論は現在の短い実ログに対する最適化。runtime default で enforcement を有効化する前に、静止ログと stress log で false lost が増えないことを確認したい。
+
+### 次に期待すること
+
+- Phase 4.5 enforcement は `go_candidate` になったが、まだ本番 default は shadow-only が安全。
+- 次に実機の静止ログ / stress log を取り、同じ `compare_reacquire_guard_enforcement()` で `136 deg` 設定を評価する。
+- stress log でも `valid_drop_ratio <= 2%`, `pose_flip_deg not worse`, `pose_jump_count not worse` なら、runtime config から enforcement を明示的に有効化する候補にできる。
+- Phase 5 には進める。Phase 5 では object-conditioned gating の default を diagnostics-only にし、Phase 4.5 enforcement と同時に強くしすぎないようにする。

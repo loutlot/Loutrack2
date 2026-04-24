@@ -460,7 +460,7 @@ guard_pass = (
     and reprojection_score.duplicate_assignment_count == 0
     and reprojection_score.missing_marker_views <= 2
     and position_innovation_m <= 0.25
-    and rotation_innovation_deg <= 120.0
+    and rotation_innovation_deg <= 136.0
 )
 ```
 
@@ -620,7 +620,7 @@ Vicon 方式に近づける将来 phase。host 側の object-conditioned gating 
       "max_p95_reprojection_error_px": 8.0,
       "allow_duplicate_assignment": false,
       "max_position_innovation_m": 0.25,
-      "max_rotation_innovation_deg": 120.0
+      "max_rotation_innovation_deg": 136.0
     }
   }
 }

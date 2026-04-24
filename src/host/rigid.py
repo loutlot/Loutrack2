@@ -222,7 +222,7 @@ class ReacquireGuardConfig:
     max_p95_reprojection_error_px: float = 8.0
     allow_duplicate_assignment: bool = False
     max_position_innovation_m: float = 0.25
-    max_rotation_innovation_deg: float = 120.0
+    max_rotation_innovation_deg: float = 136.0
 
     def thresholds_dict(self) -> Dict[str, Any]:
         return {
