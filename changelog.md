@@ -1,3 +1,6 @@
+- object-gating enforcement now explicitly adopts qualified rigid-hint poses and exposes runtime/replay flags with enforcement diagnostics
+- rigid stabilization now requires consistent reacquire candidates and one-to-one 2D scoring to reduce flip-prone pose recovery
+- rigid stabilization replay now reports subset adoption shadow outcomes before enabling subset pose commits
 - Phase 6.5 rigid stabilization now prunes subset candidates and ranks them with combined 2D, coverage, source, and temporal scores in replay diagnostics
 - Phase 6 rigid stabilization now emits diagnostics-only subset RANSAC and weighted-solve replay summaries before changing pose adoption
 - Phase 5 rigid stabilization now compares diagnostics-only `rigid_hint` poses against generic poses in replay summaries so Phase 6 subset RANSAC inputs are ready

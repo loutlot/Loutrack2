@@ -129,6 +129,7 @@ class TrackingRuntime:
         calibration_path: str,
         patterns: Optional[List[str]] = None,
         epipolar_threshold_px: Optional[float] = None,
+        rigid_stabilization: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Start tracking runtime and attach pose callback."""
         self.stop()
@@ -148,6 +149,7 @@ class TrackingRuntime:
             calibration_path=calibration_path,
             patterns=selected_patterns,
             epipolar_threshold_px=epipolar_threshold_px,
+            rigid_stabilization=rigid_stabilization,
         )
         pipeline.set_pose_callback(self._on_pose)
         self._start_pipeline_with_retry(pipeline)

@@ -60,6 +60,24 @@ def _empty_triangulation_quality() -> Dict[str, Any]:
     }
 
 
+def _rigid_stabilization_configs(settings: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    payload = settings if isinstance(settings, dict) else {}
+    return {
+        "reacquire_guard_config": ReacquireGuardConfig(
+            shadow_enabled=bool(payload.get("reacquire_guard_shadow_enabled", True)),
+            enforced=bool(payload.get("reacquire_guard_enforced", False)),
+        ),
+        "object_gating_config": ObjectGatingConfig(
+            enabled=bool(payload.get("object_conditioned_gating", True)),
+            enforce=bool(payload.get("object_gating_enforced", False)),
+        ),
+        "subset_solve_config": SubsetSolveConfig(
+            enabled=bool(payload.get("subset_ransac", True)),
+            diagnostics_only=True,
+        ),
+    }
+
+
 def _copy_triangulation_quality(payload: Dict[str, Any]) -> Dict[str, Any]:
     quality = payload or {}
     contributing = quality.get("contributing_rays", {})
@@ -109,6 +127,7 @@ class TrackingPipeline:
         reacquire_guard_event_logging: bool = False,
         object_gating_config: Optional[ObjectGatingConfig] = None,
         subset_solve_config: Optional[SubsetSolveConfig] = None,
+        rigid_stabilization: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize tracking pipeline.
@@ -130,6 +149,11 @@ class TrackingPipeline:
             else None
         )
         self.reacquire_guard_event_logging = bool(reacquire_guard_event_logging)
+        stabilization_configs = _rigid_stabilization_configs(rigid_stabilization)
+        if rigid_stabilization and "reacquire_guard_event_logging" in rigid_stabilization:
+            self.reacquire_guard_event_logging = bool(
+                rigid_stabilization.get("reacquire_guard_event_logging")
+            )
         
         # Initialize components
         self.frame_processor = FrameProcessor(
@@ -140,9 +164,12 @@ class TrackingPipeline:
         self.geometry = GeometryPipeline()
         self.rigid_estimator = RigidBodyEstimator(
             patterns=patterns or [WAIST_PATTERN],
-            reacquire_guard_config=reacquire_guard_config or ReacquireGuardConfig(),
-            object_gating_config=object_gating_config or ObjectGatingConfig(),
-            subset_solve_config=subset_solve_config or SubsetSolveConfig(),
+            reacquire_guard_config=reacquire_guard_config
+            or stabilization_configs["reacquire_guard_config"],
+            object_gating_config=object_gating_config
+            or stabilization_configs["object_gating_config"],
+            subset_solve_config=subset_solve_config
+            or stabilization_configs["subset_solve_config"],
         )
         self.metrics = MetricsCollector()
         
@@ -541,6 +568,8 @@ class TrackingPipeline:
                 "timestamp": int(timestamp),
                 "rigid_name": str(rigid_name),
                 "mode": str(gating.get("mode", "")),
+                "enforced": bool(gating.get("enforced", False)),
+                "diagnostics_only": bool(gating.get("diagnostics_only", True)),
                 "reason": str(gating.get("reason", "")),
                 "confidence": float(gating.get("confidence", 0.0)),
                 "pixel_gate_px": float(gating.get("pixel_gate_px", 0.0)),
@@ -605,6 +634,10 @@ class TrackingPipeline:
                     "rigid_name": str(rigid_name),
                     "reason": str(hint_pose.get("reason", "")),
                     "valid": bool(hint_pose.get("valid", False)),
+                    "enforced": bool(hint_pose.get("enforced", False)),
+                    "diagnostics_only": bool(hint_pose.get("diagnostics_only", True)),
+                    "selected_for_pose": bool(hint_pose.get("selected_for_pose", False)),
+                    "selection_reason": str(hint_pose.get("selection_reason", "")),
                     "generic_valid": bool(hint_pose.get("generic_valid", False)),
                     "would_improve_score": bool(hint_pose.get("would_improve_score", False)),
                     "candidate_points": int(hint_pose.get("candidate_points", 0)),
@@ -642,6 +675,7 @@ class TrackingPipeline:
                     "timestamp": int(timestamp),
                     "rigid_name": str(rigid_name),
                     "reason": str(subset.get("reason", "")),
+                    "generic_valid": bool(subset.get("generic_valid", False)),
                     "candidate_count": int(subset.get("candidate_count", 0)),
                     "pruned_candidate_count": int(subset.get("pruned_candidate_count", 0)),
                     "valid_candidate_count": int(subset.get("valid_candidate_count", 0)),
@@ -660,6 +694,7 @@ class TrackingPipeline:
                     "generic_score": float(subset.get("generic_score", 0.0)),
                     "score_delta": float(subset.get("score_delta", 0.0)),
                     "best_p95_error_px": float(best.get("p95_error_px", 0.0)),
+                    "best_position_delta_m": float(best.get("position_delta_m", 0.0)),
                     "best_rotation_delta_deg": float(best.get("rotation_delta_deg", 0.0)),
                     "subset_adoption_ready": bool(subset.get("subset_adoption_ready", False)),
                     "diagnostics_only": bool(subset.get("diagnostics_only", True)),
@@ -850,7 +885,8 @@ class TrackingSession:
             calibration_path=self.config.get("calibration_path"),
             patterns=self.config.get("patterns"),
             enable_logging=self.config.get("enable_logging", True),
-            log_dir=self.config.get("log_dir", "./logs")
+            log_dir=self.config.get("log_dir", "./logs"),
+            rigid_stabilization=self.config.get("rigid_stabilization"),
         )
         
         self._max_history: int = self.config.get("max_history", 3600)  # ~1 min at 60fps

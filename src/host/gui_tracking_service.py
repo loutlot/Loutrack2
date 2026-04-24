@@ -79,6 +79,9 @@ class GuiTrackingService:
         epipolar_threshold_px = normalize_epipolar_threshold_px(
             payload.get("epipolar_threshold_px")
         )
+        rigid_stabilization = payload.get("rigid_stabilization")
+        if not isinstance(rigid_stabilization, dict):
+            rigid_stabilization = None
         current_status = owner.tracking_runtime.status()
         if bool(current_status.get("running", False)):
             response = {
@@ -98,10 +101,13 @@ class GuiTrackingService:
         optimization = self._prepare_pis_for_tracking(targets)
         self._pause_receiver_for_tracking()
         try:
+            start_kwargs = {"epipolar_threshold_px": epipolar_threshold_px}
+            if rigid_stabilization is not None:
+                start_kwargs["rigid_stabilization"] = rigid_stabilization
             status = owner.tracking_runtime.start(
                 str(resolved),
                 [str(item) for item in patterns],
-                epipolar_threshold_px=epipolar_threshold_px,
+                **start_kwargs,
             )
             start_kwargs = scheduled_start_kwargs("pose_capture")
             stream_start = owner.session._broadcast(targets, "start", **start_kwargs)

@@ -9,10 +9,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from host.geo import CameraParams, create_dummy_calibration
 from host.rigid import (
+    KabschEstimator,
     ObjectGatingConfig,
     ReacquireGuardConfig,
     RigidBodyEstimator,
     RigidBodyPose,
+    SubsetSolveConfig,
     WAIST_PATTERN,
 )
 
@@ -85,6 +87,57 @@ def test_process_points_keeps_3d_only_path_without_2d_score() -> None:
     score = estimator.get_tracking_status()["waist"]["reprojection_score"]
     assert score["scored"] is False
     assert score["reason"] == "no_2d_context"
+
+
+def test_partial_marker_correspondence_is_pose_invariant() -> None:
+    translation = np.array([0.25, -0.12, 2.5], dtype=np.float64)
+    marker_indices = [3, 0, 1]
+    observed = WAIST_PATTERN.marker_positions[marker_indices] + translation
+
+    matched_obs, matched_ref, rms_error = KabschEstimator.find_correspondence(
+        observed,
+        WAIST_PATTERN.marker_positions,
+    )
+    rotation, position, error = KabschEstimator.estimate(matched_ref, matched_obs)
+
+    assert rms_error < 1e-9
+    assert error < 1e-9
+    assert np.allclose(rotation, np.eye(3), atol=1e-9)
+    assert np.allclose(position, translation, atol=1e-9)
+
+
+def test_reprojection_scoring_uses_one_to_one_blob_assignment() -> None:
+    cameras = create_dummy_calibration(["cam0", "cam1"], focal_length=800.0)
+    points_world = WAIST_PATTERN.marker_positions + np.array([0.0, 0.0, 2.5])
+    observations = {}
+    for camera_id, camera in cameras.items():
+        uv = _project(camera, points_world[0])
+        observations[camera_id] = [
+            {
+                "camera_id": camera_id,
+                "blob_index": 0,
+                "raw_uv": [uv[0], uv[1]],
+                "undistorted_uv": [uv[0], uv[1]],
+                "area": 4.0,
+            }
+        ]
+    estimator = RigidBodyEstimator(
+        patterns=[WAIST_PATTERN],
+        reprojection_match_gate_px=1000.0,
+    )
+
+    estimator.process_context(
+        points_world,
+        1_000_000,
+        camera_params=cameras,
+        observations_by_camera=observations,
+    )
+
+    score = estimator.get_tracking_status()["waist"]["reprojection_score"]
+    assert score["scored"] is True
+    assert score["matched_marker_views"] == 2
+    assert score["missing_marker_views"] == 6
+    assert score["duplicate_assignment_count"] == 0
 
 
 def _invalid_pose(timestamp: int) -> RigidBodyPose:
@@ -204,6 +257,95 @@ def test_object_conditioned_gating_assigns_predicted_marker_windows() -> None:
     assert gating["generic_fallback_blob_count"] == 0
     assert gating["pixel_gate_px"] >= ObjectGatingConfig().pixel_min
     assert estimator.get_tracking_status()["waist"]["object_gating"]["assigned_marker_views"] == 8
+
+
+def test_object_gating_enforcement_selects_valid_rigid_hint_pose() -> None:
+    cameras = create_dummy_calibration(["cam0", "cam1"], focal_length=800.0)
+    points_world = WAIST_PATTERN.marker_positions + np.array([0.0, 0.0, 2.5])
+    generic_points = points_world + np.array([0.12, 0.0, 0.0])
+    observations = _observations_for_points(cameras, points_world)
+    rigid_hint_points = [
+        {
+            "point": [float(value) for value in point],
+            "source": "rigid_hint",
+            "rigid_name": "waist",
+            "marker_idx": marker_idx,
+            "is_virtual": False,
+            "contributing_rays": 2,
+            "reprojection_errors_px": [0.0, 0.0],
+        }
+        for marker_idx, point in enumerate(points_world)
+    ]
+    estimator = RigidBodyEstimator(
+        patterns=[WAIST_PATTERN],
+        object_gating_config=ObjectGatingConfig(enforce=True),
+    )
+
+    poses = estimator.process_context(
+        generic_points,
+        1_000_000,
+        camera_params=cameras,
+        observations_by_camera=observations,
+        rigid_hint_triangulated_points=rigid_hint_points,
+    )
+
+    assert poses["waist"].valid is True
+    assert np.linalg.norm(poses["waist"].position - np.array([0.0, 0.0, 2.5])) < 1e-9
+    diagnostics = estimator.get_tracking_status()["waist"]["rigid_hint_pose"]
+    assert diagnostics["enforced"] is True
+    assert diagnostics["diagnostics_only"] is False
+    assert diagnostics["selected_for_pose"] is True
+    assert diagnostics["selection_reason"] == "object_gating_enforced"
+
+
+def test_object_gating_enforcement_keeps_generic_pose_when_hint_quality_is_insufficient() -> None:
+    cameras = create_dummy_calibration(["cam0", "cam1"], focal_length=800.0)
+    points_world = WAIST_PATTERN.marker_positions + np.array([0.0, 0.0, 2.5])
+    generic_points = points_world + np.array([0.12, 0.0, 0.0])
+    observations = _observations_for_points(cameras, points_world)
+    rigid_hint_points = [
+        {
+            "point": [float(value) for value in point],
+            "source": "rigid_hint",
+            "rigid_name": "waist",
+            "marker_idx": marker_idx,
+            "is_virtual": False,
+            "contributing_rays": 2,
+            "reprojection_errors_px": [0.0, 0.0],
+        }
+        for marker_idx, point in enumerate(points_world[:2])
+    ]
+    estimator = RigidBodyEstimator(
+        patterns=[WAIST_PATTERN],
+        object_gating_config=ObjectGatingConfig(enforce=True),
+    )
+
+    poses = estimator.process_context(
+        generic_points,
+        1_000_000,
+        camera_params=cameras,
+        observations_by_camera=observations,
+        rigid_hint_triangulated_points=rigid_hint_points,
+    )
+
+    assert poses["waist"].valid is True
+    assert np.linalg.norm(poses["waist"].position - np.array([0.12, 0.0, 2.5])) < 1e-9
+    diagnostics = estimator.get_tracking_status()["waist"]["rigid_hint_pose"]
+    assert diagnostics["enforced"] is True
+    assert diagnostics["selected_for_pose"] is False
+    assert diagnostics["selection_reason"] in {
+        "insufficient_rigid_hint_points",
+        "not_enforceable",
+    }
+
+
+def test_subset_solve_config_rejects_unimplemented_adoption_mode() -> None:
+    try:
+        SubsetSolveConfig(diagnostics_only=False)
+    except ValueError as exc:
+        assert "diagnostics_only must remain True" in str(exc)
+    else:
+        raise AssertionError("SubsetSolveConfig should reject diagnostics_only=False")
 
 
 def test_process_context_reports_rigid_hint_pose_side_by_side_without_commit() -> None:

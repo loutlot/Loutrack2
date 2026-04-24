@@ -1711,3 +1711,273 @@ Phase 6.5 は完了状態。候補数、flip-risk候補、runtime cost が下が
 - empty best `8` frame の理由を分解する。`reason_counts` や no-rankable frame の camera/blob状況を追加するとよい。
 - runtime max `74.9ms` のスパイクを潰す。候補数だけでなく、per-frame candidate generation time / scoring time を分けて計測する。
 - `subset_adoption_ready_ratio` が `0.9+`、かつ replay flip悪化なし、rigid_ms p95が目標内になってから採択ONを検討する。
+
+## Phase 6.6 - Subset adoption shadow replay
+
+### 実装結果
+
+- `subset_hypothesis.best` に pose payload を残し、event 側に `generic_valid`, `best_position_delta_m`, `best_rotation_delta_deg` を追加した。
+- `TrackingReplaySummary.subset_hypothesis_summary.totals.subset_adoption_shadow` を追加した。
+- shadow replay は実際の commit path を変えず、`subset_adoption_ready == true` の frame だけ仮採択した場合の valid event delta、score worsening、flip worsening、jump worsening を集計する。
+- `ready_for_enforcement_replay` は adoption coverage が `0.90+` かつ score/flip/jump 悪化が0の場合だけ true にする。
+- `tests/test_tracking_replay_harness.py` に subset adoption shadow summary の test を追加した。
+- `changelog.md` に subset adoption shadow replay の進捗を記録した。
+
+### データ契約
+
+`subset_hypothesis_summary.totals.subset_adoption_shadow` は以下の形で出る。
+
+```json
+{
+  "decision": "keep_shadow_until_coverage_improves",
+  "reason": "shadow adoption did not worsen candidate deltas, but coverage is still too low",
+  "event_count": 493,
+  "adopted_event_count": 283,
+  "adoption_ratio": 0.5740365111561866,
+  "baseline_valid_events": 493,
+  "shadow_valid_events": 493,
+  "valid_event_delta": 0,
+  "score_worse_count": 0,
+  "flip_worse_count": 0,
+  "jump_worse_count": 0,
+  "ready_for_enforcement_replay": false
+}
+```
+
+### 検証
+
+Phase 6 / 6.5 / 6.6 周辺の主テスト:
+
+```bash
+/tmp/loutrack-py313-test/bin/python -m pytest \
+  tests/test_geo_blob_assignment.py \
+  tests/test_tracking_pipeline_diagnostics.py \
+  tests/test_rigid_reprojection_scoring.py \
+  tests/test_rigid_body_tracker_stats.py \
+  tests/test_pattern_evaluator.py \
+  tests/test_tracking_replay_harness.py -q
+```
+
+結果: `38 passed`
+
+実ログ replay:
+
+```bash
+/tmp/loutrack-py313-test/bin/python - <<'PY'
+from src.host.tracking_replay_harness import replay_tracking_log
+summary = replay_tracking_log(
+    log_path='logs/tracking_gui.jsonl',
+    calibration_path='calibration',
+    patterns=['waist'],
+    rigids_path='calibration/tracking_rigids.json',
+)
+s = summary.to_dict()
+print(s['subset_hypothesis_summary']['totals']['subset_adoption_shadow'])
+PY
+```
+
+結果:
+
+- adopted event count: `283`
+- adoption ratio: `0.5740365111561866`
+- baseline valid events: `493`
+- shadow valid events: `493`
+- valid event delta: `0`
+- score worse count: `0`
+- flip worse count: `0`
+- jump worse count: `0`
+- ready for enforcement replay: `false`
+- decision: `keep_shadow_until_coverage_improves`
+
+### 読み取り
+
+今の `logs/tracking_gui.jsonl` では、`subset_adoption_ready` frame だけ仮採択しても score / flip / jump の悪化は見えなかった。これは良いサイン。
+
+ただし adoption ratio は `0.574` で、採択対象がまだ約57%に留まる。baseline valid event と shadow valid event も同じ `493` なので、このログでは valid/lost 改善はまだ示せていない。したがって default 採択ONや enforcement replay へはまだ進めず、shadow 継続が妥当。
+
+この結果は「subset adoption が危険」というより、「subset adoption が効く frame は安全そうだが、coverage が足りず、今の短いログだけでは採択ONの価値がまだ弱い」という読み取り。
+
+### 次に期待すること
+
+- 次は coverage 改善。`subset_adoption_ready_ratio` を `0.9+` に近づける。
+- empty best / no-rankable frame の理由を event に出し、残り frame がなぜ adoption_ready にならないか分解する。
+- 片 camera 遮蔽、表裏flipが出やすい stress log で同じ shadow summary を確認する。
+- adoption ratio が上がり、score/flip/jump worse が0のままなら、次に subset adoption enforcement replay を追加する。
+
+## Phase 6.6 Review Fixes - Reacquire consistency / one-to-one scoring
+
+### 実装結果
+
+- `src/host/rigid.py` の `REACQUIRE` mode で、large innovation candidate を `reacquire_consecutive_accepts` に数えないようにした。`CONTINUE` へ戻るには、prediction と整合する candidate が連続で必要になった。
+- `src/host/rigid.py` の partial-marker correspondence を、world/body 座標の直接最近傍ではなく、reference subset と permutation を Kabsch residual で選ぶ pose-invariant な探索にした。
+- `src/host/rigid.py` の 2D reprojection scoring を、camera ごとの nearest blob 重複許容から Hungarian の one-to-one assignment に変えた。
+- `src/host/tracking_replay_harness.py` の subset adoption shadow 集計で、`generic_valid` 欠損 event を baseline valid と誤カウントしないようにした。
+- `tests/test_rigid_body_tracker_stats.py`, `tests/test_rigid_reprojection_scoring.py`, `tests/test_tracking_replay_harness.py` に regression test を追加した。
+- `changelog.md` に review fix の user-visible outcome を記録した。
+
+### 検証
+
+```bash
+/tmp/loutrack-py313-test/bin/python -m pytest \
+  tests/test_geo_blob_assignment.py \
+  tests/test_tracking_pipeline_diagnostics.py \
+  tests/test_rigid_reprojection_scoring.py \
+  tests/test_rigid_body_tracker_stats.py \
+  tests/test_pattern_evaluator.py \
+  tests/test_tracking_replay_harness.py -q
+```
+
+結果: `42 passed`
+
+周辺 runtime / GUI backend / clusterer test:
+
+```bash
+/tmp/loutrack-py313-test/bin/python -m pytest \
+  tests/test_tracking_runtime.py \
+  tests/test_gui_backend_services.py \
+  tests/test_rigid_clusterer.py -q
+```
+
+結果: `52 passed`
+
+実ログ replay:
+
+```bash
+/tmp/loutrack-py313-test/bin/python - <<'PY'
+from src.host.tracking_replay_harness import replay_tracking_log
+summary = replay_tracking_log(
+    log_path='logs/tracking_gui.jsonl',
+    calibration_path='calibration',
+    patterns=['waist'],
+    rigids_path='calibration/tracking_rigids.json',
+).to_dict()
+print({k: summary[k] for k in ['frame_count', 'pair_count', 'frames_processed', 'poses_estimated']})
+print(summary['tracking']['waist']['max_pose_flip_deg'])
+print(summary['subset_hypothesis_summary']['totals']['subset_adoption_shadow'])
+PY
+```
+
+結果:
+
+- frames processed: `497`
+- valid poses: `493`
+- max pose flip candidate: `8.719878277400714 deg`
+- max pose jump: `0.006559166867892473 m`
+- subset adopted event count: `286`
+- subset adoption ratio: `0.5801217038539553`
+- score worse count: `0`
+- flip worse count: `0`
+- jump worse count: `0`
+- decision: `keep_shadow_until_coverage_improves`
+
+### 読み取り
+
+今回の修正はリサーチ/計画の「reacquire は数フレームだけ multi-hypothesis を許して margin が付いたら commit」「2D scoring は camera ごとに one-to-one assignment」「partial subset は template geometry で評価する」という方針に沿っている。
+
+特に `max_pose_flip_deg` が `138.43282502436344 deg` から `8.719878277400714 deg` まで下がり、`493 / 497` valid は維持された。これは、以前の large innovation candidate が reacquire confirmation に混ざっていた問題が replay 上でも flip 候補を増やしていたことを示す。
+
+一方、subset adoption ratio はまだ `0.580` で、default 採択ONの条件 `0.9+` には届いていない。結論は Phase 6.6 と同じく、shadow 継続が妥当。
+
+## Phase 6.7 - Object-gating enforcement / flag honesty
+
+### 実装結果
+
+- `ObjectGatingConfig(enforce=True)` を実挙動へ接続した。default `False` では従来どおり diagnostics-only。
+- enforce on のときは、`rigid_hint` marker-indexed points から作った pose が valid で、`min_enforced_markers` と 2D matched marker views を満たす場合だけ committed pose として採択する。
+- hint 品質が足りない場合は generic pose fallback を維持し、`selection_reason` に理由を残す。
+- `tracking.<name>.rigid_hint_pose` と replay event に `enforced`, `diagnostics_only`, `selected_for_pose`, `selection_reason` を追加した。
+- object gating event / summary に `enforced` と `diagnostics_only` を追加し、replay で shadow と enforcement の区別を追えるようにした。
+- `replay_tracking_log(..., object_gating_enforced=True)` と CLI `--object-gating-enforced` を追加した。
+- `TrackingPipeline`, `TrackingRuntime.start()`, GUI tracking start payload, `TrackingSession` に `rigid_stabilization` dict を通し、`reacquire_guard_*`, `object_conditioned_gating`, `object_gating_enforced`, `subset_ransac` を各 config へ写せるようにした。
+- `SubsetSolveConfig(diagnostics_only=False)` はまだ採択経路がないため、明示的に `ValueError` にした。subset adoption は shadow summary が go 条件を満たすまで未実装扱いにする。
+- `tests/test_rigid_reprojection_scoring.py`, `tests/test_tracking_pipeline_diagnostics.py`, `tests/test_tracking_replay_harness.py` に regression test を追加した。
+- `changelog.md` に object-gating enforcement の user-visible outcome を記録した。
+
+### 検証
+
+```bash
+/tmp/loutrack-py313-test/bin/python -m pytest \
+  tests/test_geo_blob_assignment.py \
+  tests/test_tracking_pipeline_diagnostics.py \
+  tests/test_rigid_reprojection_scoring.py \
+  tests/test_rigid_body_tracker_stats.py \
+  tests/test_pattern_evaluator.py \
+  tests/test_tracking_replay_harness.py -q
+```
+
+結果: `46 passed`
+
+GUI/runtime 周辺を含む追加検証:
+
+```bash
+/tmp/loutrack-py313-test/bin/python -m pytest \
+  tests/test_tracking_pipeline_diagnostics.py \
+  tests/test_tracking_runtime.py \
+  tests/test_gui_backend_services.py \
+  tests/test_rigid_reprojection_scoring.py \
+  tests/test_tracking_replay_harness.py -q
+```
+
+結果: `69 passed`
+
+統合した rigid / runtime / GUI backend / clusterer 検証:
+
+```bash
+/tmp/loutrack-py313-test/bin/python -m pytest \
+  tests/test_geo_blob_assignment.py \
+  tests/test_tracking_pipeline_diagnostics.py \
+  tests/test_rigid_reprojection_scoring.py \
+  tests/test_rigid_body_tracker_stats.py \
+  tests/test_pattern_evaluator.py \
+  tests/test_tracking_replay_harness.py \
+  tests/test_tracking_runtime.py \
+  tests/test_gui_backend_services.py \
+  tests/test_rigid_clusterer.py -q
+```
+
+結果: `99 passed`
+
+周辺 runtime / GUI backend / clusterer test:
+
+```bash
+/tmp/loutrack-py313-test/bin/python -m pytest \
+  tests/test_tracking_runtime.py \
+  tests/test_gui_backend_services.py \
+  tests/test_rigid_clusterer.py -q
+```
+
+結果: `52 passed`
+
+実ログ replay 比較:
+
+```bash
+/tmp/loutrack-py313-test/bin/python - <<'PY'
+from src.host.tracking_replay_harness import replay_tracking_log
+for enforced in (False, True):
+    s = replay_tracking_log(
+        log_path='logs/tracking_gui.jsonl',
+        calibration_path='calibration',
+        patterns=['waist'],
+        rigids_path='calibration/tracking_rigids.json',
+        object_gating_enforced=enforced,
+    ).to_dict()
+    waist = s['tracking']['waist']
+    hint = s['rigid_hint_pose_summary']['totals']
+    print(enforced, s['poses_estimated'], waist['max_pose_flip_deg'], waist['pose_jump_count'], hint['selected_for_pose_count'])
+PY
+```
+
+結果:
+
+| object gating enforced | valid poses | max pose flip deg | pose jumps | selected hint poses |
+|---|---:|---:|---:|---:|
+| `false` | `493` | `8.719878277400714` | `0` | `0` |
+| `true` | `493` | `8.719878277400714` | `0` | `489` |
+
+### 読み取り
+
+`ObjectGatingConfig.enforce` は、これで「診断に表示されるだけ」ではなく、条件を満たす `rigid_hint` pose を実際の committed pose として使う意味になった。default は false のままなので、通常 runtime / replay の既存挙動は維持される。
+
+今回の短い実ログでは、object-gating enforcement を有効にしても valid pose 数、pose flip、pose jump は悪化しなかった。一方で `hint_pose_adoption_ready` は false のままなので、まだ runtime default を on にする判断ではない。次は stress log / 静止 log でも `object_gating_enforced=True` replay を比較する。
+
+Subset solve については、`diagnostics_only=False` が実採択を意味するように見える問題を、いったん明示的な unsupported error にした。subset adoption は `subset_adoption_shadow.ready_for_enforcement_replay` が true になるまで別フェーズで扱う。

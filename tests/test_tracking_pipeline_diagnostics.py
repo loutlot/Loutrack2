@@ -290,6 +290,27 @@ def test_tracking_pipeline_uses_half_frame_timestamp_pairing_window() -> None:
     assert pipeline.frame_processor.pairer.frame_index_fallback is False
 
 
+def test_tracking_pipeline_maps_rigid_stabilization_flags_to_configs() -> None:
+    pipeline = TrackingPipeline(
+        enable_logging=False,
+        rigid_stabilization={
+            "reacquire_guard_shadow_enabled": False,
+            "reacquire_guard_enforced": True,
+            "object_conditioned_gating": False,
+            "object_gating_enforced": True,
+            "subset_ransac": False,
+            "reacquire_guard_event_logging": True,
+        },
+    )
+
+    assert pipeline.reacquire_guard_event_logging is True
+    assert pipeline.rigid_estimator.reacquire_guard_config.shadow_enabled is False
+    assert pipeline.rigid_estimator.reacquire_guard_config.enforced is True
+    assert pipeline.rigid_estimator.object_gating_config.enabled is False
+    assert pipeline.rigid_estimator.object_gating_config.enforce is True
+    assert pipeline.rigid_estimator.subset_solve_config.enabled is False
+
+
 def test_tracking_pipeline_keeps_fixed_pair_window_and_omits_sync_status() -> None:
     pipeline = TrackingPipeline(enable_logging=False)
     pipeline._running = True
@@ -356,3 +377,31 @@ def test_tracking_pipeline_keeps_fixed_pair_window_and_omits_sync_status() -> No
     assert "sync_precision_mode" not in snapshot
     assert "epipolar_error_px_summary" in snapshot
     assert "triangulation_angle_deg_summary" in snapshot
+
+
+def test_object_gating_events_include_enforcement_state() -> None:
+    pipeline = TrackingPipeline(enable_logging=False)
+
+    pipeline._record_object_gating_events(
+        1_000_000,
+        {
+            "waist": {
+                "evaluated": True,
+                "mode": "continue",
+                "enforced": True,
+                "diagnostics_only": False,
+                "reason": "ok",
+                "confidence": 0.9,
+                "pixel_gate_px": 4.0,
+                "assigned_marker_views": 8,
+                "candidate_window_count": 8,
+                "markers_with_two_or_more_rays": 4,
+                "single_ray_candidates": 0,
+                "generic_fallback_blob_count": 0,
+            }
+        },
+    )
+
+    event = pipeline.get_object_gating_events()[0]
+    assert event["enforced"] is True
+    assert event["diagnostics_only"] is False

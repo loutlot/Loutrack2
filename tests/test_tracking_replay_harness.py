@@ -81,7 +81,21 @@ class _FakePipeline:
             "frames_processed": self.frames_processed,
             "poses_estimated": self.poses_estimated,
             "receiver": self.frame_processor.get_stats(),
-            "tracking": {"waist": {"valid": True, "reacquire_count": 0}},
+            "tracking": {
+                "waist": {
+                    "valid": True,
+                    "reacquire_count": 0,
+                    "object_gating": {
+                        "enabled": True,
+                        "enforced": True,
+                        "diagnostics_only": False,
+                        "evaluated": True,
+                        "reason": "ok",
+                        "assigned_marker_views": 8,
+                        "candidate_window_count": 8,
+                    },
+                }
+            },
             "diagnostics": {
                 "geometry": {"quality": {"accepted_points": 4}},
                 "pipeline_stage_ms": {"rigid_ms": {"p95": 0.1}},
@@ -127,6 +141,7 @@ class _FakePipeline:
             {
                 "rigid_name": "waist",
                 "candidate_count": 12,
+                "pruned_candidate_count": 2,
                 "valid_candidate_count": 4,
                 "rejected_by_ambiguity": 2,
                 "rejected_by_2d_score": 3,
@@ -140,6 +155,7 @@ class _FakePipeline:
                 "generic_score": 0.95,
                 "score_delta": 0.04,
                 "best_p95_error_px": 0.7,
+                "best_position_delta_m": 0.0,
                 "best_rotation_delta_deg": 0.0,
                 "subset_adoption_ready": True,
                 "diagnostics_only": True,
@@ -166,9 +182,14 @@ def test_replay_tracking_log_injects_frames_through_frame_processor(
     assert summary["tracking"]["waist"]["valid"] is True
     assert "reacquire_guard_summary" in summary
     assert "object_gating_summary" in summary
+    assert summary["object_gating_summary"]["totals"]["enforced_count"] == 1
+    assert summary["object_gating_summary"]["totals"]["diagnostics_only_count"] == 0
     assert summary["rigid_hint_summary"]["totals"]["accepted_points"] == 4
     assert summary["rigid_hint_pose_summary"]["totals"]["phase6_ready"] is True
     assert summary["subset_hypothesis_summary"]["totals"]["phase6_complete"] is True
+    shadow = summary["subset_hypothesis_summary"]["totals"]["subset_adoption_shadow"]
+    assert shadow["adopted_event_count"] == 1
+    assert shadow["decision"] == "go_candidate_for_enforcement_replay"
     assert summary["phase45_go_no_go"]["decision"] in {
         "no_reacquire_reject_signal",
         "pending_enforcement_replay",
@@ -191,3 +212,37 @@ def test_compare_reacquire_guard_enforcement_returns_go_no_go(
     assert comparison["shadow"]["poses_estimated"] == 1
     assert comparison["enforced"]["poses_estimated"] == 1
     assert "decision" in comparison["phase45_go_no_go"]
+
+
+def test_subset_adoption_shadow_handles_low_coverage_and_missing_generic_valid() -> None:
+    summary = harness._summarize_subset_adoption_shadow(
+        [
+            {"subset_adoption_ready": True, "score_delta": 0.02},
+            {"generic_valid": True, "subset_adoption_ready": False},
+        ]
+    )
+
+    assert summary["baseline_valid_events"] == 1
+    assert summary["shadow_valid_events"] == 2
+    assert summary["valid_event_delta"] == 1
+    assert summary["adoption_ratio"] == 0.5
+    assert summary["decision"] == "keep_shadow_until_coverage_improves"
+
+
+def test_subset_adoption_shadow_blocks_regressions() -> None:
+    summary = harness._summarize_subset_adoption_shadow(
+        [
+            {
+                "generic_valid": True,
+                "subset_adoption_ready": True,
+                "score_delta": -0.01,
+                "best_rotation_delta_deg": 91.0,
+                "best_position_delta_m": 0.11,
+            }
+        ]
+    )
+
+    assert summary["score_worse_count"] == 1
+    assert summary["flip_worse_count"] == 1
+    assert summary["jump_worse_count"] == 1
+    assert summary["decision"] == "no_go_tune_subset_adoption"

@@ -140,5 +140,10 @@ def test_tracker_reacquire_requires_consistent_innovation_before_continue() -> N
 
     tracker.update(_pose(1_248_000, 2.15, valid=True))
     diagnostics = tracker.get_diagnostics()
+    assert diagnostics["mode"] == "reacquire"
+    assert diagnostics["last_mode_reason"] == "reacquire_candidate_consistent"
+
+    tracker.update(_pose(1_264_000, 2.80, valid=True))
+    diagnostics = tracker.get_diagnostics()
     assert diagnostics["mode"] == "continue"
     assert diagnostics["last_mode_transition"] == "reacquire->continue:reacquire_confirmed"

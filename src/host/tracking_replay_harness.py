@@ -27,6 +27,7 @@ from .rigid import (
     WAIST_PATTERN,
     MarkerPattern,
     ReacquireGuardConfig,
+    ObjectGatingConfig,
 )
 from .pipeline import TrackingPipeline
 
@@ -107,6 +108,7 @@ def replay_tracking_log(
     reacquire_guard_enforced: bool = False,
     reacquire_guard_shadow_enabled: bool = True,
     reacquire_guard_event_logging: bool = False,
+    object_gating_enforced: bool = False,
 ) -> TrackingReplaySummary:
     """Replay a tracking log through the existing host pipeline path."""
     log_path = Path(log_path)
@@ -123,6 +125,7 @@ def replay_tracking_log(
             shadow_enabled=bool(reacquire_guard_shadow_enabled),
             enforced=bool(reacquire_guard_enforced),
         ),
+        object_gating_config=ObjectGatingConfig(enforce=bool(object_gating_enforced)),
         reacquire_guard_event_logging=bool(reacquire_guard_event_logging),
     )
     if not pipeline._calibration_loaded:
@@ -309,6 +312,8 @@ def _summarize_object_gating(
     by_rigid: Dict[str, Any] = {}
     totals = {
         "evaluated_count": 0,
+        "enforced_count": 0,
+        "diagnostics_only_count": 0,
         "assigned_marker_views": 0,
         "candidate_window_count": 0,
         "markers_with_two_or_more_rays": 0,
@@ -322,6 +327,8 @@ def _summarize_object_gating(
         evaluated = bool(gating.get("evaluated", False))
         summary = {
             "enabled": bool(gating.get("enabled", False)),
+            "enforced": bool(gating.get("enforced", False)),
+            "diagnostics_only": bool(gating.get("diagnostics_only", True)),
             "evaluated": evaluated,
             "reason": str(gating.get("reason", "")),
             "mode": str(gating.get("mode", "")),
@@ -336,13 +343,21 @@ def _summarize_object_gating(
         by_rigid[str(name)] = summary
         if evaluated:
             totals["evaluated_count"] += 1
+        if summary["enforced"]:
+            totals["enforced_count"] += 1
+        if summary["diagnostics_only"]:
+            totals["diagnostics_only_count"] += 1
         for key in totals:
-            if key == "evaluated_count":
+            if key in {"evaluated_count", "enforced_count", "diagnostics_only_count"}:
                 continue
             totals[key] += int(summary.get(key, 0))
     event_list = list(events or [])
     event_totals = {
         "event_count": int(len(event_list)),
+        "enforced_count": int(sum(1 for event in event_list if event.get("enforced"))),
+        "diagnostics_only_count": int(
+            sum(1 for event in event_list if event.get("diagnostics_only", True))
+        ),
         "assigned_marker_views": int(sum(int(event.get("assigned_marker_views", 0)) for event in event_list)),
         "candidate_window_count": int(sum(int(event.get("candidate_window_count", 0)) for event in event_list)),
         "markers_with_two_or_more_rays": int(sum(int(event.get("markers_with_two_or_more_rays", 0)) for event in event_list)),
@@ -416,6 +431,7 @@ def _summarize_rigid_hint_poses(events: Optional[List[Dict[str, Any]]] = None) -
             {
                 "event_count": 0,
                 "valid_count": 0,
+                "selected_for_pose_count": 0,
                 "generic_valid_count": 0,
                 "would_improve_score_count": 0,
                 "candidate_points": 0,
@@ -428,6 +444,8 @@ def _summarize_rigid_hint_poses(events: Optional[List[Dict[str, Any]]] = None) -
         bucket["event_count"] += 1
         if event.get("valid"):
             bucket["valid_count"] += 1
+        if event.get("selected_for_pose"):
+            bucket["selected_for_pose_count"] += 1
         if event.get("generic_valid"):
             bucket["generic_valid_count"] += 1
         if event.get("would_improve_score"):
@@ -450,6 +468,9 @@ def _summarize_rigid_hint_poses(events: Optional[List[Dict[str, Any]]] = None) -
     totals = {
         "event_count": int(len(event_list)),
         "valid_count": int(sum(1 for event in event_list if event.get("valid"))),
+        "selected_for_pose_count": int(
+            sum(1 for event in event_list if event.get("selected_for_pose"))
+        ),
         "generic_valid_count": int(
             sum(1 for event in event_list if event.get("generic_valid"))
         ),
@@ -562,7 +583,63 @@ def _summarize_subset_hypotheses(events: Optional[List[Dict[str, Any]]] = None) 
         and totals["valid_candidate_count"] > 0
         and totals["truncated_count"] == 0
     )
+    totals["subset_adoption_shadow"] = _summarize_subset_adoption_shadow(event_list)
     return {"by_rigid": by_rigid, "totals": totals}
+
+
+def _summarize_subset_adoption_shadow(events: List[Dict[str, Any]]) -> Dict[str, Any]:
+    adopted = [event for event in events if event.get("subset_adoption_ready")]
+    baseline_valid = int(sum(1 for event in events if event.get("generic_valid", False)))
+    shadow_valid = int(
+        sum(
+            1
+            for event in events
+            if event.get("generic_valid", False) or event.get("subset_adoption_ready")
+        )
+    )
+    score_worse = int(
+        sum(1 for event in adopted if float(event.get("score_delta", 0.0)) < -1e-9)
+    )
+    flip_worse = int(
+        sum(1 for event in adopted if float(event.get("best_rotation_delta_deg", 0.0)) > 90.0)
+    )
+    jump_worse = int(
+        sum(1 for event in adopted if float(event.get("best_position_delta_m", 0.0)) > 0.10)
+    )
+    adoption_ratio = float(len(adopted) / len(events)) if events else 0.0
+    no_worse = bool(score_worse == 0 and flip_worse == 0 and jump_worse == 0)
+    ready_for_enforcement = bool(no_worse and adoption_ratio >= 0.90)
+    if ready_for_enforcement:
+        decision = "go_candidate_for_enforcement_replay"
+        reason = "shadow adoption shows broad coverage without score, flip, or jump regressions"
+    elif no_worse:
+        decision = "keep_shadow_until_coverage_improves"
+        reason = "shadow adoption did not worsen candidate deltas, but coverage is still too low"
+    else:
+        decision = "no_go_tune_subset_adoption"
+        reason = "shadow adoption has score, flip, or jump regressions"
+    return {
+        "decision": decision,
+        "reason": reason,
+        "event_count": int(len(events)),
+        "adopted_event_count": int(len(adopted)),
+        "adoption_ratio": adoption_ratio,
+        "baseline_valid_events": baseline_valid,
+        "shadow_valid_events": shadow_valid,
+        "valid_event_delta": int(shadow_valid - baseline_valid),
+        "score_worse_count": score_worse,
+        "flip_worse_count": flip_worse,
+        "jump_worse_count": jump_worse,
+        "ready_for_enforcement_replay": ready_for_enforcement,
+        "criteria": {
+            "min_adoption_ratio": 0.90,
+            "max_score_worse_count": 0,
+            "max_flip_worse_count": 0,
+            "max_jump_worse_count": 0,
+            "jump_threshold_m": 0.10,
+            "flip_threshold_deg": 90.0,
+        },
+    }
 
 
 def _numeric_summary(values: List[float]) -> Dict[str, float]:
@@ -750,6 +827,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--reacquire-guard-enforced", action="store_true", help="Replay with Phase 4.5 guard enforcement enabled.")
     parser.add_argument("--disable-reacquire-guard-shadow", action="store_true", help="Disable Phase 4.5 shadow guard diagnostics.")
     parser.add_argument("--reacquire-guard-event-logging", action="store_true", help="Enable live logger guard events during replay.")
+    parser.add_argument("--object-gating-enforced", action="store_true", help="Replay with Phase 5 object-gating rigid-hint pose enforcement enabled.")
     parser.add_argument("--compare-reacquire-guard-enforcement", action="store_true", help="Run both shadow and enforced Phase 4.5 replays and compare go/no-go.")
     parser.add_argument("--out", default=None, help="Optional summary JSON output path.")
     args = parser.parse_args(argv)
@@ -772,6 +850,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             reacquire_guard_enforced=bool(args.reacquire_guard_enforced),
             reacquire_guard_shadow_enabled=not bool(args.disable_reacquire_guard_shadow),
             reacquire_guard_event_logging=bool(args.reacquire_guard_event_logging),
+            object_gating_enforced=bool(args.object_gating_enforced),
         ).to_dict()
 
     text = json.dumps(summary, ensure_ascii=False, indent=2)
