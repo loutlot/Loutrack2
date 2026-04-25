@@ -194,6 +194,133 @@ def test_tracking_pipeline_reports_stage_and_logger_diagnostics(tmp_path: Path) 
     assert diagnostics_events[-1]["data"]["tracking"] == {"ok": True}
 
 
+def test_fast_filtered_generic_falls_back_without_double_tracker_update() -> None:
+    pipeline = TrackingPipeline(enable_logging=False, pipeline_variant="fast_ABCD")
+    pipeline._running = True
+    pipeline._calibration_loaded = True
+
+    class _Geometry:
+        camera_params = {}
+
+        def __init__(self) -> None:
+            self.calls = []
+
+        def process_paired_frames(
+            self,
+            _paired_frames,
+            *,
+            min_inlier_views=2,
+            object_gating=None,
+            generic_blob_indices_by_camera=None,
+        ):
+            self.calls.append(generic_blob_indices_by_camera)
+            if generic_blob_indices_by_camera is not None:
+                return {
+                    "points_3d": [],
+                    "reprojection_errors": [],
+                    "assignment_diagnostics": {},
+                    "triangulation_quality": _triangulation_quality(0),
+                    "rigid_hint_quality": {"by_rigid": {}},
+                }
+            return {
+                "points_3d": [np.array([1.0, 2.0, 3.0])],
+                "reprojection_errors": [0.25],
+                "assignment_diagnostics": {"assignment_matches": 1},
+                "triangulation_quality": _triangulation_quality(),
+                "rigid_hint_quality": {
+                    "by_rigid": {
+                        "waist": {
+                            "accepted_points": 3,
+                            "markers_with_two_or_more_rays": 3,
+                            "invalid_assignments": 0,
+                        }
+                    },
+                    "reprojection_error_px_summary": {"p95": 0.25},
+                },
+            }
+
+        def get_diagnostics(self):
+            return {"quality": _triangulation_quality()}
+
+    class _ObjectGatingConfig:
+        min_enforced_markers = 3
+
+    class _Rigid:
+        object_gating_config = _ObjectGatingConfig()
+        reprojection_match_gate_px = 12.0
+
+        def __init__(self) -> None:
+            self.process_count = 0
+
+        def evaluate_object_conditioned_gating(self, **_kwargs):
+            return {
+                "waist": {
+                    "evaluated": True,
+                    "reason": "ok",
+                    "assigned_marker_views": 6,
+                    "markers_with_two_or_more_rays": 3,
+                    "per_camera": {
+                        "pi-cam-01": {
+                            "assignments": [
+                                {"marker_idx": 0, "blob_index": 0},
+                                {"marker_idx": 1, "blob_index": 1},
+                                {"marker_idx": 2, "blob_index": 2},
+                            ]
+                        },
+                        "pi-cam-02": {
+                            "assignments": [
+                                {"marker_idx": 0, "blob_index": 0},
+                                {"marker_idx": 1, "blob_index": 1},
+                                {"marker_idx": 2, "blob_index": 2},
+                            ]
+                        },
+                    },
+                }
+            }
+
+        def process_context(self, _points, timestamp, **_kwargs):
+            self.process_count += 1
+            return {
+                "waist": RigidBodyPose(
+                    timestamp=timestamp,
+                    position=np.array([1.0, 2.0, 3.0]),
+                    rotation=np.eye(3),
+                    quaternion=np.array([1.0, 0.0, 0.0, 0.0]),
+                    rms_error=0.1,
+                    observed_markers=3,
+                    valid=True,
+                )
+            }
+
+        def get_tracking_status(self):
+            return {"waist": {"valid": True}}
+
+    geometry = _Geometry()
+    rigid = _Rigid()
+    pipeline.geometry = geometry  # type: ignore[assignment]
+    pipeline.rigid_estimator = rigid  # type: ignore[assignment]
+    now = time.time()
+    pair = PairedFrames(
+        timestamp=1_000_000,
+        frames={
+            "pi-cam-01": _frame("pi-cam-01", 1_000_000, now),
+            "pi-cam-02": _frame("pi-cam-02", 1_000_100, now + 0.001),
+        },
+        timestamp_range_us=100,
+    )
+
+    pipeline._on_paired_frames(pair)
+    pipeline._running = False
+    status = pipeline.get_status()
+
+    assert len(geometry.calls) == 2
+    assert geometry.calls[0] is not None
+    assert geometry.calls[1] is None
+    assert rigid.process_count == 1
+    assert status["diagnostics"]["fallback_summary"]["fallback_count"] == 1
+    assert status["diagnostics"]["fallback_summary"]["fallback_reason_counts"]["no_rigid_hint_candidates"] == 1
+
+
 def test_tracking_pipeline_logs_reacquire_guard_events(tmp_path: Path) -> None:
     pipeline = TrackingPipeline(
         enable_logging=True,
@@ -288,6 +415,15 @@ def test_tracking_pipeline_uses_half_frame_timestamp_pairing_window() -> None:
 
     assert pipeline.frame_processor.pairer.timestamp_tolerance_us == FIXED_PAIR_WINDOW_US
     assert pipeline.frame_processor.pairer.frame_index_fallback is False
+    assert pipeline.pipeline_variant == "fast_ABCD"
+    assert pipeline.subset_diagnostics_mode == "sampled"
+
+
+def test_tracking_pipeline_can_still_select_baseline_path() -> None:
+    pipeline = TrackingPipeline(enable_logging=False, pipeline_variant="baseline")
+
+    assert pipeline.pipeline_variant == "baseline"
+    assert pipeline.subset_diagnostics_mode == "full"
 
 
 def test_tracking_pipeline_maps_rigid_stabilization_flags_to_configs() -> None:

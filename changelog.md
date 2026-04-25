@@ -1,3 +1,5 @@
+- tracking now uses the fast_ABCD pipeline as the default path while keeping baseline selectable for replay comparisons
+- tracking replay now supports baseline/fast_A-fast_ABCDE AB reports with fast geometry, sampled subset diagnostics, object-gated fallback, and backpressure metrics
 - object-gating replay can now limit activation to recovery modes and records mode on rigid-hint pose events
 - rigid body stabilization notes now summarize failure-log PDCA findings, replay status, and live performance hold points
 - rigid stabilization replay now compares object-gating enforcement with flip-tolerant go/no-go criteria and scopes extra reacquire guarding to post-reacquire windows

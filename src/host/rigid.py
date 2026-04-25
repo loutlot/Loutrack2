@@ -9,11 +9,12 @@ Provides functionality to:
 """
 
 import numpy as np
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List, Tuple, Callable
 from dataclasses import dataclass, field
 from collections import deque
 from enum import Enum
 from itertools import combinations, permutations
+import time
 from scipy.optimize import linear_sum_assignment
 from scipy.spatial.transform import Rotation
 from scipy.spatial.distance import cdist
@@ -1372,6 +1373,8 @@ class RigidBodyEstimator:
         reacquire_guard_config: ReacquireGuardConfig = ReacquireGuardConfig(),
         object_gating_config: ObjectGatingConfig = ObjectGatingConfig(),
         subset_solve_config: SubsetSolveConfig = SubsetSolveConfig(),
+        subset_diagnostics_mode: str = "full",
+        stage_callback: Optional[Callable[[str, float], None]] = None,
     ):
         """
         Initialize estimator.
@@ -1394,6 +1397,15 @@ class RigidBodyEstimator:
         self.reacquire_guard_config = reacquire_guard_config
         self.object_gating_config = object_gating_config
         self.subset_solve_config = subset_solve_config
+        self.subset_diagnostics_mode = str(subset_diagnostics_mode or "full")
+        if self.subset_diagnostics_mode not in {"full", "sampled", "off"}:
+            raise ValueError("subset_diagnostics_mode must be full, sampled, or off")
+        self.subset_sample_interval = 30
+        self._stage_callback = stage_callback
+        self._variant_metric_lock = threading.Lock()
+        self._subset_frame_index = 0
+        self._subset_sampled_count = 0
+        self._subset_skipped_count = 0
         
         self.clusterer = PointClusterer(
             marker_diameter=marker_diameter,
@@ -1407,6 +1419,88 @@ class RigidBodyEstimator:
         
         # Kabsch estimator
         self.kabsch = KabschEstimator()
+
+    def get_variant_metrics(self) -> Dict[str, Any]:
+        with self._variant_metric_lock:
+            return {
+                "subset_sampled_count": int(self._subset_sampled_count),
+                "subset_skipped_count": int(self._subset_skipped_count),
+                "subset_diagnostics_mode": self.subset_diagnostics_mode,
+            }
+
+    def _record_subset_stage(self, started_ns: int) -> None:
+        if self._stage_callback is None:
+            return
+        self._stage_callback("subset_ms", float(time.perf_counter_ns() - started_ns) / 1_000_000.0)
+
+    def _subset_diagnostics_for_frame(
+        self,
+        pattern: MarkerPattern,
+        tracker: RigidBodyTracker,
+        timestamp: int,
+        points_3d: np.ndarray,
+        rigid_hint_triangulated_points: Optional[List[Dict[str, Any]]],
+        camera_params: Optional[Dict[str, Any]],
+        observations_by_camera: Optional[Dict[str, List[Any]]],
+        *,
+        coordinate_space: str,
+        generic_pose: Optional[RigidBodyPose],
+        generic_score: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        mode = self.subset_diagnostics_mode
+        thresholds = self.subset_solve_config.thresholds_dict()
+        if mode == "off":
+            with self._variant_metric_lock:
+                self._subset_skipped_count += 1
+            diagnostic = _empty_subset_hypothesis("disabled_by_mode", thresholds)
+            diagnostic["enabled"] = False
+            diagnostic["sampled"] = False
+            return diagnostic
+
+        evaluate = True
+        sample_reason = "full"
+        if mode == "sampled":
+            with self._variant_metric_lock:
+                self._subset_frame_index += 1
+                frame_index = self._subset_frame_index
+            risky = (
+                tracker.mode != TrackMode.CONTINUE
+                or generic_pose is None
+                or not generic_pose.valid
+                or bool((generic_score or {}).get("flip_risk", False))
+            )
+            evaluate = risky or frame_index % self.subset_sample_interval == 0
+            sample_reason = "risk" if risky else "interval" if evaluate else "sampled_skip"
+            if not evaluate:
+                with self._variant_metric_lock:
+                    self._subset_skipped_count += 1
+                diagnostic = _empty_subset_hypothesis("sampled_skip", thresholds)
+                diagnostic["sampled"] = True
+                diagnostic["sample_reason"] = sample_reason
+                return diagnostic
+
+        started_ns = time.perf_counter_ns()
+        diagnostic = self._evaluate_subset_hypotheses(
+            pattern,
+            timestamp,
+            points_3d,
+            rigid_hint_triangulated_points,
+            camera_params,
+            observations_by_camera,
+            coordinate_space=coordinate_space,
+            generic_pose=generic_pose,
+            generic_score=generic_score,
+        )
+        self._record_subset_stage(started_ns)
+        if mode == "sampled":
+            with self._variant_metric_lock:
+                self._subset_sampled_count += 1
+            diagnostic["sampled"] = True
+            diagnostic["sample_reason"] = sample_reason
+        else:
+            diagnostic["sampled"] = False
+            diagnostic["sample_reason"] = "full"
+        return diagnostic
 
     def set_patterns(self, patterns: List[MarkerPattern]) -> None:
         """Replace tracked rigid-body patterns while preserving existing trackers when possible."""
@@ -1859,8 +1953,9 @@ class RigidBodyEstimator:
                             hint_diagnostic["selection_reason"] = "not_enforceable"
                     else:
                         hint_diagnostic["selection_reason"] = "diagnostics_only"
-                subset_diagnostic = self._evaluate_subset_hypotheses(
+                subset_diagnostic = self._subset_diagnostics_for_frame(
                     pattern,
+                    tracker,
                     timestamp,
                     points_3d,
                     rigid_hint_triangulated_points,
@@ -1927,8 +2022,9 @@ class RigidBodyEstimator:
                 poses[pattern.name] = selected_pose
                 tracker.record_rigid_hint_pose(hint_diagnostic)
                 tracker.record_subset_hypothesis(
-                    self._evaluate_subset_hypotheses(
+                    self._subset_diagnostics_for_frame(
                         pattern,
+                        tracker,
                         timestamp,
                         points_3d,
                         rigid_hint_triangulated_points,

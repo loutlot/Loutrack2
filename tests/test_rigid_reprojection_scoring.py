@@ -89,6 +89,27 @@ def test_process_points_keeps_3d_only_path_without_2d_score() -> None:
     assert score["reason"] == "no_2d_context"
 
 
+def test_subset_sampled_mode_skips_diagnostics_without_changing_committed_pose() -> None:
+    points_world = WAIST_PATTERN.marker_positions + np.array([0.0, 0.0, 2.5])
+    full = RigidBodyEstimator(patterns=[WAIST_PATTERN], subset_diagnostics_mode="full")
+    sampled = RigidBodyEstimator(patterns=[WAIST_PATTERN], subset_diagnostics_mode="sampled")
+
+    for timestamp in (1_000_000, 1_010_000, 1_020_000):
+        full.process_points(points_world, timestamp)
+        sampled.process_points(points_world, timestamp)
+    full_pose = full.process_points(points_world, 1_030_000)["waist"]
+    sampled_pose = sampled.process_points(points_world, 1_030_000)["waist"]
+
+    assert full_pose.valid is True
+    assert sampled_pose.valid is True
+    assert np.allclose(sampled_pose.position, full_pose.position)
+    assert np.allclose(sampled_pose.quaternion, full_pose.quaternion)
+    subset = sampled.get_tracking_status()["waist"]["subset_hypothesis"]
+    assert subset["evaluated"] is False
+    assert subset["sampled"] is True
+    assert sampled.get_variant_metrics()["subset_skipped_count"] == 1
+
+
 def test_partial_marker_correspondence_is_pose_invariant() -> None:
     translation = np.array([0.25, -0.12, 2.5], dtype=np.float64)
     marker_indices = [3, 0, 1]

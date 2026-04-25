@@ -181,6 +181,55 @@ def test_process_paired_frames_triangulates_shuffled_blobs_with_one_to_one_assig
         assert np.min(np.linalg.norm(reconstructed - expected, axis=1)) < 1e-6
 
 
+def test_fast_batch_undistort_matches_scalar_observations() -> None:
+    params = create_dummy_calibration(["cam0"], focal_length=900.0)
+    params["cam0"].distortion_coeffs = np.array([-0.36, 0.12, 0.001, -0.001, 0.0])
+    blobs = [
+        _blob((320.0, 240.0)),
+        _blob((410.0, 260.0)),
+        _blob((520.0, 340.0)),
+    ]
+
+    scalar = Triangulator(params, fast_geometry=False)._build_observations("cam0", blobs)
+    batched = Triangulator(params, fast_geometry=True)._build_observations("cam0", blobs)
+
+    assert [obs.blob_index for obs in batched] == [0, 1, 2]
+    for expected, actual in zip(scalar, batched):
+        assert actual.raw_uv == expected.raw_uv
+        assert np.allclose(actual.undistorted_uv, expected.undistorted_uv)
+
+
+def test_fast_vectorized_epipolar_matching_matches_scalar_path() -> None:
+    params = create_dummy_calibration(["cam0", "cam1"], focal_length=800.0)
+    points_world = np.array(
+        [
+            [-0.10, -0.12, 2.5],
+            [0.05, -0.04, 2.5],
+            [0.11, 0.08, 2.5],
+            [-0.05, 0.17, 2.5],
+        ],
+        dtype=np.float64,
+    )
+    blobs_a = [_blob(_project(params["cam0"], point)) for point in points_world]
+    projected_b = [_blob(_project(params["cam1"], point)) for point in points_world]
+    blobs_b = [projected_b[index] for index in [2, 0, 3, 1]]
+
+    scalar = _geometry_pipeline_with_params(params)
+    fast = GeometryPipeline(pipeline_variant="fast_A")
+    fast.camera_params = params
+    fast.triangulator = Triangulator(params, fast_geometry=True)
+
+    scalar_result = scalar.process_paired_frames(_paired(blobs_a, blobs_b))
+    fast_result = fast.process_paired_frames(_paired(blobs_a, blobs_b))
+
+    assert fast_result["assignment_diagnostics"]["assignment_matches"] == scalar_result["assignment_diagnostics"]["assignment_matches"]
+    assert fast_result["assignment_diagnostics"]["assignment_rejected_epipolar"] == scalar_result["assignment_diagnostics"]["assignment_rejected_epipolar"]
+    assert np.allclose(
+        sorted(np.asarray(scalar_result["points_3d"]).tolist()),
+        sorted(np.asarray(fast_result["points_3d"]).tolist()),
+    )
+
+
 def test_process_paired_frames_exposes_observation_provenance() -> None:
     pipeline = _geometry_pipeline()
     params = pipeline.camera_params

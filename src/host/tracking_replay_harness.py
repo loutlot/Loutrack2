@@ -29,7 +29,13 @@ from .rigid import (
     ReacquireGuardConfig,
     ObjectGatingConfig,
 )
-from .pipeline import TrackingPipeline
+from .pipeline import (
+    DEFAULT_PIPELINE_VARIANT,
+    PIPELINE_VARIANTS,
+    TrackingPipeline,
+    default_subset_diagnostics_mode_for_variant,
+    normalize_pipeline_variant,
+)
 
 
 BUILTIN_PATTERNS: Dict[str, MarkerPattern] = {
@@ -70,6 +76,12 @@ class TrackingReplaySummary:
     subset_hypothesis_events: List[Dict[str, Any]]
     subset_hypothesis_summary: Dict[str, Any]
     phase45_go_no_go: Dict[str, Any]
+    pipeline_variant: str
+    variant_metrics: Dict[str, Any]
+    variant_go_no_go: Dict[str, Any]
+    stage_ms_detail: Dict[str, Any]
+    fallback_summary: Dict[str, Any]
+    backpressure_summary: Dict[str, Any]
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -95,6 +107,12 @@ class TrackingReplaySummary:
             "subset_hypothesis_events": self.subset_hypothesis_events,
             "subset_hypothesis_summary": self.subset_hypothesis_summary,
             "phase45_go_no_go": self.phase45_go_no_go,
+            "pipeline_variant": self.pipeline_variant,
+            "variant_metrics": self.variant_metrics,
+            "variant_go_no_go": self.variant_go_no_go,
+            "stage_ms_detail": self.stage_ms_detail,
+            "fallback_summary": self.fallback_summary,
+            "backpressure_summary": self.backpressure_summary,
         }
 
 
@@ -117,12 +135,19 @@ def replay_tracking_log(
     start_received_at: Optional[str] = None,
     end_received_at: Optional[str] = None,
     max_frames: Optional[int] = None,
+    pipeline_variant: str = DEFAULT_PIPELINE_VARIANT,
+    subset_diagnostics_mode: Optional[str] = None,
 ) -> TrackingReplaySummary:
     """Replay a tracking log through the existing host pipeline path."""
     log_path = Path(log_path)
     calibration_input_path = Path(calibration_path)
     calibration_path = _resolve_replay_calibration_path(calibration_input_path)
     selected_patterns = _load_patterns(patterns, rigids_path)
+    pipeline_variant = normalize_pipeline_variant(pipeline_variant)
+    subset_diagnostics_mode = (
+        subset_diagnostics_mode
+        or default_subset_diagnostics_mode_for_variant(pipeline_variant)
+    )
 
     replay = FrameReplay(str(log_path))
     pipeline = TrackingPipeline(
@@ -141,6 +166,8 @@ def replay_tracking_log(
             activation_mode=str(object_gating_activation_mode),
         ),
         reacquire_guard_event_logging=bool(reacquire_guard_event_logging),
+        pipeline_variant=pipeline_variant,
+        subset_diagnostics_mode=subset_diagnostics_mode,
     )
     if not pipeline._calibration_loaded:
         raise RuntimeError(f"calibration could not be loaded: {calibration_path}")
@@ -155,6 +182,7 @@ def replay_tracking_log(
     pipeline.frame_processor.set_paired_callback(pipeline._on_paired_frames)
 
     frame_count = 0
+    received_times_s: List[float] = []
     start_received_s = _timestamp_to_seconds(start_received_at) if start_received_at else None
     end_received_s = _timestamp_to_seconds(end_received_at) if end_received_at else None
     for entry in replay.replay(realtime=False):
@@ -170,6 +198,7 @@ def replay_tracking_log(
             continue
         if max_frames is not None and frame_count >= int(max_frames):
             break
+        received_times_s.append(received_s)
         pipeline.frame_processor._on_frame_received(_frame_from_log_entry(entry))
         frame_count += 1
 
@@ -210,6 +239,13 @@ def replay_tracking_log(
         receiver.get("pairer", {}).get("pairs_emitted", pipeline.frames_processed)
     )
     guard_summary = _summarize_reacquire_guard(tracking, guard_events)
+    pipeline_stage_ms = dict(diagnostics.get("pipeline_stage_ms", {}))
+    backpressure_summary = _simulate_backpressure(
+        received_times_s,
+        pair_count=pair_count,
+        pipeline_stage_ms=pipeline_stage_ms,
+        enabled=pipeline_variant == "fast_ABCDE",
+    )
 
     return TrackingReplaySummary(
         log_path=str(log_path),
@@ -222,7 +258,7 @@ def replay_tracking_log(
         tracking=tracking,
         receiver=dict(receiver),
         geometry=dict(diagnostics.get("geometry", {})),
-        pipeline_stage_ms=dict(diagnostics.get("pipeline_stage_ms", {})),
+        pipeline_stage_ms=pipeline_stage_ms,
         reacquire_guard_events=guard_events,
         reacquire_guard_summary=guard_summary,
         object_gating_events=object_gating_events,
@@ -238,6 +274,12 @@ def replay_tracking_log(
             guard_summary,
             enforced=bool(reacquire_guard_enforced),
         ),
+        pipeline_variant=pipeline_variant,
+        variant_metrics=dict(diagnostics.get("variant_metrics", {})),
+        variant_go_no_go={},
+        stage_ms_detail=dict(diagnostics.get("stage_ms_detail", {})),
+        fallback_summary=dict(diagnostics.get("fallback_summary", {})),
+        backpressure_summary=backpressure_summary,
     )
 
 
@@ -494,6 +536,210 @@ def compare_object_gating_enforcement(
             diagnostics_only,
             enforced,
         ),
+    }
+
+
+def compare_pipeline_variants(
+    *,
+    log_path: str | Path,
+    calibration_path: str | Path,
+    patterns: Optional[Iterable[str]] = None,
+    rigids_path: str | Path | None = None,
+    epipolar_threshold_px: Optional[float] = None,
+    reacquire_guard_enforced: bool = False,
+    reacquire_guard_shadow_enabled: bool = True,
+    reacquire_guard_event_logging: bool = False,
+    reacquire_guard_post_reacquire_frames: int = 0,
+    reacquire_guard_max_rotation_deg: float = 136.0,
+    object_gating_enforced: bool = False,
+    object_gating_activation_mode: str = "always",
+    start_timestamp_us: Optional[int] = None,
+    end_timestamp_us: Optional[int] = None,
+    start_received_at: Optional[str] = None,
+    end_received_at: Optional[str] = None,
+    max_frames: Optional[int] = None,
+    subset_diagnostics_mode: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Replay baseline and all fast variants on identical inputs."""
+    summaries: Dict[str, Dict[str, Any]] = {}
+    for variant in PIPELINE_VARIANTS:
+        mode = subset_diagnostics_mode or default_subset_diagnostics_mode_for_variant(variant)
+        summary = replay_tracking_log(
+            log_path=log_path,
+            calibration_path=calibration_path,
+            patterns=patterns,
+            rigids_path=rigids_path,
+            epipolar_threshold_px=epipolar_threshold_px,
+            reacquire_guard_enforced=reacquire_guard_enforced,
+            reacquire_guard_shadow_enabled=reacquire_guard_shadow_enabled,
+            reacquire_guard_event_logging=reacquire_guard_event_logging,
+            reacquire_guard_post_reacquire_frames=reacquire_guard_post_reacquire_frames,
+            reacquire_guard_max_rotation_deg=reacquire_guard_max_rotation_deg,
+            object_gating_enforced=object_gating_enforced,
+            object_gating_activation_mode=object_gating_activation_mode,
+            start_timestamp_us=start_timestamp_us,
+            end_timestamp_us=end_timestamp_us,
+            start_received_at=start_received_at,
+            end_received_at=end_received_at,
+            max_frames=max_frames,
+            pipeline_variant=variant,
+            subset_diagnostics_mode=mode,
+        ).to_dict()
+        summaries[variant] = summary
+
+    baseline = summaries["baseline"]
+    variants: Dict[str, Dict[str, Any]] = {}
+    replacement_candidates: List[str] = []
+    for variant in PIPELINE_VARIANTS:
+        if variant == "baseline":
+            continue
+        candidate = dict(summaries[variant])
+        decision = _compare_pipeline_variant_go_no_go(baseline, candidate)
+        candidate["variant_go_no_go"] = decision
+        variants[variant] = candidate
+        if decision.get("replacement_candidate"):
+            replacement_candidates.append(variant)
+
+    return {
+        "log_path": str(log_path),
+        "calibration_path": str(calibration_path),
+        "patterns": list(patterns or [WAIST_PATTERN.name]),
+        "baseline": baseline,
+        "variants": variants,
+        "ranked_replacement_candidates": replacement_candidates,
+    }
+
+
+def _stage_p95(summary: Dict[str, Any], name: str) -> float:
+    stage = summary.get("pipeline_stage_ms", {}).get(name, {})
+    if not isinstance(stage, dict):
+        return 0.0
+    try:
+        return float(stage.get("p95", 0.0))
+    except Exception:
+        return 0.0
+
+
+def _reprojection_p95(summary: Dict[str, Any]) -> float:
+    quality = summary.get("triangulation_quality", {})
+    if not isinstance(quality, dict):
+        quality = summary.get("geometry", {}).get("quality", {})
+    if not isinstance(quality, dict):
+        return 0.0
+    reprojection = quality.get("reprojection_error_px_summary", {})
+    if not isinstance(reprojection, dict):
+        return 0.0
+    try:
+        return float(reprojection.get("p95", reprojection.get("max", 0.0)) or 0.0)
+    except Exception:
+        return 0.0
+
+
+def _compare_pipeline_variant_go_no_go(
+    baseline: Dict[str, Any],
+    candidate: Dict[str, Any],
+) -> Dict[str, Any]:
+    variant = str(candidate.get("pipeline_variant", ""))
+    baseline_valid = int(baseline.get("poses_estimated", 0) or 0)
+    candidate_valid = int(candidate.get("poses_estimated", 0) or 0)
+    baseline_reacquire = _tracking_metric(baseline, "reacquire_count")
+    candidate_reacquire = _tracking_metric(candidate, "reacquire_count")
+    baseline_jumps = _tracking_metric(baseline, "pose_jump_count")
+    candidate_jumps = _tracking_metric(candidate, "pose_jump_count")
+    baseline_flips = _tracking_metric(baseline, "max_pose_flip_deg")
+    candidate_flips = _tracking_metric(candidate, "max_pose_flip_deg")
+    baseline_transitions = _tracking_metric(baseline, "mode_transition_count")
+    candidate_transitions = _tracking_metric(candidate, "mode_transition_count")
+    baseline_reprojection = _reprojection_p95(baseline)
+    candidate_reprojection = _reprojection_p95(candidate)
+    reprojection_limit = baseline_reprojection * 1.05 if baseline_reprojection > 0.0 else candidate_reprojection + 1e-9
+
+    quality_ok = bool(
+        candidate_valid >= baseline_valid
+        and candidate_reacquire <= baseline_reacquire + 1e-9
+        and candidate_jumps <= baseline_jumps + 1e-9
+        and candidate_flips <= baseline_flips + 1e-9
+        and candidate_transitions <= baseline_transitions + 1e-9
+        and candidate_reprojection <= reprojection_limit + 1e-9
+    )
+    baseline_pipeline = _stage_p95(baseline, "pipeline_pair_ms")
+    candidate_pipeline = _stage_p95(candidate, "pipeline_pair_ms")
+    baseline_rigid = _stage_p95(baseline, "rigid_ms")
+    candidate_rigid = _stage_p95(candidate, "rigid_ms")
+    speed_ok = bool(
+        baseline_pipeline > 0.0
+        and baseline_rigid > 0.0
+        and candidate_pipeline < baseline_pipeline
+        and candidate_rigid < baseline_rigid
+    )
+    dropped = int(candidate.get("backpressure_summary", {}).get("dropped_pair_count", 0) or 0)
+    drop_ok = variant != "fast_ABCDE" or dropped == 0
+    replacement_candidate = bool(quality_ok and speed_ok and drop_ok)
+    return {
+        "decision": "replacement_candidate" if replacement_candidate else "keep_experimental",
+        "replacement_candidate": replacement_candidate,
+        "quality_ok": quality_ok,
+        "speed_ok": speed_ok,
+        "drop_ok": drop_ok,
+        "criteria": {
+            "valid_frames_non_decreasing": candidate_valid >= baseline_valid,
+            "reacquire_non_increasing": candidate_reacquire <= baseline_reacquire + 1e-9,
+            "pose_jumps_non_increasing": candidate_jumps <= baseline_jumps + 1e-9,
+            "max_flip_non_increasing": candidate_flips <= baseline_flips + 1e-9,
+            "mode_transitions_non_increasing": candidate_transitions <= baseline_transitions + 1e-9,
+            "reprojection_p95_within_5_percent": candidate_reprojection <= reprojection_limit + 1e-9,
+            "pipeline_pair_p95_improved": candidate_pipeline < baseline_pipeline,
+            "rigid_p95_improved": candidate_rigid < baseline_rigid,
+            "fast_abcde_no_drops": drop_ok,
+        },
+        "baseline": {
+            "valid_frames": baseline_valid,
+            "pipeline_pair_ms_p95": baseline_pipeline,
+            "rigid_ms_p95": baseline_rigid,
+            "reprojection_p95_px": baseline_reprojection,
+        },
+        "candidate": {
+            "valid_frames": candidate_valid,
+            "pipeline_pair_ms_p95": candidate_pipeline,
+            "rigid_ms_p95": candidate_rigid,
+            "reprojection_p95_px": candidate_reprojection,
+            "dropped_pair_count": dropped,
+        },
+    }
+
+
+def _simulate_backpressure(
+    received_times_s: List[float],
+    *,
+    pair_count: int,
+    pipeline_stage_ms: Dict[str, Any],
+    enabled: bool,
+) -> Dict[str, Any]:
+    if not enabled:
+        return {"enabled": False, "dropped_pair_count": 0, "max_queue_depth": 0, "simulated_output_latency_ms": {}}
+    pair_arrivals = list(received_times_s[1::2])[: max(0, int(pair_count))]
+    duration_ms = float(
+        pipeline_stage_ms.get("pipeline_pair_ms", {}).get(
+            "mean",
+            pipeline_stage_ms.get("pipeline_pair_ms", {}).get("p95", 0.0),
+        )
+        or 0.0
+    )
+    duration_s = max(0.0, duration_ms / 1000.0)
+    available_at = 0.0
+    dropped = 0
+    latencies_ms: List[float] = []
+    for arrival in pair_arrivals:
+        if arrival < available_at:
+            dropped += 1
+            continue
+        available_at = float(arrival) + duration_s
+        latencies_ms.append(duration_ms)
+    return {
+        "enabled": True,
+        "dropped_pair_count": int(dropped),
+        "max_queue_depth": 1 if pair_arrivals else 0,
+        "simulated_output_latency_ms": _numeric_summary(latencies_ms),
     }
 
 
@@ -1240,6 +1486,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--object-gating-activation-mode", default="always", choices=["always", "reacquire_only", "boot_or_reacquire"], help="Limit object-gating evaluation to selected tracker modes.")
     parser.add_argument("--compare-reacquire-guard-enforcement", action="store_true", help="Run both shadow and enforced Phase 4.5 replays and compare go/no-go.")
     parser.add_argument("--compare-object-gating-enforcement", action="store_true", help="Run diagnostics-only and enforced object-gating replays and compare go/no-go.")
+    parser.add_argument("--pipeline-variant", default=DEFAULT_PIPELINE_VARIANT, choices=list(PIPELINE_VARIANTS), help="Replay through the official tracking path or an explicit comparison variant.")
+    parser.add_argument("--compare-pipeline-variants", action="store_true", help="Run baseline and all fast-path variants on the same replay input.")
+    parser.add_argument("--subset-diagnostics-mode", default=None, choices=["full", "sampled", "off"], help="Control subset hypothesis diagnostics frequency during replay. Defaults follow the selected pipeline variant.")
+    parser.add_argument("--ab-report-out", default=None, help="Optional JSON path for --compare-pipeline-variants output.")
     parser.add_argument("--diagnostics-summary", action="store_true", help="Summarize live tracking_diagnostics events without replaying frames.")
     parser.add_argument("--min-accepted-points", type=int, default=4, help="Minimum accepted points before a diagnostics event is flagged.")
     parser.add_argument("--jump-threshold-m", type=float, default=0.10, help="Pose jump threshold for diagnostics failure extraction.")
@@ -1262,6 +1512,27 @@ def main(argv: Optional[List[str]] = None) -> int:
             jump_threshold_m=args.jump_threshold_m,
             flip_threshold_deg=args.flip_threshold_deg,
             window_padding_s=args.failure_window_padding_s,
+        )
+    elif args.compare_pipeline_variants:
+        summary = compare_pipeline_variants(
+            log_path=args.log,
+            calibration_path=args.calibration,
+            patterns=_parse_pattern_names(args.patterns),
+            rigids_path=args.rigids,
+            epipolar_threshold_px=args.epipolar_threshold_px,
+            reacquire_guard_enforced=bool(args.reacquire_guard_enforced),
+            reacquire_guard_shadow_enabled=not bool(args.disable_reacquire_guard_shadow),
+            reacquire_guard_event_logging=bool(args.reacquire_guard_event_logging),
+            reacquire_guard_post_reacquire_frames=int(args.reacquire_guard_post_reacquire_frames),
+            reacquire_guard_max_rotation_deg=args.reacquire_guard_max_rotation_deg,
+            object_gating_enforced=bool(args.object_gating_enforced),
+            object_gating_activation_mode=args.object_gating_activation_mode,
+            start_timestamp_us=args.start_timestamp_us,
+            end_timestamp_us=args.end_timestamp_us,
+            start_received_at=args.start_received_at,
+            end_received_at=args.end_received_at,
+            max_frames=args.max_frames,
+            subset_diagnostics_mode=args.subset_diagnostics_mode,
         )
     elif args.compare_reacquire_guard_enforcement:
         summary = compare_reacquire_guard_enforcement(
@@ -1311,13 +1582,21 @@ def main(argv: Optional[List[str]] = None) -> int:
             start_received_at=args.start_received_at,
             end_received_at=args.end_received_at,
             max_frames=args.max_frames,
+            pipeline_variant=args.pipeline_variant,
+            subset_diagnostics_mode=args.subset_diagnostics_mode,
         ).to_dict()
 
     text = json.dumps(summary, ensure_ascii=False, indent=2)
-    if args.out:
-        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.out).write_text(text + "\n", encoding="utf-8")
-    if not (args.quiet and args.out):
+    out_path = args.out
+    if args.compare_pipeline_variants:
+        out_path = args.ab_report_out or args.out
+        if out_path is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            out_path = str(Path("logs") / "archive" / f"fast_pipeline_ab_{timestamp}" / "comparison.json")
+    if out_path:
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(out_path).write_text(text + "\n", encoding="utf-8")
+    if not (args.quiet and out_path):
         print(text)
     return 0
 

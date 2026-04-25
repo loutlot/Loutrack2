@@ -198,7 +198,14 @@ class _FakePipeline:
             },
             "diagnostics": {
                 "geometry": {"quality": {"accepted_points": 4}},
-                "pipeline_stage_ms": {"rigid_ms": {"p95": 0.1}},
+                "pipeline_stage_ms": {
+                    "rigid_ms": {"p95": 0.1},
+                    "pipeline_pair_ms": {"p95": 0.2, "mean": 0.2},
+                },
+                "stage_ms_detail": {"subset_ms": {"p95": 0.0}},
+                "variant_metrics": {"fast_path_used_count": 0},
+                "fallback_summary": {"fallback_count": 0},
+                "backpressure_summary": {},
             },
         }
 
@@ -294,6 +301,13 @@ def test_replay_tracking_log_injects_frames_through_frame_processor(
         "no_reacquire_reject_signal",
         "pending_enforcement_replay",
     }
+    assert summary["pipeline_variant"] == "fast_ABCD"
+    assert _FakePipeline.last_kwargs["pipeline_variant"] == "fast_ABCD"
+    assert _FakePipeline.last_kwargs["subset_diagnostics_mode"] == "sampled"
+    assert "variant_metrics" in summary
+    assert "stage_ms_detail" in summary
+    assert "fallback_summary" in summary
+    assert "backpressure_summary" in summary
 
 
 def test_replay_tracking_log_resolves_extrinsics_file_to_calibration_dir(
@@ -310,10 +324,30 @@ def test_replay_tracking_log_resolves_extrinsics_file_to_calibration_dir(
         log_path=tmp_path / "tracking_gui.jsonl",
         calibration_path=extrinsics_path,
         patterns=["waist"],
+        pipeline_variant="baseline",
     ).to_dict()
 
     assert summary["calibration_path"] == str(calibration_dir)
     assert _FakePipeline.last_kwargs["calibration_path"] == str(calibration_dir)
+
+
+def test_replay_tracking_log_passes_pipeline_variant_and_subset_mode(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(harness, "FrameReplay", _FakeReplay)
+    monkeypatch.setattr(harness, "TrackingPipeline", _FakePipeline)
+
+    summary = harness.replay_tracking_log(
+        log_path=tmp_path / "tracking_gui.jsonl",
+        calibration_path=tmp_path,
+        patterns=["waist"],
+        pipeline_variant="fast_ABC",
+        subset_diagnostics_mode="sampled",
+    ).to_dict()
+
+    assert summary["pipeline_variant"] == "fast_ABC"
+    assert _FakePipeline.last_kwargs["pipeline_variant"] == "fast_ABC"
+    assert _FakePipeline.last_kwargs["subset_diagnostics_mode"] == "sampled"
 
 
 def test_replay_tracking_log_can_limit_injected_frames(monkeypatch, tmp_path: Path) -> None:
@@ -412,6 +446,28 @@ def test_compare_object_gating_enforcement_returns_go_no_go(
     assert comparison["diagnostics_only"]["poses_estimated"] == 1
     assert comparison["enforced"]["poses_estimated"] == 1
     assert comparison["object_gating_go_no_go"]["decision"] == "go_candidate"
+
+
+def test_compare_pipeline_variants_returns_ab_report(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(harness, "FrameReplay", _FakeReplay)
+    monkeypatch.setattr(harness, "TrackingPipeline", _FakePipeline)
+
+    comparison = harness.compare_pipeline_variants(
+        log_path=tmp_path / "tracking_gui.jsonl",
+        calibration_path=tmp_path,
+        patterns=["waist"],
+    )
+
+    assert comparison["baseline"]["pipeline_variant"] == "baseline"
+    assert set(comparison["variants"]) == {
+        "fast_A",
+        "fast_AB",
+        "fast_ABC",
+        "fast_ABCD",
+        "fast_ABCDE",
+    }
+    assert "variant_go_no_go" in comparison["variants"]["fast_A"]
+    assert comparison["variants"]["fast_ABCDE"]["backpressure_summary"]["enabled"] is True
 
 
 def test_object_gating_go_no_go_allows_tiny_max_flip_regression() -> None:

@@ -11,11 +11,12 @@ Provides functionality to:
 import json
 import math
 import re
+import time
 import warnings
 import numpy as np
 import cv2 as cv
 from pathlib import Path
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List, Tuple, Callable
 from dataclasses import dataclass, field
 from scipy.optimize import linear_sum_assignment
 from itertools import combinations
@@ -477,9 +478,14 @@ class Triangulator:
         self,
         camera_params: Dict[str, CameraParams],
         epipolar_threshold_px: float = _EPIPOLAR_THRESHOLD_PX,
+        *,
+        fast_geometry: bool = False,
+        stage_callback: Optional[Callable[[str, float], None]] = None,
     ):
         self.camera_params = camera_params
         self.epipolar_threshold_px = float(epipolar_threshold_px)
+        self.fast_geometry = bool(fast_geometry)
+        self._stage_callback = stage_callback
         self._proj_matrices: Dict[str, np.ndarray] = {}
         self._rvecs: Dict[str, np.ndarray] = {}
         self._camera_centers: Dict[str, np.ndarray] = {}
@@ -491,6 +497,11 @@ class Triangulator:
         self._last_observations_by_camera: Dict[str, List[BlobObservation2D]] = {}
         self._last_triangulated_points: List[TriangulatedPoint] = []
         self._refresh_cached_matrices()
+
+    def _record_stage_detail(self, name: str, started_ns: int) -> None:
+        if self._stage_callback is None:
+            return
+        self._stage_callback(name, float(time.perf_counter_ns() - started_ns) / 1_000_000.0)
 
     @property
     def last_assignment_diagnostics(self) -> Dict[str, float]:
@@ -596,9 +607,57 @@ class Triangulator:
         )
         return float(undistorted[0, 0, 0]), float(undistorted[0, 0, 1])
 
-    def _build_observations(self, cam_id: str, blobs: List[Dict[str, Any]]) -> List[_BlobObservation]:
+    def _build_observations(
+        self,
+        cam_id: str,
+        blobs: List[Dict[str, Any]],
+        include_blob_indices: Optional[set[int]] = None,
+    ) -> List[_BlobObservation]:
         observations: List[_BlobObservation] = []
+        if include_blob_indices is not None and not include_blob_indices:
+            return observations
+
+        selected: List[Tuple[int, Dict[str, Any]]] = [
+            (blob_index, blob)
+            for blob_index, blob in enumerate(blobs)
+            if include_blob_indices is None or blob_index in include_blob_indices
+        ]
+        if not selected:
+            return observations
+
+        if self.fast_geometry:
+            started_ns = time.perf_counter_ns()
+            cam = self.camera_params[cam_id]
+            raw_points = np.asarray(
+                [[float(blob["x"]), float(blob["y"])] for _idx, blob in selected],
+                dtype=np.float64,
+            ).reshape(-1, 1, 2)
+            undistorted = cv.undistortPoints(
+                raw_points,
+                cam.intrinsic_matrix,
+                cam.distortion_coeffs,
+                P=cam.intrinsic_matrix,
+            ).reshape(-1, 2)
+            self._record_stage_detail("undistort_ms", started_ns)
+            for row_index, (blob_index, blob) in enumerate(selected):
+                raw_uv = (float(raw_points[row_index, 0, 0]), float(raw_points[row_index, 0, 1]))
+                observations.append(
+                    _BlobObservation(
+                        camera_id=cam_id,
+                        raw_uv=raw_uv,
+                        undistorted_uv=(
+                            float(undistorted[row_index, 0]),
+                            float(undistorted[row_index, 1]),
+                        ),
+                        area=float(blob.get("area", 0.0)),
+                        blob_index=int(blob_index),
+                    )
+                )
+            return observations
+
         for blob_index, blob in enumerate(blobs):
+            if include_blob_indices is not None and blob_index not in include_blob_indices:
+                continue
             raw_uv = (float(blob["x"]), float(blob["y"]))
             observations.append(
                 _BlobObservation(
@@ -610,6 +669,35 @@ class Triangulator:
                 )
             )
         return observations
+
+    @staticmethod
+    def _epipolar_distance_matrix(
+        F: np.ndarray,
+        source_points: List[Tuple[float, float]],
+        target_points: List[Tuple[float, float]],
+    ) -> np.ndarray:
+        if not source_points or not target_points:
+            return np.empty((len(source_points), len(target_points)), dtype=np.float64)
+        source_h = np.column_stack(
+            [
+                np.asarray([pt[0] for pt in source_points], dtype=np.float64),
+                np.asarray([pt[1] for pt in source_points], dtype=np.float64),
+                np.ones(len(source_points), dtype=np.float64),
+            ]
+        )
+        target_h = np.column_stack(
+            [
+                np.asarray([pt[0] for pt in target_points], dtype=np.float64),
+                np.asarray([pt[1] for pt in target_points], dtype=np.float64),
+                np.ones(len(target_points), dtype=np.float64),
+            ]
+        )
+        lines = source_h @ F.T
+        denom = np.sqrt(lines[:, 0] ** 2 + lines[:, 1] ** 2)
+        numer = np.abs(lines @ target_h.T)
+        distances = numer / np.maximum(denom[:, None], 1e-12)
+        distances[denom < 1e-12, :] = float("inf")
+        return distances
 
     def _triangulate_from_undistorted_points(
         self,
@@ -867,34 +955,65 @@ class Triangulator:
             ) / 1_000_000.0
             return {}
 
-        cost = np.full(
-            (len(ref_observations), len(other_observations)),
-            _INVALID_ASSIGNMENT_COST,
-            dtype=np.float64,
-        )
-        accepted_errors: Dict[Tuple[int, int], float] = {}
-        for i, ref_obs in enumerate(ref_observations):
-            for j, other_obs in enumerate(other_observations):
-                forward = self._epipolar_distance(
-                    F_ref_to_other,
-                    ref_obs.undistorted_uv,
-                    other_obs.undistorted_uv,
+        if self.fast_geometry:
+            detail_started_ns = time.perf_counter_ns()
+            ref_points = [obs.undistorted_uv for obs in ref_observations]
+            other_points = [obs.undistorted_uv for obs in other_observations]
+            forward_matrix = self._epipolar_distance_matrix(
+                F_ref_to_other,
+                ref_points,
+                other_points,
+            )
+            backward_matrix = self._epipolar_distance_matrix(
+                F_other_to_ref,
+                other_points,
+                ref_points,
+            ).T
+            symmetric_errors = np.maximum(forward_matrix, backward_matrix)
+            accepted_mask = symmetric_errors <= gate_px
+            rejected_count = int(accepted_mask.size - int(np.count_nonzero(accepted_mask)))
+            if rejected_count:
+                _increment_diagnostic(
+                    diagnostics,
+                    "assignment_rejected_epipolar",
+                    "rejected_epipolar",
+                    amount=rejected_count,
                 )
-                backward = self._epipolar_distance(
-                    F_other_to_ref,
-                    other_obs.undistorted_uv,
-                    ref_obs.undistorted_uv,
-                )
-                symmetric_error = max(forward, backward)
-                if symmetric_error > gate_px:
-                    _increment_diagnostic(
-                        diagnostics,
-                        "assignment_rejected_epipolar",
-                        "rejected_epipolar",
+            cost = np.where(
+                accepted_mask,
+                forward_matrix + backward_matrix,
+                _INVALID_ASSIGNMENT_COST,
+            )
+            self._record_stage_detail("epipolar_match_ms", detail_started_ns)
+        else:
+            cost = np.full(
+                (len(ref_observations), len(other_observations)),
+                _INVALID_ASSIGNMENT_COST,
+                dtype=np.float64,
+            )
+            symmetric_errors = np.zeros_like(cost)
+            for i, ref_obs in enumerate(ref_observations):
+                for j, other_obs in enumerate(other_observations):
+                    forward = self._epipolar_distance(
+                        F_ref_to_other,
+                        ref_obs.undistorted_uv,
+                        other_obs.undistorted_uv,
                     )
-                    continue
-                cost[i, j] = forward + backward
-                accepted_errors[(i, j)] = float(symmetric_error)
+                    backward = self._epipolar_distance(
+                        F_other_to_ref,
+                        other_obs.undistorted_uv,
+                        ref_obs.undistorted_uv,
+                    )
+                    symmetric_error = max(forward, backward)
+                    symmetric_errors[i, j] = float(symmetric_error)
+                    if symmetric_error > gate_px:
+                        _increment_diagnostic(
+                            diagnostics,
+                            "assignment_rejected_epipolar",
+                            "rejected_epipolar",
+                        )
+                        continue
+                    cost[i, j] = forward + backward
 
         row_ind, col_ind = linear_sum_assignment(cost)
         matches: Dict[int, Tuple[int, float]] = {}
@@ -906,7 +1025,7 @@ class Triangulator:
                 _increment_diagnostic(diagnostics, "duplicate_blob_matches")
                 continue
             selected_cols.add(int(col))
-            matches[int(row)] = (int(col), float(accepted_errors.get((int(row), int(col)), 0.0)))
+            matches[int(row)] = (int(col), float(symmetric_errors[int(row), int(col)]))
 
         diagnostics["assignment_cost_ms"] += float(
             time.perf_counter_ns() - started_ns
@@ -1094,6 +1213,7 @@ class Triangulator:
         blob_matcher=None,
         *,
         min_inlier_views: int = 2,
+        blob_indices_by_camera: Optional[Dict[str, set[int]]] = None,
     ) -> Tuple[List[np.ndarray], List[float]]:
         """
         Triangulate all matched blobs from paired frames using epipolar
@@ -1119,7 +1239,14 @@ class Triangulator:
         for cam_id in camera_ids:
             frame = paired_frames.frames.get(cam_id)
             if frame is not None and frame.blobs:
-                observations_by_camera[cam_id] = self._build_observations(cam_id, frame.blobs)
+                include_indices = None
+                if blob_indices_by_camera is not None:
+                    include_indices = set(blob_indices_by_camera.get(cam_id, set()))
+                observations_by_camera[cam_id] = self._build_observations(
+                    cam_id,
+                    frame.blobs,
+                    include_blob_indices=include_indices,
+                )
         self._last_observations_by_camera = {
             camera_id: list(observations)
             for camera_id, observations in observations_by_camera.items()
@@ -1260,6 +1387,10 @@ class Triangulator:
                 if not isinstance(camera_payload, dict):
                     continue
                 camera_observations = self._last_observations_by_camera.get(str(camera_id), [])
+                observations_by_blob_index = {
+                    int(observation.blob_index): observation
+                    for observation in camera_observations
+                }
                 assignments = camera_payload.get("assignments", [])
                 if not isinstance(assignments, list):
                     continue
@@ -1272,12 +1403,11 @@ class Triangulator:
                     except (KeyError, TypeError, ValueError):
                         invalid_assignments += 1
                         continue
-                    if marker_idx < 0 or blob_index < 0 or blob_index >= len(camera_observations):
+                    observation = observations_by_blob_index.get(blob_index)
+                    if marker_idx < 0 or blob_index < 0 or observation is None:
                         invalid_assignments += 1
                         continue
-                    observations_by_marker.setdefault(marker_idx, []).append(
-                        camera_observations[blob_index]
-                    )
+                    observations_by_marker.setdefault(marker_idx, []).append(observation)
 
             candidate_markers = int(len(observations_by_marker))
             two_or_more = int(
@@ -1382,7 +1512,14 @@ class GeometryPipeline:
     Integrates calibration loading, triangulation, and error computation.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        pipeline_variant: str = "baseline",
+        stage_callback: Optional[Callable[[str, float], None]] = None,
+    ) -> None:
+        self.pipeline_variant = str(pipeline_variant or "baseline")
+        self._stage_callback = stage_callback
         self.camera_params: Dict[str, CameraParams] = {}
         self.triangulator: Optional[Triangulator] = None
         self.coordinate_frame = "camera_similarity"
@@ -1482,6 +1619,8 @@ class GeometryPipeline:
             self.triangulator = Triangulator(
                 self.camera_params,
                 epipolar_threshold_px=self.epipolar_threshold_px,
+                fast_geometry=self.pipeline_variant != "baseline",
+                stage_callback=self._stage_callback,
             )
 
         return len(self.camera_params)
@@ -1508,20 +1647,29 @@ class GeometryPipeline:
         *,
         min_inlier_views: int = 2,
         object_gating: Optional[Dict[str, Any]] = None,
+        generic_blob_indices_by_camera: Optional[Dict[str, set[int]]] = None,
     ) -> Dict[str, Any]:
         """Process paired frames to extract 3D points."""
         if not self.triangulator:
             return {"error": "No calibration loaded"}
 
+        stage_started_ns = time.perf_counter_ns()
         points_3d, errors = self.triangulator.triangulate_paired_frames(
             paired_frames,
             min_inlier_views=min_inlier_views,
+            blob_indices_by_camera=generic_blob_indices_by_camera,
         )
+        if self._stage_callback is not None:
+            self._stage_callback(
+                "generic_triangulation_ms",
+                float(time.perf_counter_ns() - stage_started_ns) / 1_000_000.0,
+            )
         assignment_diagnostics = self.triangulator.last_assignment_diagnostics
         quality_metrics = self.triangulator.last_quality_metrics
         observations_by_camera = self.triangulator.last_observations_by_camera
         triangulated_points = self.triangulator.last_triangulated_points
         self._latest_quality_metrics = quality_metrics
+        stage_started_ns = time.perf_counter_ns()
         (
             rigid_hint_points,
             rigid_hint_errors,
@@ -1531,6 +1679,11 @@ class GeometryPipeline:
             object_gating,
             min_inlier_views=min_inlier_views,
         )
+        if self._stage_callback is not None:
+            self._stage_callback(
+                "rigid_hint_triangulation_ms",
+                float(time.perf_counter_ns() - stage_started_ns) / 1_000_000.0,
+            )
         self._latest_rigid_hint_quality = rigid_hint_quality
 
         return {
