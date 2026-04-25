@@ -31,6 +31,9 @@ AVAILABLE_PATTERNS: Dict[str, MarkerPattern] = {
     RIGHT_FOOT_PATTERN.name: RIGHT_FOOT_PATTERN,
 }
 
+GUI_DEFAULT_PIPELINE_VARIANT = "fast_ABCDHRF"
+GUI_DEFAULT_SUBSET_DIAGNOSTICS_MODE = "off"
+
 
 def _pattern_catalog_entry(pattern: MarkerPattern, *, is_custom: bool) -> Dict[str, Any]:
     metadata = dict(pattern.metadata or {})
@@ -151,6 +154,8 @@ class TrackingRuntime:
             patterns=selected_patterns,
             epipolar_threshold_px=epipolar_threshold_px,
             rigid_stabilization=rigid_stabilization,
+            pipeline_variant=GUI_DEFAULT_PIPELINE_VARIANT,
+            subset_diagnostics_mode=GUI_DEFAULT_SUBSET_DIAGNOSTICS_MODE,
         )
         pipeline.set_pose_callback(self._on_pose)
         self._start_pipeline_with_retry(pipeline)

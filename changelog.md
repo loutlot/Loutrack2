@@ -1,3 +1,4 @@
+- GUI tracking now starts the official live path with `fast_ABCDHRF` and `subset_diagnostics_mode=off` for lower-latency 32-blob operation
 - docs/10_in_progress/performance_upgrade_log.md is now fully localized in Japanese while preserving benchmark paths and commands
 - rigid body design notes now record 5-marker, mode-policy, and subset-whitelist PDCA results in `docs/10_in_progress/rigid_body_design.md`
 - added `tests/perf/synthetic_32_blob_benchmark.py` for deterministic 4-camera 32-blobs/camera pipeline AB JSON metrics

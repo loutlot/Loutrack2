@@ -121,6 +121,8 @@ def test_tracking_runtime_start_stop_state_transition(monkeypatch) -> None:
     assert _FakePipeline.last_instance.udp_port == 7000
     assert _FakePipeline.last_instance.calibration_path == "calibration"
     assert _FakePipeline.last_instance.kwargs["epipolar_threshold_px"] == 3.5
+    assert _FakePipeline.last_instance.kwargs["pipeline_variant"] == "fast_ABCDHRF"
+    assert _FakePipeline.last_instance.kwargs["subset_diagnostics_mode"] == "off"
 
     stop_result = runtime.stop()
     assert stop_result["frames_processed"] == 12

@@ -1,5 +1,32 @@
 # トラッキング性能改善ログ
 
+## 2026-04-26 GUI正式経路を`fast_ABCDHRF`に変更
+
+### 判断
+
+- archive baseline の `max_pose_flip_deg` 差は 177.8056 -> 177.8137 の 0.008度で、実運用上は無視可能と判断。
+- GUI経由のlive trackingでは、32 blobs/cam 118fps安定運用を優先し、`fast_ABCDHRF` を正式経路に採用する。
+- live表示では committed pose に使っていない subset diagnostics を hot path から外し、`subset_diagnostics_mode=off` を既定にする。
+
+### 実装
+
+- `src/host/tracking_runtime.py`
+  - GUI runtime の `TrackingPipeline` 起動時に `pipeline_variant="fast_ABCDHRF"` を明示。
+  - `subset_diagnostics_mode="off"` を明示。
+- replay CLI と直接 `TrackingPipeline()` の既定は比較・rollback 用に維持する。
+
+### 期待値
+
+- current実ログ:
+  - `pipeline_pair_ms.p95`: 5.092 ms -> 2.768 ms。
+  - `pipeline_pair_ms.max`: 8.660 ms -> 2.977 ms。
+- archive baseline:
+  - `pipeline_pair_ms.p95`: 5.490 ms -> 2.814 ms。
+  - `pipeline_pair_ms.max`: 35.099 ms -> 3.160 ms。
+- archive new:
+  - `pipeline_pair_ms.p95`: 5.472 ms -> 3.382 ms。
+  - `pipeline_pair_ms.max`: 32.141 ms -> 3.928 ms。
+
 ## 2026-04-26 `fast_ABCDHRF` 実ログ replay AB
 
 ### 目的
