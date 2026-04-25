@@ -465,10 +465,44 @@ def test_compare_pipeline_variants_returns_ab_report(monkeypatch, tmp_path: Path
         "fast_ABC",
         "fast_ABCD",
         "fast_ABCDP",
+        "fast_ABCDS",
+        "fast_ABCDG",
+        "fast_ABCDF",
+        "fast_ABCDH",
+        "fast_ABCDHF",
+        "fast_ABCDHR",
+        "fast_ABCDHRF",
+        "fast_ABCDR",
+        "fast_ABCDX",
         "fast_ABCDE",
     }
     assert "variant_go_no_go" in comparison["variants"]["fast_A"]
     assert comparison["variants"]["fast_ABCDE"]["backpressure_summary"]["enabled"] is True
+
+
+def test_compare_performance_upgrades_uses_fast_abcd_baseline(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(harness, "FrameReplay", _FakeReplay)
+    monkeypatch.setattr(harness, "TrackingPipeline", _FakePipeline)
+
+    comparison = harness.compare_performance_upgrades(
+        log_path=tmp_path / "tracking_gui.jsonl",
+        calibration_path=tmp_path,
+        patterns=["waist"],
+    )
+
+    assert comparison["baseline"]["pipeline_variant"] == "fast_ABCD"
+    assert set(comparison["variants"]) == {
+        "fast_ABCDS",
+        "fast_ABCDG",
+        "fast_ABCDF",
+        "fast_ABCDH",
+        "fast_ABCDHF",
+        "fast_ABCDHR",
+        "fast_ABCDHRF",
+        "fast_ABCDR",
+        "fast_ABCDX",
+    }
+    assert "variant_go_no_go" in comparison["variants"]["fast_ABCDS"]
 
 
 def test_compare_epipolar_pruning_returns_exact_quality_report(monkeypatch, tmp_path: Path) -> None:

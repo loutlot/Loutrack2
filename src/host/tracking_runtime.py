@@ -104,6 +104,7 @@ class TrackingRuntime:
         self.udp_port = udp_port
         self.trail_length = trail_length
         self.z_near = z_near
+        self.max_scene_raw_points = 64
 
         self._pipeline: Optional[TrackingPipeline] = None
         self._patterns_by_name: Dict[str, MarkerPattern] = {}
@@ -423,12 +424,18 @@ class TrackingRuntime:
                     }
                 )
 
+            raw_points_full = list(triangulation.get("points_3d", []))
+            max_raw_points = max(0, int(self.max_scene_raw_points))
+            raw_points = raw_points_full[:max_raw_points] if max_raw_points else []
+
             self._set_latest_scene_locked(
                 {
                     "tracking": self._scene_tracking_from_status(status, pipeline),
                     "cameras": [dict(camera) for camera in camera_scene],
                     "rigid_bodies": rigid_bodies,
-                    "raw_points": list(triangulation.get("points_3d", [])),
+                    "raw_points": raw_points,
+                    "raw_point_count": int(len(raw_points_full)),
+                    "raw_points_truncated": bool(len(raw_points_full) > len(raw_points)),
                     "triangulation_quality": _copy_triangulation_quality(
                         triangulation.get("triangulation_quality", {})
                     ),
@@ -563,6 +570,8 @@ class TrackingRuntime:
             "cameras": list(scene["cameras"]),
             "rigid_bodies": list(scene["rigid_bodies"]),
             "raw_points": list(scene["raw_points"]),
+            "raw_point_count": int(scene.get("raw_point_count", len(scene["raw_points"]))),
+            "raw_points_truncated": bool(scene.get("raw_points_truncated", False)),
             "triangulation_quality": _copy_triangulation_quality(
                 scene.get("triangulation_quality", {})
             ),
@@ -626,6 +635,8 @@ class TrackingRuntime:
             "cameras": cameras or [],
             "rigid_bodies": [],
             "raw_points": [],
+            "raw_point_count": 0,
+            "raw_points_truncated": False,
             "triangulation_quality": {},
             "coordinate_frame": coordinate_frame,
             "coordinate_origin": coordinate_origin,

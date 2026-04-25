@@ -1,3 +1,8 @@
+- docs/10_in_progress/performance_upgrade_log.md is now fully localized in Japanese while preserving benchmark paths and commands
+- rigid body design notes now record 5-marker, mode-policy, and subset-whitelist PDCA results in `docs/10_in_progress/rigid_body_design.md`
+- added `tests/perf/synthetic_32_blob_benchmark.py` for deterministic 4-camera 32-blobs/camera pipeline AB JSON metrics
+- tracking now has experimental `fast_ABCDH/HRF` 32-blob stress paths that reuse rigid-hint triangulation, direct marker-index rigid solves, and optional live diagnostics-off benchmarking
+- tracking replay now compares staged performance-upgrade variants with subset time budgets, object-gating fallback breakdowns, rigid candidate separation, slow-pair traces, and capped GUI raw-point payloads
 - added experimental `fast_ABCDP` replay path for generic epipolar candidate pruning AB tests while keeping `fast_ABCD` as the official default
 - tracking now uses the fast_ABCD pipeline as the default path while keeping baseline selectable for replay comparisons
 - tracking replay now supports baseline/fast_A-fast_ABCDE AB reports with fast geometry, sampled subset diagnostics, object-gated fallback, and backpressure metrics

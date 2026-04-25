@@ -110,6 +110,25 @@ def test_subset_sampled_mode_skips_diagnostics_without_changing_committed_pose()
     assert sampled.get_variant_metrics()["subset_skipped_count"] == 1
 
 
+def test_subset_time_budget_truncates_diagnostics_without_invalidating_pose() -> None:
+    estimator = RigidBodyEstimator(
+        patterns=[WAIST_PATTERN],
+        subset_diagnostics_mode="full",
+        subset_time_budget_ms=0.000001,
+        subset_max_hypotheses=512,
+    )
+    points = WAIST_PATTERN.marker_positions.copy()
+
+    poses = estimator.process_context(points, timestamp=123)
+    subset = estimator.get_tracking_status()["waist"]["subset_hypothesis"]
+
+    assert poses["waist"].valid is True
+    assert subset["evaluated"] is True
+    assert subset["time_budget_exceeded"] is True
+    assert subset["truncated"] is True
+    assert estimator.get_variant_metrics()["subset_budget_exceeded_count"] == 1
+
+
 def test_partial_marker_correspondence_is_pose_invariant() -> None:
     translation = np.array([0.25, -0.12, 2.5], dtype=np.float64)
     marker_indices = [3, 0, 1]

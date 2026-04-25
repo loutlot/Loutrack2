@@ -34,6 +34,15 @@ PIPELINE_VARIANTS = (
     "fast_ABC",
     "fast_ABCD",
     "fast_ABCDP",
+    "fast_ABCDS",
+    "fast_ABCDG",
+    "fast_ABCDF",
+    "fast_ABCDH",
+    "fast_ABCDHF",
+    "fast_ABCDHR",
+    "fast_ABCDHRF",
+    "fast_ABCDR",
+    "fast_ABCDX",
     "fast_ABCDE",
 )
 DEFAULT_PIPELINE_VARIANT = "fast_ABCD"
@@ -63,6 +72,67 @@ def _variant_at_least(variant: str, minimum: str) -> bool:
 
 def default_subset_diagnostics_mode_for_variant(variant: str) -> str:
     return "sampled" if _variant_at_least(variant, "fast_ABC") else "full"
+
+
+def _variant_has_subset_budget(variant: str) -> bool:
+    return normalize_pipeline_variant(variant) in {
+        "fast_ABCDS",
+        "fast_ABCDG",
+        "fast_ABCDF",
+        "fast_ABCDH",
+        "fast_ABCDHF",
+        "fast_ABCDHR",
+        "fast_ABCDHRF",
+        "fast_ABCDR",
+        "fast_ABCDX",
+    }
+
+
+def _variant_has_relaxed_object_gating(variant: str) -> bool:
+    return normalize_pipeline_variant(variant) in {
+        "fast_ABCDG",
+        "fast_ABCDF",
+        "fast_ABCDH",
+        "fast_ABCDHF",
+        "fast_ABCDHR",
+        "fast_ABCDHRF",
+        "fast_ABCDR",
+        "fast_ABCDX",
+    }
+
+
+def _variant_has_rigid_candidate_separation(variant: str) -> bool:
+    return normalize_pipeline_variant(variant) in {
+        "fast_ABCDHR",
+        "fast_ABCDHRF",
+        "fast_ABCDR",
+        "fast_ABCDX",
+    }
+
+
+def _variant_uses_hint_only_geometry(variant: str) -> bool:
+    return normalize_pipeline_variant(variant) in {
+        "fast_ABCDH",
+        "fast_ABCDHF",
+        "fast_ABCDHR",
+        "fast_ABCDHRF",
+    }
+
+
+def _variant_has_geo_hotpath_optimizations(variant: str) -> bool:
+    return normalize_pipeline_variant(variant) in {
+        "fast_ABCDF",
+        "fast_ABCDHF",
+        "fast_ABCDHRF",
+    }
+
+
+def subset_time_budget_ms_for_variant(variant: str) -> Optional[float]:
+    return 6.0 if _variant_has_subset_budget(variant) else None
+
+
+def subset_max_hypotheses_for_variant(variant: str) -> Optional[int]:
+    return 512 if _variant_has_subset_budget(variant) else None
 
 
 def _stage_summary(values: List[float]) -> Dict[str, float]:
@@ -226,6 +296,11 @@ class TrackingPipeline:
             subset_solve_config=subset_solve_config
             or stabilization_configs["subset_solve_config"],
             subset_diagnostics_mode=self.subset_diagnostics_mode,
+            subset_time_budget_ms=subset_time_budget_ms_for_variant(self.pipeline_variant),
+            subset_max_hypotheses=subset_max_hypotheses_for_variant(self.pipeline_variant),
+            rigid_candidate_separation_enabled=_variant_has_rigid_candidate_separation(
+                self.pipeline_variant
+            ),
             stage_callback=self._record_stage,
         )
         self.metrics = MetricsCollector()
@@ -287,6 +362,11 @@ class TrackingPipeline:
         self._variant_metric_lock = threading.Lock()
         self._variant_counts: Counter[str] = Counter()
         self._fallback_reason_counts: Counter[str] = Counter()
+        self._object_gating_filter_reason_counts: Counter[str] = Counter()
+        self._active_pair_stage_ms: Optional[Dict[str, float]] = None
+        self._active_pair_decision = ""
+        self._slow_pair_events: Deque[Dict[str, Any]] = deque(maxlen=400)
+        self._slow_pair_lock = threading.Lock()
         self._last_diagnostics_event_monotonic = 0.0
         self._diagnostics_event_interval_s = 1.0
         self._reacquire_guard_events: Deque[Dict[str, Any]] = deque(maxlen=2000)
@@ -342,6 +422,9 @@ class TrackingPipeline:
             epipolar_threshold_px=self.geometry.epipolar_threshold_px,
             fast_geometry=self.pipeline_variant != "baseline",
             epipolar_pruning_enabled=self.pipeline_variant == "fast_ABCDP",
+            geo_hotpath_optimizations=_variant_has_geo_hotpath_optimizations(
+                self.pipeline_variant
+            ),
             stage_callback=self._record_stage,
         )
         self._calibration_loaded = True
@@ -397,6 +480,12 @@ class TrackingPipeline:
         with self._variant_metric_lock:
             self._fallback_reason_counts[str(reason or "unknown")] += 1
 
+    def _record_object_gating_filter_reasons(self, reasons: Counter[str]) -> None:
+        if not reasons:
+            return
+        with self._variant_metric_lock:
+            self._object_gating_filter_reason_counts.update(reasons)
+
     def _record_blob_reduction(self, *, full_blob_count: int, filtered_blob_count: int) -> None:
         with self._variant_metric_lock:
             self._variant_counts["full_blob_count"] += int(full_blob_count)
@@ -406,12 +495,14 @@ class TrackingPipeline:
         with self._variant_metric_lock:
             counts = dict(self._variant_counts)
             fallback_reasons = dict(self._fallback_reason_counts)
+            object_gating_filter_reasons = dict(self._object_gating_filter_reason_counts)
         rigid_metrics = {}
         get_variant_metrics = getattr(self.rigid_estimator, "get_variant_metrics", None)
         if callable(get_variant_metrics):
             rigid_metrics = dict(get_variant_metrics())
         return {
             "pipeline_variant": self.pipeline_variant,
+            "fast_path_attempt_count": int(counts.get("fast_path_attempt_count", 0)),
             "fast_path_used_count": int(counts.get("fast_path_used_count", 0)),
             "fallback_count": int(counts.get("fallback_count", 0)),
             "fallback_reason_counts": fallback_reasons,
@@ -419,14 +510,31 @@ class TrackingPipeline:
             "filtered_blob_count": int(counts.get("filtered_blob_count", 0)),
             "subset_sampled_count": int(rigid_metrics.get("subset_sampled_count", 0)),
             "subset_skipped_count": int(rigid_metrics.get("subset_skipped_count", 0)),
+            "subset_budget_exceeded_count": int(
+                rigid_metrics.get("subset_budget_exceeded_count", 0)
+            ),
+            "object_gating_filter_reason_counts": object_gating_filter_reasons,
+            "rigid_candidate_separated_count": int(
+                rigid_metrics.get("rigid_candidate_separated_count", 0)
+            ),
+            "rigid_candidate_fallback_count": int(
+                rigid_metrics.get("rigid_candidate_fallback_count", 0)
+            ),
+            "rigid_candidate_fallback_reason_counts": dict(
+                rigid_metrics.get("rigid_candidate_fallback_reason_counts", {})
+            ),
         }
 
     def _fallback_summary(self) -> Dict[str, Any]:
         metrics = self._variant_metrics_snapshot()
         return {
             "fast_path_used_count": int(metrics.get("fast_path_used_count", 0)),
+            "fast_path_attempt_count": int(metrics.get("fast_path_attempt_count", 0)),
             "fallback_count": int(metrics.get("fallback_count", 0)),
             "fallback_reason_counts": dict(metrics.get("fallback_reason_counts", {})),
+            "object_gating_filter_reason_counts": dict(
+                metrics.get("object_gating_filter_reason_counts", {})
+            ),
             "filtered_blob_count": int(metrics.get("filtered_blob_count", 0)),
             "full_blob_count": int(metrics.get("full_blob_count", 0)),
         }
@@ -442,19 +550,41 @@ class TrackingPipeline:
         if not object_gating:
             return None, "no_object_gating"
         min_markers = max(3, int(getattr(self.rigid_estimator.object_gating_config, "min_enforced_markers", 3)))
+        relaxed = _variant_has_relaxed_object_gating(self.pipeline_variant)
+        min_assigned_views = min_markers * 2
+        min_two_ray_markers = min_markers
+        if relaxed:
+            min_assigned_views = max(min_markers + 1, min_assigned_views - 1)
+            min_two_ray_markers = max(2, min_markers - 1)
         filtered: Dict[str, set[int]] = {}
+        reject_reasons: Counter[str] = Counter()
         usable_rigids = 0
         for rigid_name, gating in object_gating.items():
             if not isinstance(gating, dict):
+                reject_reasons["invalid_gating_payload"] += 1
                 continue
-            if not gating.get("evaluated") or gating.get("reason") != "ok":
+            if not gating.get("evaluated"):
+                reject_reasons["gating_not_evaluated"] += 1
                 continue
-            if int(gating.get("assigned_marker_views", 0)) < min_markers * 2:
+            reason = str(gating.get("reason") or "unknown")
+            if reason != "ok":
+                reject_reasons[f"gating_reason_{reason}"] += 1
                 continue
-            if int(gating.get("markers_with_two_or_more_rays", 0)) < min_markers:
+            assigned_views = int(gating.get("assigned_marker_views", 0))
+            if assigned_views < min_assigned_views:
+                reject_reasons["assigned_marker_views_below_min"] += 1
+                continue
+            two_ray_markers = int(gating.get("markers_with_two_or_more_rays", 0))
+            single_ray_candidates = int(gating.get("single_ray_candidates", 0))
+            if two_ray_markers < min_two_ray_markers:
+                reject_reasons["two_ray_markers_below_min"] += 1
+                continue
+            if two_ray_markers < min_markers and single_ray_candidates <= 0:
+                reject_reasons["single_ray_not_available_for_relaxed_gate"] += 1
                 continue
             per_camera = gating.get("per_camera", {})
             if not isinstance(per_camera, dict):
+                reject_reasons["missing_per_camera_assignments"] += 1
                 continue
             rigid_added = 0
             for camera_id, camera_payload in per_camera.items():
@@ -473,7 +603,13 @@ class TrackingPipeline:
                     rigid_added += 1
             if rigid_added > 0:
                 usable_rigids += 1
+            else:
+                reject_reasons["no_filter_indices"] += 1
+        self._record_object_gating_filter_reasons(reject_reasons)
         if usable_rigids <= 0 or not any(filtered.values()):
+            if reject_reasons:
+                reason = reject_reasons.most_common(1)[0][0]
+                return None, f"insufficient_object_gating:{reason}"
             return None, "insufficient_object_gating"
         return filtered, "ok"
 
@@ -529,6 +665,7 @@ class TrackingPipeline:
         if generic_filter is None:
             self._record_variant_metric("fallback_count")
             self._record_fallback_reason(reason)
+            self._active_pair_decision = f"fallback:{reason}"
             self._record_blob_reduction(
                 full_blob_count=full_blob_count,
                 filtered_blob_count=full_blob_count,
@@ -540,23 +677,31 @@ class TrackingPipeline:
             )
 
         filtered_blob_count = int(sum(len(indices) for indices in generic_filter.values()))
+        self._record_variant_metric("fast_path_attempt_count")
         self._record_blob_reduction(
             full_blob_count=full_blob_count,
             filtered_blob_count=filtered_blob_count,
         )
+        filtered_kwargs: Dict[str, Any] = {
+            "min_inlier_views": 2,
+            "object_gating": object_gating,
+            "generic_blob_indices_by_camera": generic_filter,
+        }
+        if _variant_uses_hint_only_geometry(self.pipeline_variant):
+            filtered_kwargs["use_rigid_hint_as_generic"] = True
         filtered_result = self.geometry.process_paired_frames(
             paired_frames,
-            min_inlier_views=2,
-            object_gating=object_gating,
-            generic_blob_indices_by_camera=generic_filter,
+            **filtered_kwargs,
         )
         usable, fallback_reason = self._filtered_result_usable(filtered_result)
         if usable:
             self._record_variant_metric("fast_path_used_count")
+            self._active_pair_decision = "fast_path"
             return filtered_result
 
         self._record_variant_metric("fallback_count")
         self._record_fallback_reason(fallback_reason)
+        self._active_pair_decision = f"fallback:{fallback_reason}"
         fallback_started_ns = time.perf_counter_ns()
         fallback_result = self.geometry.process_paired_frames(
             paired_frames,
@@ -572,6 +717,8 @@ class TrackingPipeline:
             return
         
         pipeline_started_ns = time.perf_counter_ns()
+        self._active_pair_stage_ms = {}
+        self._active_pair_decision = "full_path"
         try:
             timestamp = paired_frames.timestamp
             
@@ -710,11 +857,19 @@ class TrackingPipeline:
                 self._pose_callback(poses)
             self._record_stage("pose_callback_ms", self._elapsed_ms(stage_started_ns))
             self._record_stage("pipeline_pair_ms", self._elapsed_ms(pipeline_started_ns))
+            if self._active_pair_stage_ms is not None:
+                self._record_slow_pair_event(
+                    paired_frames,
+                    dict(self._active_pair_stage_ms),
+                )
             self._maybe_log_diagnostics_event()
             
         except Exception as e:
             if self._error_callback:
                 self._error_callback(e)
+        finally:
+            self._active_pair_stage_ms = None
+            self._active_pair_decision = ""
 
     @staticmethod
     def _elapsed_ms(started_ns: int) -> float:
@@ -723,7 +878,12 @@ class TrackingPipeline:
     def _record_stage(self, name: str, value_ms: float) -> None:
         with self._stage_lock:
             bucket = self._stage_ms.setdefault(name, deque(maxlen=240))
-            bucket.append(float(value_ms))
+            value = float(value_ms)
+            bucket.append(value)
+            if self._active_pair_stage_ms is not None:
+                self._active_pair_stage_ms[name] = (
+                    float(self._active_pair_stage_ms.get(name, 0.0)) + value
+                )
 
     def _stage_diagnostics(self) -> Dict[str, Dict[str, float]]:
         with self._stage_lock:
@@ -771,6 +931,7 @@ class TrackingPipeline:
             "variant_metrics": self._variant_metrics_snapshot(),
             "fallback_summary": self._fallback_summary(),
             "backpressure_summary": {},
+            "slow_pair_events": self.get_slow_pair_events(limit=20),
             "logger": self._logger_diagnostics(),
             "metrics": self.metrics.get_summary(),
             "frames_processed": self.frames_processed,
@@ -938,6 +1099,11 @@ class TrackingPipeline:
                     "rejected_by_rms": int(subset.get("rejected_by_rms", 0)),
                     "flip_risk_count": int(subset.get("flip_risk_count", 0)),
                     "truncated": bool(subset.get("truncated", False)),
+                    "time_budget_ms": float(subset.get("time_budget_ms", 0.0)),
+                    "time_budget_exceeded": bool(subset.get("time_budget_exceeded", False)),
+                    "effective_max_hypotheses": int(
+                        subset.get("effective_max_hypotheses", 0)
+                    ),
                     "best_source": str(best.get("source", "")),
                     "best_score": float(subset.get("best_score", 0.0)),
                     "second_score": float(subset.get("second_score", 0.0)),
@@ -985,6 +1151,36 @@ class TrackingPipeline:
             events = events[-max(0, int(limit)):]
         return [dict(event) for event in events]
 
+    def _record_slow_pair_event(
+        self,
+        paired_frames: PairedFrames,
+        stage_ms: Dict[str, float],
+    ) -> None:
+        frame_blob_counts = {
+            str(camera_id): int(len(getattr(frame, "blobs", []) or []))
+            for camera_id, frame in paired_frames.frames.items()
+        }
+        event = {
+            "timestamp": int(paired_frames.timestamp),
+            "pair_timestamp_range_us": int(paired_frames.timestamp_range_us),
+            "camera_count": int(len(paired_frames.frames)),
+            "blob_count": int(sum(frame_blob_counts.values())),
+            "frame_blob_counts": frame_blob_counts,
+            "stage_ms": {str(name): float(value) for name, value in stage_ms.items()},
+            "pipeline_pair_ms": float(stage_ms.get("pipeline_pair_ms", 0.0)),
+            "decision": str(self._active_pair_decision or ""),
+        }
+        with self._slow_pair_lock:
+            self._slow_pair_events.append(event)
+
+    def get_slow_pair_events(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        with self._slow_pair_lock:
+            events = [dict(event) for event in self._slow_pair_events]
+        events.sort(key=lambda item: float(item.get("pipeline_pair_ms", 0.0)), reverse=True)
+        if limit is not None:
+            events = events[: max(0, int(limit))]
+        return events
+
     def _maybe_log_diagnostics_event(self) -> None:
         if self.logger is None or not self.logger.is_recording:
             return
@@ -1024,6 +1220,7 @@ class TrackingPipeline:
                 "variant_metrics": self._variant_metrics_snapshot(),
                 "fallback_summary": self._fallback_summary(),
                 "backpressure_summary": {},
+                "slow_pair_events": self.get_slow_pair_events(limit=20),
                 "logger": self._logger_diagnostics(),
             },
         }

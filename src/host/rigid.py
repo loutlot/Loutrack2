@@ -11,7 +11,7 @@ Provides functionality to:
 import numpy as np
 from typing import Optional, Dict, Any, List, Tuple, Callable
 from dataclasses import dataclass, field
-from collections import deque
+from collections import Counter, deque
 from enum import Enum
 from itertools import combinations, permutations
 import time
@@ -1374,6 +1374,9 @@ class RigidBodyEstimator:
         object_gating_config: ObjectGatingConfig = ObjectGatingConfig(),
         subset_solve_config: SubsetSolveConfig = SubsetSolveConfig(),
         subset_diagnostics_mode: str = "full",
+        subset_time_budget_ms: Optional[float] = None,
+        subset_max_hypotheses: Optional[int] = None,
+        rigid_candidate_separation_enabled: bool = False,
         stage_callback: Optional[Callable[[str, float], None]] = None,
     ):
         """
@@ -1401,11 +1404,26 @@ class RigidBodyEstimator:
         if self.subset_diagnostics_mode not in {"full", "sampled", "off"}:
             raise ValueError("subset_diagnostics_mode must be full, sampled, or off")
         self.subset_sample_interval = 30
+        self.subset_time_budget_ms = (
+            float(subset_time_budget_ms)
+            if subset_time_budget_ms is not None and float(subset_time_budget_ms) > 0.0
+            else None
+        )
+        self.subset_max_hypotheses = (
+            int(subset_max_hypotheses)
+            if subset_max_hypotheses is not None and int(subset_max_hypotheses) > 0
+            else None
+        )
+        self.rigid_candidate_separation_enabled = bool(rigid_candidate_separation_enabled)
         self._stage_callback = stage_callback
         self._variant_metric_lock = threading.Lock()
         self._subset_frame_index = 0
         self._subset_sampled_count = 0
         self._subset_skipped_count = 0
+        self._subset_budget_exceeded_count = 0
+        self._rigid_candidate_separated_count = 0
+        self._rigid_candidate_fallback_count = 0
+        self._rigid_candidate_fallback_reason_counts: Counter[str] = Counter()
         
         self.clusterer = PointClusterer(
             marker_diameter=marker_diameter,
@@ -1425,13 +1443,121 @@ class RigidBodyEstimator:
             return {
                 "subset_sampled_count": int(self._subset_sampled_count),
                 "subset_skipped_count": int(self._subset_skipped_count),
+                "subset_budget_exceeded_count": int(self._subset_budget_exceeded_count),
                 "subset_diagnostics_mode": self.subset_diagnostics_mode,
+                "subset_time_budget_ms": self.subset_time_budget_ms,
+                "subset_max_hypotheses": self.subset_max_hypotheses,
+                "rigid_candidate_separation_enabled": self.rigid_candidate_separation_enabled,
+                "rigid_candidate_separated_count": int(self._rigid_candidate_separated_count),
+                "rigid_candidate_fallback_count": int(self._rigid_candidate_fallback_count),
+                "rigid_candidate_fallback_reason_counts": dict(
+                    self._rigid_candidate_fallback_reason_counts
+                ),
             }
 
     def _record_subset_stage(self, started_ns: int) -> None:
         if self._stage_callback is None:
             return
         self._stage_callback("subset_ms", float(time.perf_counter_ns() - started_ns) / 1_000_000.0)
+
+    def _record_rigid_candidate_separated(self) -> None:
+        with self._variant_metric_lock:
+            self._rigid_candidate_separated_count += 1
+
+    def _record_rigid_candidate_fallback(self, reason: str) -> None:
+        with self._variant_metric_lock:
+            self._rigid_candidate_fallback_count += 1
+            self._rigid_candidate_fallback_reason_counts[str(reason or "unknown")] += 1
+
+    def _rigid_hint_candidate_cluster(
+        self,
+        pattern: MarkerPattern,
+        rigid_hint_triangulated_points: Optional[List[Dict[str, Any]]],
+    ) -> Optional[np.ndarray]:
+        marker_points = self._rigid_hint_candidate_marker_points(
+            pattern,
+            rigid_hint_triangulated_points,
+        )
+        if marker_points is None:
+            return None
+        _marker_indices, points = marker_points
+        return points
+
+    def _rigid_hint_candidate_marker_points(
+        self,
+        pattern: MarkerPattern,
+        rigid_hint_triangulated_points: Optional[List[Dict[str, Any]]],
+    ) -> Optional[Tuple[List[int], np.ndarray]]:
+        hint_markers = self._rigid_hint_markers_by_index(pattern, rigid_hint_triangulated_points)
+        if len(hint_markers) < max(3, pattern.num_markers - 1):
+            return None
+        marker_indices = [int(index) for index in sorted(hint_markers)]
+        ordered = [hint_markers[index]["point"] for index in marker_indices]
+        points = np.asarray(ordered, dtype=np.float64).reshape(-1, 3)
+        if len(points) < 3 or not np.isfinite(points).all():
+            return None
+        return marker_indices, points
+
+    def _try_rigid_separated_candidate(
+        self,
+        pattern: MarkerPattern,
+        timestamp: int,
+        rigid_hint_triangulated_points: Optional[List[Dict[str, Any]]],
+        camera_params: Optional[Dict[str, Any]],
+        observations_by_camera: Optional[Dict[str, List[Any]]],
+        *,
+        coordinate_space: str,
+    ) -> Optional[Tuple[RigidBodyPose, Dict[str, Any]]]:
+        marker_points = self._rigid_hint_candidate_marker_points(
+            pattern,
+            rigid_hint_triangulated_points,
+        )
+        if marker_points is None:
+            self._record_rigid_candidate_fallback("insufficient_rigid_hint_points")
+            return None
+        marker_indices, observed = marker_points
+        reference = np.asarray(
+            [pattern.marker_positions[index] for index in marker_indices],
+            dtype=np.float64,
+        )
+        try:
+            rotation, position, rms_error = KabschEstimator.estimate(reference, observed)
+            quat_xyzw = Rotation.from_matrix(rotation).as_quat()
+            quaternion = np.array(
+                [quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]],
+                dtype=np.float64,
+            )
+            pose = RigidBodyPose(
+                timestamp=timestamp,
+                position=position,
+                rotation=rotation,
+                quaternion=quaternion,
+                rms_error=float(rms_error),
+                observed_markers=int(len(marker_indices)),
+                valid=bool(float(rms_error) <= self.max_rms_error_m),
+            )
+        except Exception:
+            self._record_rigid_candidate_fallback("rigid_candidate_solve_failed")
+            return None
+        if not pose.valid or pose.rms_error > self.max_rms_error_m:
+            self._record_rigid_candidate_fallback("invalid_rigid_candidate_pose")
+            return None
+        score = self._score_pose_reprojection(
+            pose,
+            pattern,
+            camera_params,
+            observations_by_camera,
+            coordinate_space=coordinate_space,
+        )
+        if score.get("scored", False):
+            p95_error = float(score.get("p95_error_px", 0.0))
+            min_views = max(3, int(self.object_gating_config.min_enforced_markers)) * 2
+            matched_views = int(score.get("matched_marker_views", 0))
+            if p95_error > self.reprojection_match_gate_px or matched_views < min_views:
+                self._record_rigid_candidate_fallback("rigid_candidate_2d_score_gate")
+                return None
+        self._record_rigid_candidate_separated()
+        return pose, score
 
     def _subset_diagnostics_for_frame(
         self,
@@ -1492,6 +1618,9 @@ class RigidBodyEstimator:
             generic_score=generic_score,
         )
         self._record_subset_stage(started_ns)
+        if diagnostic.get("time_budget_exceeded"):
+            with self._variant_metric_lock:
+                self._subset_budget_exceeded_count += 1
         if mode == "sampled":
             with self._variant_metric_lock:
                 self._subset_sampled_count += 1
@@ -1884,37 +2013,57 @@ class RigidBodyEstimator:
             best_pose = None
             best_error = float('inf')
             best_cluster_idx = -1
-            
-            for idx, cluster in enumerate(clusters):
-                if idx in used_clusters:
-                    continue
-                
-                if len(cluster) < 3:
-                    continue
-                
-                # Check if cluster size matches pattern
-                if len(cluster) < pattern.num_markers - 1:
-                    continue  # Too few points
-                
-                pose = self.estimate_pose(cluster, pattern, timestamp)
-                
-                if (
-                    pose.valid
-                    and pose.rms_error <= self.max_rms_error_m
-                    and pose.rms_error < best_error
-                ):
-                    best_pose = pose
-                    best_error = pose.rms_error
-                    best_cluster_idx = idx
-            
-            tracker = self.trackers[pattern.name]
-            if best_pose is not None:
-                score = self._score_pose_reprojection(
-                    best_pose,
+            best_score_from_separated: Optional[Dict[str, Any]] = None
+
+            if self.rigid_candidate_separation_enabled and has_rigid_hints:
+                separated = self._try_rigid_separated_candidate(
                     pattern,
+                    timestamp,
+                    rigid_hint_triangulated_points,
                     camera_params,
                     observations_by_camera,
                     coordinate_space=coordinate_space,
+                )
+                if separated is not None:
+                    best_pose, best_score_from_separated = separated
+                    best_error = float(best_pose.rms_error)
+                    best_cluster_idx = -1
+            
+            if best_pose is None:
+                for idx, cluster in enumerate(clusters):
+                    if idx in used_clusters:
+                        continue
+
+                    if len(cluster) < 3:
+                        continue
+
+                    # Check if cluster size matches pattern
+                    if len(cluster) < pattern.num_markers - 1:
+                        continue  # Too few points
+
+                    pose = self.estimate_pose(cluster, pattern, timestamp)
+
+                    if (
+                        pose.valid
+                        and pose.rms_error <= self.max_rms_error_m
+                        and pose.rms_error < best_error
+                    ):
+                        best_pose = pose
+                        best_error = pose.rms_error
+                        best_cluster_idx = idx
+            
+            tracker = self.trackers[pattern.name]
+            if best_pose is not None:
+                score = (
+                    dict(best_score_from_separated)
+                    if best_score_from_separated is not None
+                    else self._score_pose_reprojection(
+                        best_pose,
+                        pattern,
+                        camera_params,
+                        observations_by_camera,
+                        coordinate_space=coordinate_space,
+                    )
                 )
                 hint_diagnostic = self._evaluate_rigid_hint_pose(
                     pattern,
@@ -1979,7 +2128,7 @@ class RigidBodyEstimator:
                     )
                 else:
                     poses[pattern.name] = selected_pose
-                    if selected_source == "generic":
+                    if selected_source == "generic" and best_cluster_idx >= 0:
                         used_clusters.add(best_cluster_idx)
                     tracker.update(selected_pose)
             else:
@@ -2295,11 +2444,20 @@ class RigidBodyEstimator:
     ) -> Dict[str, Any]:
         config = self.subset_solve_config
         thresholds = config.thresholds_dict()
+        budget_ms = self.subset_time_budget_ms
+        effective_max_hypotheses = int(
+            min(config.max_hypotheses, self.subset_max_hypotheses)
+            if self.subset_max_hypotheses is not None
+            else config.max_hypotheses
+        )
+        thresholds["effective_max_hypotheses"] = effective_max_hypotheses
+        thresholds["time_budget_ms"] = float(budget_ms or 0.0)
         if not config.enabled:
             diagnostic = _empty_subset_hypothesis("disabled", thresholds)
             diagnostic["enabled"] = False
             return diagnostic
 
+        started_ns = time.perf_counter_ns()
         generic_points = np.asarray(points_3d, dtype=np.float64).reshape(-1, 3)
         candidates: List[Dict[str, Any]] = []
         candidate_count = 0
@@ -2309,6 +2467,13 @@ class RigidBodyEstimator:
         rejected_by_rms = 0
         flip_risk_count = 0
         truncated = False
+        time_budget_exceeded = False
+
+        def budget_exceeded() -> bool:
+            if budget_ms is None:
+                return False
+            elapsed_ms = float(time.perf_counter_ns() - started_ns) / 1_000_000.0
+            return elapsed_ms >= float(budget_ms)
 
         def add_candidate(
             *,
@@ -2325,8 +2490,13 @@ class RigidBodyEstimator:
             nonlocal rejected_by_rms
             nonlocal flip_risk_count
             nonlocal truncated
+            nonlocal time_budget_exceeded
 
-            if candidate_count >= config.max_hypotheses:
+            if candidate_count >= effective_max_hypotheses:
+                truncated = True
+                return False
+            if budget_exceeded():
+                time_budget_exceeded = True
                 truncated = True
                 return False
             if self._subset_candidate_pruned(
@@ -2387,8 +2557,10 @@ class RigidBodyEstimator:
                     weights=weights,
                 ):
                     break
+            if truncated:
+                break
 
-        if 3 <= len(generic_points) <= config.max_observed_points:
+        if not truncated and 3 <= len(generic_points) <= config.max_observed_points:
             observed_subsets = self._prioritized_generic_observed_subsets(
                 generic_points,
                 pattern,
@@ -2419,7 +2591,16 @@ class RigidBodyEstimator:
                     break
 
         if candidate_count <= 0:
-            return _empty_subset_hypothesis("no_subset_candidates", thresholds)
+            diagnostic = _empty_subset_hypothesis(
+                "time_budget_exceeded" if time_budget_exceeded else "no_subset_candidates",
+                thresholds,
+            )
+            diagnostic["evaluated"] = True
+            diagnostic["time_budget_ms"] = float(budget_ms or 0.0)
+            diagnostic["time_budget_exceeded"] = bool(time_budget_exceeded)
+            diagnostic["effective_max_hypotheses"] = int(effective_max_hypotheses)
+            diagnostic["truncated"] = bool(truncated)
+            return diagnostic
 
         ranked = sorted(
             candidates,
@@ -2456,6 +2637,9 @@ class RigidBodyEstimator:
             "diagnostics_only": bool(config.diagnostics_only),
             "enabled": True,
             "thresholds": thresholds,
+            "time_budget_ms": float(budget_ms or 0.0),
+            "time_budget_exceeded": bool(time_budget_exceeded),
+            "effective_max_hypotheses": int(effective_max_hypotheses),
             "generic_valid": bool(generic_pose.valid) if generic_pose is not None else False,
             "candidate_count": int(candidate_count),
             "pruned_candidate_count": int(pruned_candidate_count),

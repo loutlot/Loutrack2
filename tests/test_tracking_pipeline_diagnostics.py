@@ -170,6 +170,8 @@ def test_tracking_pipeline_reports_stage_and_logger_diagnostics(tmp_path: Path) 
     assert stage_ms["pipeline_pair_ms"]["max"] >= 0.0
     assert status["diagnostics"]["logger"]["recording"] is True
     assert status["diagnostics"]["tracking"] == {"ok": True}
+    assert status["diagnostics"]["slow_pair_events"]
+    assert status["diagnostics"]["slow_pair_events"][0]["blob_count"] == 2
     assert callbacks
     assert status["triangulation_quality"]["accepted_points"] == 1
     snapshot = pipeline.get_latest_triangulation_snapshot()
@@ -424,6 +426,45 @@ def test_tracking_pipeline_can_still_select_baseline_path() -> None:
 
     assert pipeline.pipeline_variant == "baseline"
     assert pipeline.subset_diagnostics_mode == "full"
+
+
+def test_tracking_pipeline_fast_abcds_enables_subset_budget() -> None:
+    pipeline = TrackingPipeline(enable_logging=False, pipeline_variant="fast_ABCDS")
+
+    assert pipeline.pipeline_variant == "fast_ABCDS"
+    assert pipeline.subset_diagnostics_mode == "sampled"
+    assert pipeline.rigid_estimator.subset_time_budget_ms == 6.0
+    assert pipeline.rigid_estimator.subset_max_hypotheses == 512
+
+
+def test_tracking_pipeline_fast_abcdhrf_enables_combined_stress_path() -> None:
+    pipeline = TrackingPipeline(enable_logging=False, pipeline_variant="fast_ABCDHRF")
+
+    assert pipeline.pipeline_variant == "fast_ABCDHRF"
+    assert pipeline.rigid_estimator.subset_time_budget_ms == 6.0
+    assert pipeline.rigid_estimator.rigid_candidate_separation_enabled is True
+
+
+def test_tracking_pipeline_breaks_down_object_gating_filter_reasons() -> None:
+    pipeline = TrackingPipeline(enable_logging=False, pipeline_variant="fast_ABCDG")
+
+    generic_filter, reason = pipeline._fast_generic_filter(
+        {
+            "waist": {
+                "evaluated": True,
+                "reason": "ok",
+                "assigned_marker_views": 2,
+                "markers_with_two_or_more_rays": 1,
+                "single_ray_candidates": 0,
+                "per_camera": {},
+            }
+        }
+    )
+
+    assert generic_filter is None
+    assert reason == "insufficient_object_gating:assigned_marker_views_below_min"
+    metrics = pipeline._variant_metrics_snapshot()
+    assert metrics["object_gating_filter_reason_counts"]["assigned_marker_views_below_min"] == 1
 
 
 def test_tracking_pipeline_maps_rigid_stabilization_flags_to_configs() -> None:

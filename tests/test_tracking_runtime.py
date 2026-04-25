@@ -372,6 +372,59 @@ def test_tracking_runtime_updates_scene_even_without_valid_rigid_body(monkeypatc
     assert runtime.status()["triangulation_quality"]["accepted_points"] == 1
 
 
+def test_tracking_runtime_caps_raw_points_in_scene_payload(monkeypatch) -> None:
+    class _FakePipeline:
+        def __init__(self, udp_port=5000, calibration_path=None, patterns=None, **kwargs):
+            self._running = False
+            self.frames_processed = 1
+            self.poses_estimated = 0
+            self.geometry = type("_Geometry", (), {"camera_params": {}})()
+
+        def set_pose_callback(self, callback):
+            self._pose_callback = callback
+
+        def start(self, session_name=None):
+            self._running = True
+
+        def stop(self):
+            self._running = False
+            return {"frames_processed": 1, "poses_estimated": 0}
+
+        def get_status(self):
+            return {
+                "running": self._running,
+                "calibration_loaded": True,
+                "frames_processed": self.frames_processed,
+                "poses_estimated": self.poses_estimated,
+                "receiver": {},
+                "metrics": {},
+                "tracking": {},
+                "triangulation_quality": {},
+                "uptime_seconds": 0.1,
+            }
+
+        def get_latest_triangulation_snapshot(self):
+            return {
+                "timestamp": 900,
+                "points_3d": [[float(index), 0.0, 0.0] for index in range(5)],
+                "reprojection_errors": [],
+                "triangulation_quality": {},
+                "pair_timestamp_range_us": 0,
+            }
+
+    monkeypatch.setattr("host.tracking_runtime.TrackingPipeline", _FakePipeline)
+
+    runtime = TrackingRuntime()
+    runtime.max_scene_raw_points = 2
+    runtime.start(calibration_path="calibration", patterns=["waist"])
+    runtime._on_pose({})
+
+    scene = runtime.scene_snapshot()
+    assert scene["raw_points"] == [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]
+    assert scene["raw_point_count"] == 5
+    assert scene["raw_points_truncated"] is True
+
+
 def test_tracking_runtime_status_uses_short_lived_cache(monkeypatch) -> None:
     class _FakePipeline:
         def __init__(self, udp_port=5000, calibration_path=None, patterns=None, **kwargs):

@@ -82,6 +82,7 @@ class TrackingReplaySummary:
     stage_ms_detail: Dict[str, Any]
     fallback_summary: Dict[str, Any]
     backpressure_summary: Dict[str, Any]
+    slow_pair_events: List[Dict[str, Any]]
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -113,6 +114,7 @@ class TrackingReplaySummary:
             "stage_ms_detail": self.stage_ms_detail,
             "fallback_summary": self.fallback_summary,
             "backpressure_summary": self.backpressure_summary,
+            "slow_pair_events": self.slow_pair_events,
         }
 
 
@@ -280,6 +282,7 @@ def replay_tracking_log(
         stage_ms_detail=dict(diagnostics.get("stage_ms_detail", {})),
         fallback_summary=dict(diagnostics.get("fallback_summary", {})),
         backpressure_summary=backpressure_summary,
+        slow_pair_events=list(diagnostics.get("slow_pair_events", [])),
     )
 
 
@@ -673,6 +676,93 @@ def compare_epipolar_pruning(
             baseline,
             candidate,
         ),
+    }
+
+
+PERFORMANCE_UPGRADE_VARIANTS = (
+    "fast_ABCD",
+    "fast_ABCDS",
+    "fast_ABCDG",
+    "fast_ABCDF",
+    "fast_ABCDH",
+    "fast_ABCDHF",
+    "fast_ABCDHR",
+    "fast_ABCDHRF",
+    "fast_ABCDR",
+    "fast_ABCDX",
+)
+
+
+def compare_performance_upgrades(
+    *,
+    log_path: str | Path,
+    calibration_path: str | Path,
+    patterns: Optional[Iterable[str]] = None,
+    rigids_path: str | Path | None = None,
+    epipolar_threshold_px: Optional[float] = None,
+    reacquire_guard_enforced: bool = False,
+    reacquire_guard_shadow_enabled: bool = True,
+    reacquire_guard_event_logging: bool = False,
+    reacquire_guard_post_reacquire_frames: int = 0,
+    reacquire_guard_max_rotation_deg: float = 136.0,
+    object_gating_enforced: bool = False,
+    object_gating_activation_mode: str = "always",
+    start_timestamp_us: Optional[int] = None,
+    end_timestamp_us: Optional[int] = None,
+    start_received_at: Optional[str] = None,
+    end_received_at: Optional[str] = None,
+    max_frames: Optional[int] = None,
+    subset_diagnostics_mode: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Compare performance-upgrade variants against the official fast_ABCD path."""
+    common = {
+        "log_path": log_path,
+        "calibration_path": calibration_path,
+        "patterns": patterns,
+        "rigids_path": rigids_path,
+        "epipolar_threshold_px": epipolar_threshold_px,
+        "reacquire_guard_enforced": reacquire_guard_enforced,
+        "reacquire_guard_shadow_enabled": reacquire_guard_shadow_enabled,
+        "reacquire_guard_event_logging": reacquire_guard_event_logging,
+        "reacquire_guard_post_reacquire_frames": reacquire_guard_post_reacquire_frames,
+        "reacquire_guard_max_rotation_deg": reacquire_guard_max_rotation_deg,
+        "object_gating_enforced": object_gating_enforced,
+        "object_gating_activation_mode": object_gating_activation_mode,
+        "start_timestamp_us": start_timestamp_us,
+        "end_timestamp_us": end_timestamp_us,
+        "start_received_at": start_received_at,
+        "end_received_at": end_received_at,
+        "max_frames": max_frames,
+    }
+    summaries: Dict[str, Dict[str, Any]] = {}
+    for variant in PERFORMANCE_UPGRADE_VARIANTS:
+        summaries[variant] = replay_tracking_log(
+            **common,
+            pipeline_variant=variant,
+            subset_diagnostics_mode=subset_diagnostics_mode
+            or default_subset_diagnostics_mode_for_variant(variant),
+        ).to_dict()
+
+    baseline = summaries["fast_ABCD"]
+    variants: Dict[str, Dict[str, Any]] = {}
+    adopted: List[str] = []
+    for variant in PERFORMANCE_UPGRADE_VARIANTS:
+        if variant == "fast_ABCD":
+            continue
+        candidate = dict(summaries[variant])
+        decision = _compare_pipeline_variant_go_no_go(baseline, candidate)
+        candidate["variant_go_no_go"] = decision
+        variants[variant] = candidate
+        if decision.get("replacement_candidate"):
+            adopted.append(variant)
+
+    return {
+        "log_path": str(log_path),
+        "calibration_path": str(calibration_path),
+        "patterns": list(patterns or [WAIST_PATTERN.name]),
+        "baseline": baseline,
+        "variants": variants,
+        "ranked_replacement_candidates": adopted,
     }
 
 
@@ -1640,6 +1730,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--pipeline-variant", default=DEFAULT_PIPELINE_VARIANT, choices=list(PIPELINE_VARIANTS), help="Replay through the official tracking path or an explicit comparison variant.")
     parser.add_argument("--compare-pipeline-variants", action="store_true", help="Run baseline and all fast-path variants on the same replay input.")
     parser.add_argument("--compare-epipolar-pruning", action="store_true", help="Run fast_ABCD and fast_ABCDP on the same replay input and compare exact quality plus speed.")
+    parser.add_argument("--compare-performance-upgrades", action="store_true", help="Run fast_ABCD and staged performance-upgrade variants on the same replay input.")
     parser.add_argument("--subset-diagnostics-mode", default=None, choices=["full", "sampled", "off"], help="Control subset hypothesis diagnostics frequency during replay. Defaults follow the selected pipeline variant.")
     parser.add_argument("--ab-report-out", default=None, help="Optional JSON path for --compare-pipeline-variants output.")
     parser.add_argument("--diagnostics-summary", action="store_true", help="Summarize live tracking_diagnostics events without replaying frames.")
@@ -1688,6 +1779,27 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
     elif args.compare_epipolar_pruning:
         summary = compare_epipolar_pruning(
+            log_path=args.log,
+            calibration_path=args.calibration,
+            patterns=_parse_pattern_names(args.patterns),
+            rigids_path=args.rigids,
+            epipolar_threshold_px=args.epipolar_threshold_px,
+            reacquire_guard_enforced=bool(args.reacquire_guard_enforced),
+            reacquire_guard_shadow_enabled=not bool(args.disable_reacquire_guard_shadow),
+            reacquire_guard_event_logging=bool(args.reacquire_guard_event_logging),
+            reacquire_guard_post_reacquire_frames=int(args.reacquire_guard_post_reacquire_frames),
+            reacquire_guard_max_rotation_deg=args.reacquire_guard_max_rotation_deg,
+            object_gating_enforced=bool(args.object_gating_enforced),
+            object_gating_activation_mode=args.object_gating_activation_mode,
+            start_timestamp_us=args.start_timestamp_us,
+            end_timestamp_us=args.end_timestamp_us,
+            start_received_at=args.start_received_at,
+            end_received_at=args.end_received_at,
+            max_frames=args.max_frames,
+            subset_diagnostics_mode=args.subset_diagnostics_mode,
+        )
+    elif args.compare_performance_upgrades:
+        summary = compare_performance_upgrades(
             log_path=args.log,
             calibration_path=args.calibration,
             patterns=_parse_pattern_names(args.patterns),
@@ -1771,6 +1883,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         if out_path is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             out_path = str(Path("logs") / "archive" / f"epipolar_pruning_ab_{timestamp}" / "comparison.json")
+    elif args.compare_performance_upgrades:
+        out_path = args.ab_report_out or args.out
+        if out_path is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            out_path = str(Path("logs") / "archive" / f"performance_upgrade_ab_{timestamp}" / "comparison.json")
     if out_path:
         Path(out_path).parent.mkdir(parents=True, exist_ok=True)
         Path(out_path).write_text(text + "\n", encoding="utf-8")

@@ -446,6 +446,10 @@ def _increment_diagnostic(diagnostics: Dict[str, float], *keys: str, amount: flo
         diagnostics[key] = float(diagnostics.get(key, 0.0)) + float(amount)
 
 
+def _variant_has_geo_hotpath_optimizations(variant: str) -> bool:
+    return str(variant or "") in {"fast_ABCDF", "fast_ABCDHF", "fast_ABCDHRF"}
+
+
 def _empty_assignment_diagnostics() -> Dict[str, float]:
     return {
         "assignment_candidates": 0,
@@ -491,12 +495,14 @@ class Triangulator:
         *,
         fast_geometry: bool = False,
         epipolar_pruning_enabled: bool = False,
+        geo_hotpath_optimizations: bool = False,
         stage_callback: Optional[Callable[[str, float], None]] = None,
     ):
         self.camera_params = camera_params
         self.epipolar_threshold_px = float(epipolar_threshold_px)
         self.fast_geometry = bool(fast_geometry)
         self.epipolar_pruning_enabled = bool(epipolar_pruning_enabled)
+        self.geo_hotpath_optimizations = bool(geo_hotpath_optimizations)
         self._stage_callback = stage_callback
         self._proj_matrices: Dict[str, np.ndarray] = {}
         self._rvecs: Dict[str, np.ndarray] = {}
@@ -863,6 +869,25 @@ class Triangulator:
         if len(valid_points) < 2:
             return None
 
+        if self.geo_hotpath_optimizations and len(valid_points) == 2:
+            try:
+                P1 = self._proj_matrices[valid_cameras[0]]
+                P2 = self._proj_matrices[valid_cameras[1]]
+                pts1 = np.asarray(valid_points[0], dtype=np.float64).reshape(2, 1)
+                pts2 = np.asarray(valid_points[1], dtype=np.float64).reshape(2, 1)
+                point_h = cv.triangulatePoints(P1, P2, pts1, pts2).reshape(4)
+                if abs(float(point_h[3])) >= 1e-10:
+                    point_3d = point_h[:3] / point_h[3]
+                    if np.isfinite(point_3d).all():
+                        for cam_id in valid_cameras:
+                            cam = self.camera_params[cam_id]
+                            depth = float(cam.rotation[2, :] @ point_3d + cam.translation[2])
+                            if depth <= 0.0:
+                                return None
+                        return point_3d
+            except Exception:
+                pass
+
         A = []
         for pt, cam_id in zip(valid_points, valid_cameras):
             P = self._proj_matrices[cam_id]
@@ -1129,11 +1154,30 @@ class Triangulator:
                 ref_points,
                 other_points,
             )
-            backward_matrix = self._epipolar_distance_matrix(
-                F_other_to_ref,
-                other_points,
-                ref_points,
-            ).T
+            if self.geo_hotpath_optimizations:
+                forward_mask = forward_matrix <= gate_px
+                candidate_rows, candidate_cols = np.nonzero(forward_mask)
+                full_size = int(forward_matrix.size)
+                if len(candidate_rows) < int(full_size * 0.5):
+                    backward_matrix = np.full_like(forward_matrix, np.inf)
+                    for row, col in zip(candidate_rows, candidate_cols):
+                        backward_matrix[int(row), int(col)] = self._epipolar_distance(
+                            F_other_to_ref,
+                            other_points[int(col)],
+                            ref_points[int(row)],
+                        )
+                else:
+                    backward_matrix = self._epipolar_distance_matrix(
+                        F_other_to_ref,
+                        other_points,
+                        ref_points,
+                    ).T
+            else:
+                backward_matrix = self._epipolar_distance_matrix(
+                    F_other_to_ref,
+                    other_points,
+                    ref_points,
+                ).T
             symmetric_errors = np.maximum(forward_matrix, backward_matrix)
             accepted_mask = symmetric_errors <= gate_px
             rejected_count = int(accepted_mask.size - int(np.count_nonzero(accepted_mask)))
@@ -1378,6 +1422,8 @@ class Triangulator:
 
         current_observations = list(observations)
         epipolar_errors = dict(epipolar_errors_by_camera or {})
+        accepted_point_3d: Optional[np.ndarray] = None
+        accepted_residuals: Optional[List[float]] = None
 
         while len(current_observations) >= 2:
             point_3d = self._triangulate_from_observations(current_observations)
@@ -1404,6 +1450,8 @@ class Triangulator:
             worst_index = int(np.argmax(residuals))
             worst_residual = float(residuals[worst_index])
             if worst_residual <= _MAX_REPROJECTION_ERROR_PX:
+                accepted_point_3d = point_3d
+                accepted_residuals = list(float(value) for value in residuals)
                 break
             if len(current_observations) <= 2:
                 _increment_diagnostic(
@@ -1424,26 +1472,29 @@ class Triangulator:
             )
             return None
 
-        point_3d = self._triangulate_from_observations(current_observations)
-        if point_3d is None:
-            _increment_diagnostic(
-                diagnostics,
-                "assignment_rejected_triangulation",
-                "rejected_triangulation",
-            )
-            return None
+        point_3d = accepted_point_3d if self.geo_hotpath_optimizations else None
+        residuals = accepted_residuals if self.geo_hotpath_optimizations else None
+        if point_3d is None or residuals is None:
+            point_3d = self._triangulate_from_observations(current_observations)
+            if point_3d is None:
+                _increment_diagnostic(
+                    diagnostics,
+                    "assignment_rejected_triangulation",
+                    "rejected_triangulation",
+                )
+                return None
 
-        residuals = self._compute_reprojection_errors_for_observations(
-            current_observations,
-            point_3d,
-        )
-        if not residuals:
-            _increment_diagnostic(
-                diagnostics,
-                "assignment_rejected_triangulation",
-                "rejected_triangulation",
+            residuals = self._compute_reprojection_errors_for_observations(
+                current_observations,
+                point_3d,
             )
-            return None
+            if not residuals:
+                _increment_diagnostic(
+                    diagnostics,
+                    "assignment_rejected_triangulation",
+                    "rejected_triangulation",
+                )
+                return None
         residual_summary = _metric_summary(residuals)
         if residual_summary["p90"] > _P90_REPROJECTION_ERROR_PX:
             _increment_diagnostic(
@@ -1629,6 +1680,34 @@ class Triangulator:
             "assignment_diagnostics": dict(diagnostics),
         }
         return points_3d, errors
+
+    def prepare_observations_for_paired_frames(
+        self,
+        paired_frames,
+        *,
+        blob_indices_by_camera: Optional[Dict[str, set[int]]] = None,
+    ) -> Dict[str, List[_BlobObservation]]:
+        """Build per-camera observations without running generic matching."""
+        self._last_observations_by_camera = {}
+        camera_ids = [cid for cid in paired_frames.camera_ids if cid in self.camera_params]
+        observations_by_camera: Dict[str, List[_BlobObservation]] = {}
+        for cam_id in camera_ids:
+            frame = paired_frames.frames.get(cam_id)
+            if frame is None or not frame.blobs:
+                continue
+            include_indices = None
+            if blob_indices_by_camera is not None:
+                include_indices = set(blob_indices_by_camera.get(cam_id, set()))
+            observations_by_camera[cam_id] = self._build_observations(
+                cam_id,
+                frame.blobs,
+                include_blob_indices=include_indices,
+            )
+        self._last_observations_by_camera = {
+            camera_id: list(observations)
+            for camera_id, observations in observations_by_camera.items()
+        }
+        return observations_by_camera
 
     def triangulate_rigid_hints(
         self,
@@ -1910,6 +1989,9 @@ class GeometryPipeline:
                 epipolar_threshold_px=self.epipolar_threshold_px,
                 fast_geometry=self.pipeline_variant != "baseline",
                 epipolar_pruning_enabled=self.pipeline_variant == "fast_ABCDP",
+                geo_hotpath_optimizations=_variant_has_geo_hotpath_optimizations(
+                    self.pipeline_variant
+                ),
                 stage_callback=self._stage_callback,
             )
 
@@ -1938,10 +2020,69 @@ class GeometryPipeline:
         min_inlier_views: int = 2,
         object_gating: Optional[Dict[str, Any]] = None,
         generic_blob_indices_by_camera: Optional[Dict[str, set[int]]] = None,
+        use_rigid_hint_as_generic: bool = False,
     ) -> Dict[str, Any]:
         """Process paired frames to extract 3D points."""
         if not self.triangulator:
             return {"error": "No calibration loaded"}
+
+        if use_rigid_hint_as_generic and object_gating:
+            self.triangulator.prepare_observations_for_paired_frames(
+                paired_frames,
+                blob_indices_by_camera=generic_blob_indices_by_camera,
+            )
+            empty_assignment = _empty_assignment_diagnostics()
+            stage_started_ns = time.perf_counter_ns()
+            (
+                rigid_hint_points,
+                rigid_hint_errors,
+                rigid_hint_triangulated_points,
+                rigid_hint_quality,
+            ) = self.triangulator.triangulate_rigid_hints(
+                object_gating,
+                min_inlier_views=min_inlier_views,
+            )
+            if self._stage_callback is not None:
+                self._stage_callback(
+                    "rigid_hint_triangulation_ms",
+                    float(time.perf_counter_ns() - stage_started_ns) / 1_000_000.0,
+                )
+                self._stage_callback("generic_triangulation_ms", 0.0)
+            assignment_diagnostics = dict(
+                rigid_hint_quality.get("assignment_diagnostics", empty_assignment)
+            )
+            quality_metrics = {
+                "accepted_points": int(rigid_hint_quality.get("accepted_points", 0)),
+                "contributing_rays": dict(
+                    rigid_hint_quality.get("contributing_rays", {"per_point": [], "summary": {}})
+                ),
+                "reprojection_error_px_summary": dict(
+                    rigid_hint_quality.get("reprojection_error_px_summary", {})
+                ),
+                "epipolar_error_px_summary": _metric_summary([]),
+                "triangulation_angle_deg_summary": dict(
+                    rigid_hint_quality.get("triangulation_angle_deg_summary", {})
+                ),
+                "assignment_diagnostics": assignment_diagnostics,
+            }
+            self._latest_quality_metrics = quality_metrics
+            self._latest_rigid_hint_quality = rigid_hint_quality
+            return {
+                "timestamp": paired_frames.timestamp,
+                "camera_ids": paired_frames.camera_ids,
+                "points_3d": rigid_hint_points,
+                "rigid_hint_points_3d": rigid_hint_points,
+                "observations_by_camera": self.triangulator.last_observations_by_camera,
+                "triangulated_points": rigid_hint_triangulated_points,
+                "rigid_hint_triangulated_points": rigid_hint_triangulated_points,
+                "reprojection_errors": rigid_hint_errors,
+                "rigid_hint_reprojection_errors": rigid_hint_errors,
+                "assignment_diagnostics": assignment_diagnostics,
+                "triangulation_quality": quality_metrics,
+                "rigid_hint_quality": rigid_hint_quality,
+                "mean_error": float(np.mean(rigid_hint_errors)) if rigid_hint_errors else 0.0,
+                "point_count": len(rigid_hint_points),
+            }
 
         stage_started_ns = time.perf_counter_ns()
         points_3d, errors = self.triangulator.triangulate_paired_frames(

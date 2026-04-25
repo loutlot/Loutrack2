@@ -413,6 +413,54 @@ def test_process_paired_frames_triangulates_rigid_hint_assignments_separately() 
         assert np.min(np.linalg.norm(hinted - expected, axis=1)) < 1e-6
 
 
+def test_process_paired_frames_can_use_rigid_hint_as_generic_output() -> None:
+    pipeline = _geometry_pipeline()
+    params = pipeline.camera_params
+    points_world = np.array(
+        [
+            [-0.10, -0.12, 2.5],
+            [0.05, -0.04, 2.5],
+            [0.11, 0.08, 2.5],
+            [-0.05, 0.17, 2.5],
+        ],
+        dtype=np.float64,
+    )
+    blobs_a = [_blob(_project(params["cam0"], point)) for point in points_world]
+    blobs_b = [_blob(_project(params["cam1"], point)) for point in points_world]
+    object_gating = {
+        "waist": {
+            "evaluated": True,
+            "per_camera": {
+                "cam0": {
+                    "assignments": [
+                        {"marker_idx": marker_idx, "blob_index": marker_idx}
+                        for marker_idx in range(4)
+                    ]
+                },
+                "cam1": {
+                    "assignments": [
+                        {"marker_idx": marker_idx, "blob_index": marker_idx}
+                        for marker_idx in range(4)
+                    ]
+                },
+            },
+        }
+    }
+
+    result = pipeline.process_paired_frames(
+        _paired(blobs_a, blobs_b),
+        object_gating=object_gating,
+        use_rigid_hint_as_generic=True,
+    )
+
+    points = np.asarray(result["points_3d"], dtype=np.float64)
+    hinted = np.asarray(result["rigid_hint_points_3d"], dtype=np.float64)
+    assert result["triangulation_quality"]["accepted_points"] == 4
+    assert result["assignment_diagnostics"]["assignment_candidates"] == 0
+    assert {point["source"] for point in result["triangulated_points"]} == {"rigid_hint"}
+    assert np.allclose(_sorted_points(points), _sorted_points(hinted), atol=1e-9)
+
+
 def test_process_paired_frames_does_not_force_unmatched_blob_into_3d_point() -> None:
     pipeline = _geometry_pipeline()
     params = pipeline.camera_params
