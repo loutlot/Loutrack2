@@ -93,6 +93,46 @@ def _geometry_pipeline_with_params(params: dict[str, CameraParams]) -> GeometryP
     return pipeline
 
 
+def _stress_blobs(
+    params: dict[str, CameraParams],
+    *,
+    blobs_per_camera: int,
+) -> dict[str, list[dict[str, float]]]:
+    rng = np.random.default_rng(12345)
+    true_points = np.array(
+        [
+            [-0.10, -0.12, 2.5],
+            [0.05, -0.04, 2.5],
+            [0.11, 0.08, 2.5],
+            [-0.05, 0.17, 2.5],
+        ],
+        dtype=np.float64,
+    )
+    blobs_by_camera: dict[str, list[dict[str, float]]] = {}
+    for camera_id, camera in params.items():
+        blobs = [_blob(_project(camera, point)) for point in true_points]
+        width, height = camera.resolution
+        while len(blobs) < blobs_per_camera:
+            blobs.append(
+                _blob(
+                    (
+                        float(rng.uniform(20.0, width - 20.0)),
+                        float(rng.uniform(20.0, height - 20.0)),
+                    )
+                )
+            )
+        blobs_by_camera[camera_id] = blobs
+    return blobs_by_camera
+
+
+def _sorted_points(points: list[np.ndarray]) -> np.ndarray:
+    arr = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+    if arr.size == 0:
+        return arr
+    order = np.lexsort((arr[:, 2], arr[:, 1], arr[:, 0]))
+    return arr[order]
+
+
 def test_epipolar_threshold_defaults_to_tracking_slider_value() -> None:
     triangulator = Triangulator(create_dummy_calibration(["cam0", "cam1"]))
 
@@ -228,6 +268,61 @@ def test_fast_vectorized_epipolar_matching_matches_scalar_path() -> None:
         sorted(np.asarray(scalar_result["points_3d"]).tolist()),
         sorted(np.asarray(fast_result["points_3d"]).tolist()),
     )
+
+
+def test_fast_abcdp_pruned_epipolar_matches_full_vectorized_stress() -> None:
+    params = create_dummy_calibration(
+        ["cam0", "cam1", "cam2", "cam3"],
+        focal_length=800.0,
+    )
+    blobs = _stress_blobs(params, blobs_per_camera=64)
+    baseline = GeometryPipeline(pipeline_variant="fast_ABCD")
+    baseline.camera_params = params
+    baseline.triangulator = Triangulator(params, fast_geometry=True)
+    pruned = GeometryPipeline(pipeline_variant="fast_ABCDP")
+    pruned.camera_params = params
+    pruned.triangulator = Triangulator(
+        params,
+        fast_geometry=True,
+        epipolar_pruning_enabled=True,
+    )
+
+    baseline_result = baseline.process_paired_frames(_paired_multi(blobs))
+    pruned_result = pruned.process_paired_frames(_paired_multi(blobs))
+    baseline_diag = baseline_result["assignment_diagnostics"]
+    pruned_diag = pruned_result["assignment_diagnostics"]
+
+    assert pruned_diag["assignment_matches"] == baseline_diag["assignment_matches"]
+    assert pruned_diag["duplicate_blob_matches"] == baseline_diag["duplicate_blob_matches"]
+    assert pruned_result["triangulation_quality"]["accepted_points"] == baseline_result["triangulation_quality"]["accepted_points"]
+    assert np.allclose(
+        _sorted_points(pruned_result["points_3d"]),
+        _sorted_points(baseline_result["points_3d"]),
+        atol=1e-9,
+    )
+    summary = pruned_diag["epipolar_pruning_summary"]
+    assert summary["full_candidate_pair_count"] > summary["pruned_candidate_pair_count"]
+    assert summary["candidate_reduction_ratio"] > 0.0
+    assert summary["component_count"] > 0
+
+
+def test_fast_abcdp_pruning_falls_back_for_small_candidate_matrix() -> None:
+    params = create_dummy_calibration(["cam0", "cam1"], focal_length=800.0)
+    blobs = _stress_blobs(params, blobs_per_camera=4)
+    pruned = GeometryPipeline(pipeline_variant="fast_ABCDP")
+    pruned.camera_params = params
+    pruned.triangulator = Triangulator(
+        params,
+        fast_geometry=True,
+        epipolar_pruning_enabled=True,
+    )
+
+    result = pruned.process_paired_frames(_paired_multi(blobs))
+    summary = result["assignment_diagnostics"]["epipolar_pruning_summary"]
+
+    assert summary["pruning_fallback_count"] >= 1
+    assert summary["pruning_fallback_reason_counts"]["small_candidate_matrix"] >= 1
+    assert result["assignment_diagnostics"]["assignment_matches"] >= 1
 
 
 def test_process_paired_frames_exposes_observation_provenance() -> None:

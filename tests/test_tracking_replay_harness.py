@@ -464,10 +464,27 @@ def test_compare_pipeline_variants_returns_ab_report(monkeypatch, tmp_path: Path
         "fast_AB",
         "fast_ABC",
         "fast_ABCD",
+        "fast_ABCDP",
         "fast_ABCDE",
     }
     assert "variant_go_no_go" in comparison["variants"]["fast_A"]
     assert comparison["variants"]["fast_ABCDE"]["backpressure_summary"]["enabled"] is True
+
+
+def test_compare_epipolar_pruning_returns_exact_quality_report(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(harness, "FrameReplay", _FakeReplay)
+    monkeypatch.setattr(harness, "TrackingPipeline", _FakePipeline)
+
+    comparison = harness.compare_epipolar_pruning(
+        log_path=tmp_path / "tracking_gui.jsonl",
+        calibration_path=tmp_path,
+        patterns=["waist"],
+    )
+
+    assert comparison["baseline"]["pipeline_variant"] == "fast_ABCD"
+    assert comparison["fast_ABCDP"]["pipeline_variant"] == "fast_ABCDP"
+    assert "epipolar_pruning_go_no_go" in comparison
+    assert "exact_quality" in comparison["epipolar_pruning_go_no_go"]
 
 
 def test_object_gating_go_no_go_allows_tiny_max_flip_regression() -> None:

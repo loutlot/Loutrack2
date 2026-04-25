@@ -610,6 +610,72 @@ def compare_pipeline_variants(
     }
 
 
+def compare_epipolar_pruning(
+    *,
+    log_path: str | Path,
+    calibration_path: str | Path,
+    patterns: Optional[Iterable[str]] = None,
+    rigids_path: str | Path | None = None,
+    epipolar_threshold_px: Optional[float] = None,
+    reacquire_guard_enforced: bool = False,
+    reacquire_guard_shadow_enabled: bool = True,
+    reacquire_guard_event_logging: bool = False,
+    reacquire_guard_post_reacquire_frames: int = 0,
+    reacquire_guard_max_rotation_deg: float = 136.0,
+    object_gating_enforced: bool = False,
+    object_gating_activation_mode: str = "always",
+    start_timestamp_us: Optional[int] = None,
+    end_timestamp_us: Optional[int] = None,
+    start_received_at: Optional[str] = None,
+    end_received_at: Optional[str] = None,
+    max_frames: Optional[int] = None,
+    subset_diagnostics_mode: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Compare official fast_ABCD against fast_ABCDP epipolar pruning."""
+    common = {
+        "log_path": log_path,
+        "calibration_path": calibration_path,
+        "patterns": patterns,
+        "rigids_path": rigids_path,
+        "epipolar_threshold_px": epipolar_threshold_px,
+        "reacquire_guard_enforced": reacquire_guard_enforced,
+        "reacquire_guard_shadow_enabled": reacquire_guard_shadow_enabled,
+        "reacquire_guard_event_logging": reacquire_guard_event_logging,
+        "reacquire_guard_post_reacquire_frames": reacquire_guard_post_reacquire_frames,
+        "reacquire_guard_max_rotation_deg": reacquire_guard_max_rotation_deg,
+        "object_gating_enforced": object_gating_enforced,
+        "object_gating_activation_mode": object_gating_activation_mode,
+        "start_timestamp_us": start_timestamp_us,
+        "end_timestamp_us": end_timestamp_us,
+        "start_received_at": start_received_at,
+        "end_received_at": end_received_at,
+        "max_frames": max_frames,
+    }
+    baseline = replay_tracking_log(
+        **common,
+        pipeline_variant="fast_ABCD",
+        subset_diagnostics_mode=subset_diagnostics_mode
+        or default_subset_diagnostics_mode_for_variant("fast_ABCD"),
+    ).to_dict()
+    candidate = replay_tracking_log(
+        **common,
+        pipeline_variant="fast_ABCDP",
+        subset_diagnostics_mode=subset_diagnostics_mode
+        or default_subset_diagnostics_mode_for_variant("fast_ABCDP"),
+    ).to_dict()
+    return {
+        "log_path": str(log_path),
+        "calibration_path": str(calibration_path),
+        "patterns": list(patterns or [WAIST_PATTERN.name]),
+        "baseline": baseline,
+        "fast_ABCDP": candidate,
+        "epipolar_pruning_go_no_go": _compare_epipolar_pruning_go_no_go(
+            baseline,
+            candidate,
+        ),
+    }
+
+
 def _stage_p95(summary: Dict[str, Any], name: str) -> float:
     stage = summary.get("pipeline_stage_ms", {}).get(name, {})
     if not isinstance(stage, dict):
@@ -704,6 +770,91 @@ def _compare_pipeline_variant_go_no_go(
             "rigid_ms_p95": candidate_rigid,
             "reprojection_p95_px": candidate_reprojection,
             "dropped_pair_count": dropped,
+        },
+    }
+
+
+def _assignment_diagnostic(summary: Dict[str, Any], key: str) -> float:
+    assignment = (
+        summary.get("geometry", {})
+        .get("quality", {})
+        .get("assignment_diagnostics", {})
+    )
+    if not isinstance(assignment, dict):
+        return 0.0
+    try:
+        return float(assignment.get(key, 0.0) or 0.0)
+    except Exception:
+        return 0.0
+
+
+def _accepted_points(summary: Dict[str, Any]) -> int:
+    try:
+        return int(summary.get("geometry", {}).get("quality", {}).get("accepted_points", 0) or 0)
+    except Exception:
+        return 0
+
+
+def _compare_epipolar_pruning_go_no_go(
+    baseline: Dict[str, Any],
+    candidate: Dict[str, Any],
+) -> Dict[str, Any]:
+    exact_reprojection = abs(_reprojection_p95(candidate) - _reprojection_p95(baseline)) <= 1e-9
+    exact_tracking = all(
+        _tracking_metric(candidate, key) == _tracking_metric(baseline, key)
+        for key in (
+            "reacquire_count",
+            "pose_jump_count",
+            "mode_transition_count",
+            "max_pose_flip_deg",
+        )
+    )
+    exact_assignment = all(
+        _assignment_diagnostic(candidate, key) == _assignment_diagnostic(baseline, key)
+        for key in ("assignment_matches", "duplicate_blob_matches")
+    )
+    exact_quality = bool(
+        int(candidate.get("poses_estimated", 0) or 0) == int(baseline.get("poses_estimated", 0) or 0)
+        and exact_tracking
+        and exact_reprojection
+        and _accepted_points(candidate) == _accepted_points(baseline)
+        and exact_assignment
+    )
+    pipeline_p95_ok = _stage_p95(candidate, "pipeline_pair_ms") <= _stage_p95(baseline, "pipeline_pair_ms") + 1e-9
+    generic_p95_ok = _stage_p95(candidate, "generic_triangulation_ms") <= _stage_p95(baseline, "generic_triangulation_ms") + 1e-9
+    replacement_candidate = bool(exact_quality and pipeline_p95_ok and generic_p95_ok)
+    pruning_summary = (
+        candidate.get("geometry", {})
+        .get("quality", {})
+        .get("assignment_diagnostics", {})
+        .get("epipolar_pruning_summary", {})
+    )
+    if not isinstance(pruning_summary, dict):
+        pruning_summary = {}
+    return {
+        "decision": "candidate_for_stress_replay" if replacement_candidate else "keep_experimental",
+        "replacement_candidate": replacement_candidate,
+        "exact_quality": exact_quality,
+        "speed_non_regression": bool(pipeline_p95_ok and generic_p95_ok),
+        "criteria": {
+            "poses_estimated_equal": int(candidate.get("poses_estimated", 0) or 0) == int(baseline.get("poses_estimated", 0) or 0),
+            "tracking_metrics_equal": exact_tracking,
+            "accepted_points_equal": _accepted_points(candidate) == _accepted_points(baseline),
+            "assignment_metrics_equal": exact_assignment,
+            "reprojection_p95_equal": exact_reprojection,
+            "pipeline_pair_p95_non_regression": pipeline_p95_ok,
+            "generic_triangulation_p95_non_regression": generic_p95_ok,
+        },
+        "baseline": {
+            "pipeline_pair_ms_p95": _stage_p95(baseline, "pipeline_pair_ms"),
+            "generic_triangulation_ms_p95": _stage_p95(baseline, "generic_triangulation_ms"),
+            "reprojection_p95_px": _reprojection_p95(baseline),
+        },
+        "candidate": {
+            "pipeline_pair_ms_p95": _stage_p95(candidate, "pipeline_pair_ms"),
+            "generic_triangulation_ms_p95": _stage_p95(candidate, "generic_triangulation_ms"),
+            "reprojection_p95_px": _reprojection_p95(candidate),
+            "epipolar_pruning_summary": dict(pruning_summary),
         },
     }
 
@@ -1488,6 +1639,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--compare-object-gating-enforcement", action="store_true", help="Run diagnostics-only and enforced object-gating replays and compare go/no-go.")
     parser.add_argument("--pipeline-variant", default=DEFAULT_PIPELINE_VARIANT, choices=list(PIPELINE_VARIANTS), help="Replay through the official tracking path or an explicit comparison variant.")
     parser.add_argument("--compare-pipeline-variants", action="store_true", help="Run baseline and all fast-path variants on the same replay input.")
+    parser.add_argument("--compare-epipolar-pruning", action="store_true", help="Run fast_ABCD and fast_ABCDP on the same replay input and compare exact quality plus speed.")
     parser.add_argument("--subset-diagnostics-mode", default=None, choices=["full", "sampled", "off"], help="Control subset hypothesis diagnostics frequency during replay. Defaults follow the selected pipeline variant.")
     parser.add_argument("--ab-report-out", default=None, help="Optional JSON path for --compare-pipeline-variants output.")
     parser.add_argument("--diagnostics-summary", action="store_true", help="Summarize live tracking_diagnostics events without replaying frames.")
@@ -1515,6 +1667,27 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
     elif args.compare_pipeline_variants:
         summary = compare_pipeline_variants(
+            log_path=args.log,
+            calibration_path=args.calibration,
+            patterns=_parse_pattern_names(args.patterns),
+            rigids_path=args.rigids,
+            epipolar_threshold_px=args.epipolar_threshold_px,
+            reacquire_guard_enforced=bool(args.reacquire_guard_enforced),
+            reacquire_guard_shadow_enabled=not bool(args.disable_reacquire_guard_shadow),
+            reacquire_guard_event_logging=bool(args.reacquire_guard_event_logging),
+            reacquire_guard_post_reacquire_frames=int(args.reacquire_guard_post_reacquire_frames),
+            reacquire_guard_max_rotation_deg=args.reacquire_guard_max_rotation_deg,
+            object_gating_enforced=bool(args.object_gating_enforced),
+            object_gating_activation_mode=args.object_gating_activation_mode,
+            start_timestamp_us=args.start_timestamp_us,
+            end_timestamp_us=args.end_timestamp_us,
+            start_received_at=args.start_received_at,
+            end_received_at=args.end_received_at,
+            max_frames=args.max_frames,
+            subset_diagnostics_mode=args.subset_diagnostics_mode,
+        )
+    elif args.compare_epipolar_pruning:
+        summary = compare_epipolar_pruning(
             log_path=args.log,
             calibration_path=args.calibration,
             patterns=_parse_pattern_names(args.patterns),
@@ -1593,6 +1766,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         if out_path is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             out_path = str(Path("logs") / "archive" / f"fast_pipeline_ab_{timestamp}" / "comparison.json")
+    elif args.compare_epipolar_pruning:
+        out_path = args.ab_report_out or args.out
+        if out_path is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            out_path = str(Path("logs") / "archive" / f"epipolar_pruning_ab_{timestamp}" / "comparison.json")
     if out_path:
         Path(out_path).parent.mkdir(parents=True, exist_ok=True)
         Path(out_path).write_text(text + "\n", encoding="utf-8")

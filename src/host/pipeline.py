@@ -27,7 +27,15 @@ from .logger import FrameLogger
 from .wand_session import FIXED_PAIR_WINDOW_US
 
 
-PIPELINE_VARIANTS = ("baseline", "fast_A", "fast_AB", "fast_ABC", "fast_ABCD", "fast_ABCDE")
+PIPELINE_VARIANTS = (
+    "baseline",
+    "fast_A",
+    "fast_AB",
+    "fast_ABC",
+    "fast_ABCD",
+    "fast_ABCDP",
+    "fast_ABCDE",
+)
 DEFAULT_PIPELINE_VARIANT = "fast_ABCD"
 _PIPELINE_VARIANT_RANK = {name: index for index, name in enumerate(PIPELINE_VARIANTS)}
 _STAGE_DETAIL_NAMES = {
@@ -333,6 +341,7 @@ class TrackingPipeline:
             params,
             epipolar_threshold_px=self.geometry.epipolar_threshold_px,
             fast_geometry=self.pipeline_variant != "baseline",
+            epipolar_pruning_enabled=self.pipeline_variant == "fast_ABCDP",
             stage_callback=self._record_stage,
         )
         self._calibration_loaded = True

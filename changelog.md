@@ -1,3 +1,4 @@
+- added experimental `fast_ABCDP` replay path for generic epipolar candidate pruning AB tests while keeping `fast_ABCD` as the official default
 - tracking now uses the fast_ABCD pipeline as the default path while keeping baseline selectable for replay comparisons
 - tracking replay now supports baseline/fast_A-fast_ABCDE AB reports with fast geometry, sampled subset diagnostics, object-gated fallback, and backpressure metrics
 - object-gating replay can now limit activation to recovery modes and records mode on rigid-hint pose events

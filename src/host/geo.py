@@ -456,6 +456,16 @@ def _empty_assignment_diagnostics() -> Dict[str, float]:
         "assignment_rejected_low_parallax": 0,
         "duplicate_blob_matches": 0,
         "assignment_cost_ms": 0.0,
+        "full_candidate_pair_count": 0,
+        "pruned_candidate_pair_count": 0,
+        "candidate_reduction_ratio": 0.0,
+        "component_count": 0,
+        "largest_component_rows": 0,
+        "largest_component_cols": 0,
+        "pruning_fallback_count": 0,
+        "pruning_fallback_reason_counts": {},
+        "pruned_assignment_cost_ms": 0.0,
+        "epipolar_pruning_summary": {},
         "triangulated_pairs": 0,
         "rejected_epipolar": 0,
         "rejected_triangulation": 0,
@@ -480,11 +490,13 @@ class Triangulator:
         epipolar_threshold_px: float = _EPIPOLAR_THRESHOLD_PX,
         *,
         fast_geometry: bool = False,
+        epipolar_pruning_enabled: bool = False,
         stage_callback: Optional[Callable[[str, float], None]] = None,
     ):
         self.camera_params = camera_params
         self.epipolar_threshold_px = float(epipolar_threshold_px)
         self.fast_geometry = bool(fast_geometry)
+        self.epipolar_pruning_enabled = bool(epipolar_pruning_enabled)
         self._stage_callback = stage_callback
         self._proj_matrices: Dict[str, np.ndarray] = {}
         self._rvecs: Dict[str, np.ndarray] = {}
@@ -497,6 +509,40 @@ class Triangulator:
         self._last_observations_by_camera: Dict[str, List[BlobObservation2D]] = {}
         self._last_triangulated_points: List[TriangulatedPoint] = []
         self._refresh_cached_matrices()
+
+    @staticmethod
+    def _record_pruning_fallback(diagnostics: Dict[str, Any], reason: str) -> None:
+        _increment_diagnostic(diagnostics, "pruning_fallback_count")
+        reasons = diagnostics.setdefault("pruning_fallback_reason_counts", {})
+        if isinstance(reasons, dict):
+            key = str(reason or "unknown")
+            reasons[key] = int(reasons.get(key, 0)) + 1
+
+    @staticmethod
+    def _finalize_epipolar_pruning_summary(diagnostics: Dict[str, Any]) -> None:
+        full_count = int(diagnostics.get("full_candidate_pair_count", 0) or 0)
+        pruned_count = int(diagnostics.get("pruned_candidate_pair_count", 0) or 0)
+        reduction = (
+            max(0.0, 1.0 - float(pruned_count) / float(full_count))
+            if full_count > 0
+            else 0.0
+        )
+        diagnostics["candidate_reduction_ratio"] = float(reduction)
+        diagnostics["epipolar_pruning_summary"] = {
+            "full_candidate_pair_count": full_count,
+            "pruned_candidate_pair_count": pruned_count,
+            "candidate_reduction_ratio": float(reduction),
+            "component_count": int(diagnostics.get("component_count", 0) or 0),
+            "largest_component_rows": int(diagnostics.get("largest_component_rows", 0) or 0),
+            "largest_component_cols": int(diagnostics.get("largest_component_cols", 0) or 0),
+            "pruning_fallback_count": int(diagnostics.get("pruning_fallback_count", 0) or 0),
+            "pruning_fallback_reason_counts": dict(
+                diagnostics.get("pruning_fallback_reason_counts", {}) or {}
+            ),
+            "pruned_assignment_cost_ms": float(
+                diagnostics.get("pruned_assignment_cost_ms", 0.0) or 0.0
+            ),
+        }
 
     def _record_stage_detail(self, name: str, started_ns: int) -> None:
         if self._stage_callback is None:
@@ -698,6 +744,105 @@ class Triangulator:
         distances = numer / np.maximum(denom[:, None], 1e-12)
         distances[denom < 1e-12, :] = float("inf")
         return distances
+
+    @staticmethod
+    def _line_rectangle_segment(
+        line: np.ndarray,
+        target_points: np.ndarray,
+        margin_px: float,
+    ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+        a, b, c = (float(line[0]), float(line[1]), float(line[2]))
+        if abs(a) < 1e-12 and abs(b) < 1e-12:
+            return None
+        x_min = float(np.min(target_points[:, 0]) - margin_px)
+        x_max = float(np.max(target_points[:, 0]) + margin_px)
+        y_min = float(np.min(target_points[:, 1]) - margin_px)
+        y_max = float(np.max(target_points[:, 1]) + margin_px)
+        intersections: List[Tuple[float, float]] = []
+        if abs(b) >= 1e-12:
+            for x in (x_min, x_max):
+                y = -(a * x + c) / b
+                if y_min - 1e-9 <= y <= y_max + 1e-9:
+                    intersections.append((x, y))
+        if abs(a) >= 1e-12:
+            for y in (y_min, y_max):
+                x = -(b * y + c) / a
+                if x_min - 1e-9 <= x <= x_max + 1e-9:
+                    intersections.append((x, y))
+        unique: List[Tuple[float, float]] = []
+        for point in intersections:
+            if not any(np.linalg.norm(np.asarray(point) - np.asarray(other)) < 1e-6 for other in unique):
+                unique.append(point)
+        if len(unique) < 2:
+            return None
+        best_pair = (np.asarray(unique[0], dtype=np.float64), np.asarray(unique[1], dtype=np.float64))
+        best_distance = -1.0
+        for i in range(len(unique)):
+            for j in range(i + 1, len(unique)):
+                distance = float(np.linalg.norm(np.asarray(unique[i]) - np.asarray(unique[j])))
+                if distance > best_distance:
+                    best_distance = distance
+                    best_pair = (
+                        np.asarray(unique[i], dtype=np.float64),
+                        np.asarray(unique[j], dtype=np.float64),
+                    )
+        return best_pair
+
+    def _epipolar_candidate_pairs(
+        self,
+        F_ref_to_other: np.ndarray,
+        ref_points: List[Tuple[float, float]],
+        other_points: List[Tuple[float, float]],
+        gate_px: float,
+    ) -> Optional[set[Tuple[int, int]]]:
+        if not ref_points or not other_points:
+            return set()
+        forward_matrix = self._epipolar_distance_matrix(
+            F_ref_to_other,
+            ref_points,
+            other_points,
+        )
+        rows, cols = np.nonzero(forward_matrix <= float(gate_px))
+        return {(int(row), int(col)) for row, col in zip(rows, cols)}
+
+    @staticmethod
+    def _connected_components_from_edges(
+        edges: Dict[Tuple[int, int], Tuple[float, float, float]],
+    ) -> List[Tuple[List[int], List[int]]]:
+        rows_by_col: Dict[int, set[int]] = {}
+        cols_by_row: Dict[int, set[int]] = {}
+        for row, col in edges:
+            rows_by_col.setdefault(int(col), set()).add(int(row))
+            cols_by_row.setdefault(int(row), set()).add(int(col))
+        components: List[Tuple[List[int], List[int]]] = []
+        seen_rows: set[int] = set()
+        seen_cols: set[int] = set()
+        for start_row in sorted(cols_by_row):
+            if start_row in seen_rows:
+                continue
+            stack_rows = [start_row]
+            component_rows: set[int] = set()
+            component_cols: set[int] = set()
+            while stack_rows:
+                row = stack_rows.pop()
+                if row in component_rows:
+                    continue
+                component_rows.add(row)
+                seen_rows.add(row)
+                for col in cols_by_row.get(row, set()):
+                    if col in component_cols:
+                        continue
+                    component_cols.add(col)
+                    seen_cols.add(col)
+                    for next_row in rows_by_col.get(col, set()):
+                        if next_row not in component_rows:
+                            stack_rows.append(next_row)
+            components.append((sorted(component_rows), sorted(component_cols)))
+        for start_col in sorted(rows_by_col):
+            if start_col in seen_cols:
+                continue
+            components.append((sorted(rows_by_col[start_col]), [start_col]))
+        return components
 
     def _triangulate_from_undistorted_points(
         self,
@@ -939,6 +1084,11 @@ class Triangulator:
             "assignment_candidates",
             amount=len(ref_observations) * len(other_observations),
         )
+        _increment_diagnostic(
+            diagnostics,
+            "full_candidate_pair_count",
+            amount=len(ref_observations) * len(other_observations),
+        )
 
         F_ref_to_other = self._compute_fundamental_matrix(ref_cam, other_cam)
         F_other_to_ref = self._compute_fundamental_matrix(other_cam, ref_cam)
@@ -954,6 +1104,21 @@ class Triangulator:
                 time.perf_counter_ns() - started_ns
             ) / 1_000_000.0
             return {}
+
+        if self.epipolar_pruning_enabled:
+            pruned = self._match_observations_symmetric_epipolar_pruned(
+                F_ref_to_other,
+                F_other_to_ref,
+                ref_observations,
+                other_observations,
+                diagnostics,
+                gate_px=gate_px,
+            )
+            if pruned is not None:
+                diagnostics["assignment_cost_ms"] += float(
+                    time.perf_counter_ns() - started_ns
+                ) / 1_000_000.0
+                return pruned
 
         if self.fast_geometry:
             detail_started_ns = time.perf_counter_ns()
@@ -1014,6 +1179,11 @@ class Triangulator:
                         )
                         continue
                     cost[i, j] = forward + backward
+        _increment_diagnostic(
+            diagnostics,
+            "pruned_candidate_pair_count",
+            amount=len(ref_observations) * len(other_observations),
+        )
 
         row_ind, col_ind = linear_sum_assignment(cost)
         matches: Dict[int, Tuple[int, float]] = {}
@@ -1030,6 +1200,122 @@ class Triangulator:
         diagnostics["assignment_cost_ms"] += float(
             time.perf_counter_ns() - started_ns
         ) / 1_000_000.0
+        return matches
+
+    def _match_observations_symmetric_epipolar_pruned(
+        self,
+        F_ref_to_other: np.ndarray,
+        F_other_to_ref: np.ndarray,
+        ref_observations: List[_BlobObservation],
+        other_observations: List[_BlobObservation],
+        diagnostics: Dict[str, Any],
+        *,
+        gate_px: float,
+    ) -> Optional[Dict[int, Tuple[int, float]]]:
+        full_count = len(ref_observations) * len(other_observations)
+        if full_count < 1024:
+            self._record_pruning_fallback(diagnostics, "small_candidate_matrix")
+            return None
+
+        detail_started_ns = time.perf_counter_ns()
+        ref_points = [obs.undistorted_uv for obs in ref_observations]
+        other_points = [obs.undistorted_uv for obs in other_observations]
+        forward_matrix = self._epipolar_distance_matrix(
+            F_ref_to_other,
+            ref_points,
+            other_points,
+        )
+        backward_matrix = self._epipolar_distance_matrix(
+            F_other_to_ref,
+            other_points,
+            ref_points,
+        ).T
+        symmetric_errors = np.maximum(forward_matrix, backward_matrix)
+        accepted_mask = symmetric_errors <= gate_px
+        rows, cols = np.nonzero(accepted_mask)
+        candidate_pairs = {(int(row), int(col)) for row, col in zip(rows, cols)}
+        if not candidate_pairs:
+            _increment_diagnostic(
+                diagnostics,
+                "assignment_rejected_epipolar",
+                "rejected_epipolar",
+                amount=full_count,
+            )
+            _increment_diagnostic(diagnostics, "component_count", amount=0)
+            diagnostics["pruned_assignment_cost_ms"] += float(
+                time.perf_counter_ns() - detail_started_ns
+            ) / 1_000_000.0
+            self._record_stage_detail("epipolar_match_ms", detail_started_ns)
+            return {}
+        if len(candidate_pairs) >= int(full_count * 0.95):
+            self._record_pruning_fallback(diagnostics, "low_candidate_reduction")
+            return None
+
+        edges: Dict[Tuple[int, int], Tuple[float, float, float]] = {}
+        for row, col in sorted(candidate_pairs):
+            edges[(int(row), int(col))] = (
+                float(forward_matrix[row, col] + backward_matrix[row, col]),
+                float(symmetric_errors[row, col]),
+                float(backward_matrix[row, col]),
+            )
+
+        _increment_diagnostic(diagnostics, "pruned_candidate_pair_count", amount=len(candidate_pairs))
+        rejected_count = int(full_count - len(edges))
+        if rejected_count:
+            _increment_diagnostic(
+                diagnostics,
+                "assignment_rejected_epipolar",
+                "rejected_epipolar",
+                amount=rejected_count,
+            )
+        if not edges:
+            diagnostics["pruned_assignment_cost_ms"] += float(
+                time.perf_counter_ns() - detail_started_ns
+            ) / 1_000_000.0
+            self._record_stage_detail("epipolar_match_ms", detail_started_ns)
+            return {}
+
+        components = self._connected_components_from_edges(edges)
+        _increment_diagnostic(diagnostics, "component_count", amount=len(components))
+        if components:
+            diagnostics["largest_component_rows"] = max(
+                float(diagnostics.get("largest_component_rows", 0.0)),
+                float(max(len(rows) for rows, _cols in components)),
+            )
+            diagnostics["largest_component_cols"] = max(
+                float(diagnostics.get("largest_component_cols", 0.0)),
+                float(max(len(cols) for _rows, cols in components)),
+            )
+
+        matches: Dict[int, Tuple[int, float]] = {}
+        selected_cols: set[int] = set()
+        for rows, cols in components:
+            cost = np.full((len(rows), len(cols)), _INVALID_ASSIGNMENT_COST, dtype=np.float64)
+            symmetric_errors = np.zeros_like(cost)
+            row_lookup = {row: index for index, row in enumerate(rows)}
+            col_lookup = {col: index for index, col in enumerate(cols)}
+            for (row, col), (pair_cost, symmetric_error, _backward) in edges.items():
+                if row in row_lookup and col in col_lookup:
+                    row_index = row_lookup[row]
+                    col_index = col_lookup[col]
+                    cost[row_index, col_index] = pair_cost
+                    symmetric_errors[row_index, col_index] = symmetric_error
+            row_ind, col_ind = linear_sum_assignment(cost)
+            for row_pos, col_pos in zip(row_ind, col_ind):
+                if cost[row_pos, col_pos] >= _INVALID_ASSIGNMENT_COST:
+                    continue
+                row = int(rows[int(row_pos)])
+                col = int(cols[int(col_pos)])
+                if col in selected_cols:
+                    _increment_diagnostic(diagnostics, "duplicate_blob_matches")
+                    continue
+                selected_cols.add(col)
+                matches[row] = (col, float(symmetric_errors[int(row_pos), int(col_pos)]))
+
+        diagnostics["pruned_assignment_cost_ms"] += float(
+            time.perf_counter_ns() - detail_started_ns
+        ) / 1_000_000.0
+        self._record_stage_detail("epipolar_match_ms", detail_started_ns)
         return matches
 
     def _match_blobs_symmetric_epipolar(
@@ -1231,6 +1517,7 @@ class Triangulator:
 
         camera_ids = [cid for cid in paired_frames.camera_ids if cid in self.camera_params]
         if len(camera_ids) < 2:
+            self._finalize_epipolar_pruning_summary(diagnostics)
             self._last_assignment_diagnostics = dict(diagnostics)
             self._last_quality_metrics = self._empty_quality_metrics(diagnostics)
             return points_3d, errors
@@ -1254,6 +1541,7 @@ class Triangulator:
 
         active_cams = [camera_id for camera_id in camera_ids if observations_by_camera.get(camera_id)]
         if len(active_cams) < 2:
+            self._finalize_epipolar_pruning_summary(diagnostics)
             self._last_assignment_diagnostics = dict(diagnostics)
             self._last_quality_metrics = self._empty_quality_metrics(diagnostics)
             return points_3d, errors
@@ -1326,6 +1614,7 @@ class Triangulator:
                 )
             )
 
+        self._finalize_epipolar_pruning_summary(diagnostics)
         self._last_assignment_diagnostics = dict(diagnostics)
         self._last_triangulated_points = list(triangulated_points)
         self._last_quality_metrics = {
@@ -1620,6 +1909,7 @@ class GeometryPipeline:
                 self.camera_params,
                 epipolar_threshold_px=self.epipolar_threshold_px,
                 fast_geometry=self.pipeline_variant != "baseline",
+                epipolar_pruning_enabled=self.pipeline_variant == "fast_ABCDP",
                 stage_callback=self._stage_callback,
             )
 
