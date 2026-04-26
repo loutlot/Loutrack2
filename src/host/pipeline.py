@@ -20,7 +20,8 @@ from .geo import (
 )
 from .rigid import (
     RigidBodyEstimator, RigidBodyPose, 
-    MarkerPattern, WAIST_PATTERN, ReacquireGuardConfig, ObjectGatingConfig, SubsetSolveConfig
+    MarkerPattern, WAIST_PATTERN, ReacquireGuardConfig, ObjectGatingConfig,
+    PoseContinuityGuardConfig, PositionContinuityGuardConfig, SubsetSolveConfig
 )
 from .metrics import MetricsCollector
 from .logger import FrameLogger
@@ -186,6 +187,32 @@ def _rigid_stabilization_configs(settings: Optional[Dict[str, Any]]) -> Dict[str
             enforce=bool(payload.get("object_gating_enforced", False)),
             activation_mode=str(payload.get("object_gating_activation_mode", "always")),
         ),
+        "pose_continuity_guard_config": PoseContinuityGuardConfig(
+            enabled=bool(payload.get("pose_continuity_guard_enabled", False)),
+            enforced=bool(payload.get("pose_continuity_guard_enforced", False)),
+            max_position_innovation_m=float(
+                payload.get("pose_continuity_max_position_m", 0.08)
+            ),
+            max_rotation_innovation_deg=float(
+                payload.get("pose_continuity_max_rotation_deg", 90.0)
+            ),
+            max_angular_velocity_deg_s=float(
+                payload.get("pose_continuity_max_angular_velocity_deg_s", 2500.0)
+            ),
+            max_angular_accel_deg_s2=float(
+                payload.get("pose_continuity_max_angular_accel_deg_s2", 200000.0)
+            ),
+        ),
+        "position_continuity_guard_config": PositionContinuityGuardConfig(
+            enabled=bool(payload.get("position_continuity_guard_enabled", False)),
+            enforced=bool(payload.get("position_continuity_guard_enforced", False)),
+            max_accel_m_s2=float(
+                payload.get("position_continuity_max_accel_m_s2", 60.0)
+            ),
+            max_velocity_m_s=float(
+                payload.get("position_continuity_max_velocity_m_s", 8.0)
+            ),
+        ),
         "subset_solve_config": SubsetSolveConfig(
             enabled=bool(payload.get("subset_ransac", True)),
             diagnostics_only=True,
@@ -241,6 +268,8 @@ class TrackingPipeline:
         reacquire_guard_config: Optional[ReacquireGuardConfig] = None,
         reacquire_guard_event_logging: bool = False,
         object_gating_config: Optional[ObjectGatingConfig] = None,
+        pose_continuity_guard_config: Optional[PoseContinuityGuardConfig] = None,
+        position_continuity_guard_config: Optional[PositionContinuityGuardConfig] = None,
         subset_solve_config: Optional[SubsetSolveConfig] = None,
         rigid_stabilization: Optional[Dict[str, Any]] = None,
         pipeline_variant: str = DEFAULT_PIPELINE_VARIANT,
@@ -293,6 +322,10 @@ class TrackingPipeline:
             or stabilization_configs["reacquire_guard_config"],
             object_gating_config=object_gating_config
             or stabilization_configs["object_gating_config"],
+            pose_continuity_guard_config=pose_continuity_guard_config
+            or stabilization_configs["pose_continuity_guard_config"],
+            position_continuity_guard_config=position_continuity_guard_config
+            or stabilization_configs["position_continuity_guard_config"],
             subset_solve_config=subset_solve_config
             or stabilization_configs["subset_solve_config"],
             subset_diagnostics_mode=self.subset_diagnostics_mode,
@@ -371,6 +404,8 @@ class TrackingPipeline:
         self._diagnostics_event_interval_s = 1.0
         self._reacquire_guard_events: Deque[Dict[str, Any]] = deque(maxlen=2000)
         self._object_gating_events: Deque[Dict[str, Any]] = deque(maxlen=2000)
+        self._pose_continuity_guard_events: Deque[Dict[str, Any]] = deque(maxlen=2000)
+        self._position_continuity_guard_events: Deque[Dict[str, Any]] = deque(maxlen=2000)
         self._rigid_hint_events: Deque[Dict[str, Any]] = deque(maxlen=2000)
         self._rigid_hint_pose_events: Deque[Dict[str, Any]] = deque(maxlen=2000)
         self._subset_hypothesis_events: Deque[Dict[str, Any]] = deque(maxlen=2000)
@@ -823,6 +858,8 @@ class TrackingPipeline:
             self._record_stage("rigid_ms", self._elapsed_ms(stage_started_ns))
             self._record_stage("rigid_pose_ms", self._elapsed_ms(stage_started_ns))
             self._record_reacquire_guard_events(timestamp)
+            self._record_position_continuity_guard_events(timestamp)
+            self._record_pose_continuity_guard_events(timestamp)
             self._record_rigid_hint_pose_events(timestamp)
             self._record_subset_hypothesis_events(timestamp)
             
@@ -922,6 +959,10 @@ class TrackingPipeline:
             "tracking": tracking_status,
             "object_gating": self._object_gating_from_tracking(tracking_status),
             "object_gating_events": self.get_object_gating_events(limit=20),
+            "position_continuity_guard_events": (
+                self.get_position_continuity_guard_events(limit=20)
+            ),
+            "pose_continuity_guard_events": self.get_pose_continuity_guard_events(limit=20),
             "rigid_hint_events": self.get_rigid_hint_events(limit=20),
             "rigid_hint_pose_events": self.get_rigid_hint_pose_events(limit=20),
             "subset_hypothesis_events": self.get_subset_hypothesis_events(limit=20),
@@ -994,6 +1035,83 @@ class TrackingPipeline:
                 "generic_fallback_blob_count": int(gating.get("generic_fallback_blob_count", 0)),
             }
             self._object_gating_events.append(event)
+
+    def _record_position_continuity_guard_events(self, timestamp: int) -> None:
+        tracking = self.rigid_estimator.get_tracking_status()
+        for rigid_name, status in tracking.items():
+            if not isinstance(status, dict):
+                continue
+            guard = status.get("position_continuity_guard")
+            if not isinstance(guard, dict):
+                continue
+            if not (
+                guard.get("evaluated")
+                or guard.get("would_reject")
+                or guard.get("clamped_position")
+            ):
+                continue
+            self._position_continuity_guard_events.append(
+                {
+                    "timestamp": int(timestamp),
+                    "rigid_name": str(rigid_name),
+                    "mode": str(status.get("mode", "")),
+                    "valid": bool(status.get("valid", False)),
+                    "enforced": bool(guard.get("enforced", False)),
+                    "passed": bool(guard.get("passed", True)),
+                    "would_reject": bool(guard.get("would_reject", False)),
+                    "clamped_position": bool(guard.get("clamped_position", False)),
+                    "reason": str(guard.get("reason", "")),
+                    "occluded": bool(guard.get("occluded", False)),
+                    "observed_markers": int(guard.get("observed_markers", 0)),
+                    "expected_markers": int(guard.get("expected_markers", 0)),
+                    "missing_marker_views": int(guard.get("missing_marker_views", 0)),
+                    "position_innovation_m": float(guard.get("position_innovation_m", 0.0)),
+                    "position_velocity_m_s": float(guard.get("position_velocity_m_s", 0.0)),
+                    "previous_velocity_m_s": float(guard.get("previous_velocity_m_s", 0.0)),
+                    "position_accel_m_s2": float(guard.get("position_accel_m_s2", 0.0)),
+                    "limited_velocity_m_s": float(guard.get("limited_velocity_m_s", 0.0)),
+                    "clamped_count": int(guard.get("clamped_count", 0)),
+                }
+            )
+
+    def _record_pose_continuity_guard_events(self, timestamp: int) -> None:
+        tracking = self.rigid_estimator.get_tracking_status()
+        for rigid_name, status in tracking.items():
+            if not isinstance(status, dict):
+                continue
+            guard = status.get("pose_continuity_guard")
+            if not isinstance(guard, dict):
+                continue
+            if not (
+                guard.get("evaluated")
+                or guard.get("would_reject")
+                or guard.get("held_prediction")
+                or guard.get("held_rotation")
+            ):
+                continue
+            self._pose_continuity_guard_events.append(
+                {
+                    "timestamp": int(timestamp),
+                    "rigid_name": str(rigid_name),
+                    "mode": str(status.get("mode", "")),
+                    "valid": bool(status.get("valid", False)),
+                    "enforced": bool(guard.get("enforced", False)),
+                    "passed": bool(guard.get("passed", True)),
+                    "would_reject": bool(guard.get("would_reject", False)),
+                    "held_prediction": bool(guard.get("held_prediction", False)),
+                    "held_rotation": bool(guard.get("held_rotation", False)),
+                    "reason": str(guard.get("reason", "")),
+                    "occluded": bool(guard.get("occluded", False)),
+                    "observed_markers": int(guard.get("observed_markers", 0)),
+                    "expected_markers": int(guard.get("expected_markers", 0)),
+                    "missing_marker_views": int(guard.get("missing_marker_views", 0)),
+                    "position_innovation_m": float(guard.get("position_innovation_m", 0.0)),
+                    "rotation_innovation_deg": float(guard.get("rotation_innovation_deg", 0.0)),
+                    "angular_velocity_deg_s": float(guard.get("angular_velocity_deg_s", 0.0)),
+                    "angular_accel_deg_s2": float(guard.get("angular_accel_deg_s2", 0.0)),
+                    "held_count": int(guard.get("held_count", 0)),
+                }
+            )
 
     def _record_rigid_hint_events(
         self,
@@ -1133,6 +1251,21 @@ class TrackingPipeline:
             events = events[-max(0, int(limit)):]
         return [dict(event) for event in events]
 
+    def get_pose_continuity_guard_events(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        events = list(self._pose_continuity_guard_events)
+        if limit is not None:
+            events = events[-max(0, int(limit)):]
+        return [dict(event) for event in events]
+
+    def get_position_continuity_guard_events(
+        self,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        events = list(self._position_continuity_guard_events)
+        if limit is not None:
+            events = events[-max(0, int(limit)):]
+        return [dict(event) for event in events]
+
     def get_rigid_hint_events(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         events = list(self._rigid_hint_events)
         if limit is not None:
@@ -1212,6 +1345,10 @@ class TrackingPipeline:
                 "reacquire_guard_events": self.get_reacquire_guard_events(limit=20),
                 "object_gating": self._object_gating_from_tracking(tracking_status),
                 "object_gating_events": self.get_object_gating_events(limit=20),
+                "position_continuity_guard_events": (
+                    self.get_position_continuity_guard_events(limit=20)
+                ),
+                "pose_continuity_guard_events": self.get_pose_continuity_guard_events(limit=20),
                 "rigid_hint_events": self.get_rigid_hint_events(limit=20),
                 "rigid_hint_pose_events": self.get_rigid_hint_pose_events(limit=20),
                 "subset_hypothesis_events": self.get_subset_hypothesis_events(limit=20),

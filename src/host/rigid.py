@@ -263,6 +263,52 @@ class ObjectGatingConfig:
 
 
 @dataclass(frozen=True)
+class PoseContinuityGuardConfig:
+    """Temporal pose gate for low-marker occlusion candidates."""
+
+    enabled: bool = False
+    enforced: bool = False
+    apply_to_occlusion_only: bool = True
+    hold_prediction_on_reject: bool = True
+    max_position_innovation_m: float = 0.08
+    max_rotation_innovation_deg: float = 90.0
+    max_angular_velocity_deg_s: float = 2500.0
+    max_angular_accel_deg_s2: float = 200000.0
+
+    def thresholds_dict(self) -> Dict[str, Any]:
+        return {
+            "enabled": bool(self.enabled),
+            "enforced": bool(self.enforced),
+            "apply_to_occlusion_only": bool(self.apply_to_occlusion_only),
+            "hold_prediction_on_reject": bool(self.hold_prediction_on_reject),
+            "max_position_innovation_m": float(self.max_position_innovation_m),
+            "max_rotation_innovation_deg": float(self.max_rotation_innovation_deg),
+            "max_angular_velocity_deg_s": float(self.max_angular_velocity_deg_s),
+            "max_angular_accel_deg_s2": float(self.max_angular_accel_deg_s2),
+        }
+
+
+@dataclass(frozen=True)
+class PositionContinuityGuardConfig:
+    """Acceleration-limited position guard for low-marker occlusion candidates."""
+
+    enabled: bool = False
+    enforced: bool = False
+    apply_to_occlusion_only: bool = True
+    max_accel_m_s2: float = 60.0
+    max_velocity_m_s: float = 8.0
+
+    def thresholds_dict(self) -> Dict[str, Any]:
+        return {
+            "enabled": bool(self.enabled),
+            "enforced": bool(self.enforced),
+            "apply_to_occlusion_only": bool(self.apply_to_occlusion_only),
+            "max_accel_m_s2": float(self.max_accel_m_s2),
+            "max_velocity_m_s": float(self.max_velocity_m_s),
+        }
+
+
+@dataclass(frozen=True)
 class SubsetSolveConfig:
     """Phase 6 subset hypothesis diagnostics and weighted rigid solve settings."""
 
@@ -447,6 +493,72 @@ def _empty_reacquire_guard(
         "evaluated_count": int(evaluated_count),
         "would_reject_count": int(would_reject_count),
         "rejected_count": int(rejected_count),
+    }
+
+
+def _empty_pose_continuity_guard(
+    *,
+    enabled: bool = False,
+    enforced: bool = False,
+    reason: str = "not_evaluated",
+    thresholds: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    return {
+        "enabled": bool(enabled),
+        "enforced": bool(enforced),
+        "evaluated": False,
+        "passed": True,
+        "would_reject": False,
+        "held_prediction": False,
+        "held_rotation": False,
+        "reason": str(reason),
+        "thresholds": dict(thresholds or {}),
+        "occluded": False,
+        "observed_markers": 0,
+        "expected_markers": 0,
+        "matched_marker_views": 0,
+        "expected_marker_views": 0,
+        "missing_marker_views": 0,
+        "position_innovation_m": 0.0,
+        "rotation_innovation_deg": 0.0,
+        "angular_velocity_deg_s": 0.0,
+        "previous_angular_velocity_deg_s": 0.0,
+        "angular_accel_deg_s2": 0.0,
+        "evaluated_count": 0,
+        "would_reject_count": 0,
+        "held_count": 0,
+    }
+
+
+def _empty_position_continuity_guard(
+    *,
+    enabled: bool = False,
+    enforced: bool = False,
+    reason: str = "not_evaluated",
+    thresholds: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    return {
+        "enabled": bool(enabled),
+        "enforced": bool(enforced),
+        "evaluated": False,
+        "passed": True,
+        "would_reject": False,
+        "clamped_position": False,
+        "reason": str(reason),
+        "thresholds": dict(thresholds or {}),
+        "occluded": False,
+        "observed_markers": 0,
+        "expected_markers": 0,
+        "matched_marker_views": 0,
+        "expected_marker_views": 0,
+        "missing_marker_views": 0,
+        "position_innovation_m": 0.0,
+        "position_velocity_m_s": 0.0,
+        "previous_velocity_m_s": 0.0,
+        "position_accel_m_s2": 0.0,
+        "evaluated_count": 0,
+        "would_reject_count": 0,
+        "clamped_count": 0,
     }
 
 
@@ -989,6 +1101,16 @@ class RigidBodyTracker:
         self._reacquire_guard_would_reject_count = 0
         self._reacquire_guard_rejected_count = 0
         self._last_reacquire_guard: Dict[str, Any] = _empty_reacquire_guard()
+        self._pose_continuity_guard_evaluated_count = 0
+        self._pose_continuity_guard_would_reject_count = 0
+        self._pose_continuity_guard_held_count = 0
+        self._last_pose_continuity_guard: Dict[str, Any] = _empty_pose_continuity_guard()
+        self._position_continuity_guard_evaluated_count = 0
+        self._position_continuity_guard_would_reject_count = 0
+        self._position_continuity_guard_clamped_count = 0
+        self._last_position_continuity_guard: Dict[str, Any] = (
+            _empty_position_continuity_guard()
+        )
     
     def update(self, pose: RigidBodyPose, *, invalid_reason: Optional[str] = None) -> None:
         """Update tracker with new pose estimate, including velocity estimation."""
@@ -1172,6 +1294,118 @@ class RigidBodyTracker:
             payload["rejected_count"] = int(self._reacquire_guard_rejected_count)
             self._last_reacquire_guard = payload
 
+    def record_pose_continuity_guard(self, guard: Dict[str, Any]) -> None:
+        """Attach latest low-marker temporal guard diagnostics."""
+        with self._lock:
+            payload = dict(guard or _empty_pose_continuity_guard())
+            if payload.get("evaluated"):
+                self._pose_continuity_guard_evaluated_count += 1
+            if payload.get("would_reject"):
+                self._pose_continuity_guard_would_reject_count += 1
+            if payload.get("held_prediction") or payload.get("held_rotation"):
+                self._pose_continuity_guard_held_count += 1
+            payload["evaluated_count"] = int(self._pose_continuity_guard_evaluated_count)
+            payload["would_reject_count"] = int(self._pose_continuity_guard_would_reject_count)
+            payload["held_count"] = int(self._pose_continuity_guard_held_count)
+            self._last_pose_continuity_guard = payload
+
+    def pose_continuity_metrics(self, pose: RigidBodyPose) -> Dict[str, Any]:
+        """Return prediction and angular-jump metrics for a candidate pose."""
+        with self._lock:
+            if self.track_count == 0 or self._last_valid_timestamp <= 0:
+                return {"prediction_valid": False}
+
+            dt_s = max(0.0, float(pose.timestamp - self._last_valid_timestamp) / 1_000_000.0)
+            velocity = self._velocity.copy() if dt_s <= 0.5 else np.zeros(3, dtype=np.float64)
+            predicted_position = self._position + velocity * min(dt_s, 0.5)
+            prediction_quaternion = _normalize_quaternion(self._quaternion)
+            position_innovation_m = float(np.linalg.norm(pose.position - predicted_position))
+            rotation_innovation_deg = _quaternion_angle_deg(prediction_quaternion, pose.quaternion)
+
+            valid_history = [item for item in self._pose_history if item.valid]
+            angular_velocity_deg_s = 0.0
+            previous_angular_velocity_deg_s = 0.0
+            angular_accel_deg_s2 = 0.0
+            if dt_s > 1e-6:
+                angular_velocity_deg_s = rotation_innovation_deg / dt_s
+            if len(valid_history) >= 2:
+                prev = valid_history[-1]
+                prev_prev = valid_history[-2]
+                prev_dt_s = max(0.0, float(prev.timestamp - prev_prev.timestamp) / 1_000_000.0)
+                if prev_dt_s > 1e-6:
+                    previous_angular_velocity_deg_s = (
+                        _quaternion_angle_deg(prev_prev.quaternion, prev.quaternion) / prev_dt_s
+                    )
+                if dt_s > 1e-6:
+                    angular_accel_deg_s2 = abs(
+                        angular_velocity_deg_s - previous_angular_velocity_deg_s
+                    ) / dt_s
+
+            return {
+                "prediction_valid": True,
+                "prediction": {
+                    "timestamp": int(pose.timestamp),
+                    "position": predicted_position.tolist(),
+                    "quaternion": prediction_quaternion.tolist(),
+                    "velocity": velocity.tolist(),
+                    "dt_s": float(dt_s),
+                },
+                "position_innovation_m": position_innovation_m,
+                "rotation_innovation_deg": rotation_innovation_deg,
+                "angular_velocity_deg_s": float(angular_velocity_deg_s),
+                "previous_angular_velocity_deg_s": float(previous_angular_velocity_deg_s),
+                "angular_accel_deg_s2": float(angular_accel_deg_s2),
+            }
+
+    def record_position_continuity_guard(self, guard: Dict[str, Any]) -> None:
+        """Attach latest low-marker position acceleration guard diagnostics."""
+        with self._lock:
+            payload = dict(guard or _empty_position_continuity_guard())
+            if payload.get("evaluated"):
+                self._position_continuity_guard_evaluated_count += 1
+            if payload.get("would_reject"):
+                self._position_continuity_guard_would_reject_count += 1
+            if payload.get("clamped_position"):
+                self._position_continuity_guard_clamped_count += 1
+            payload["evaluated_count"] = int(self._position_continuity_guard_evaluated_count)
+            payload["would_reject_count"] = int(
+                self._position_continuity_guard_would_reject_count
+            )
+            payload["clamped_count"] = int(self._position_continuity_guard_clamped_count)
+            self._last_position_continuity_guard = payload
+
+    def position_continuity_metrics(self, pose: RigidBodyPose) -> Dict[str, Any]:
+        """Return position velocity and acceleration metrics for a candidate pose."""
+        with self._lock:
+            if self.track_count == 0 or self._last_valid_timestamp <= 0:
+                return {"prediction_valid": False}
+
+            dt_s = max(0.0, float(pose.timestamp - self._last_valid_timestamp) / 1_000_000.0)
+            if dt_s <= 1e-6 or dt_s > 0.5:
+                return {"prediction_valid": False, "dt_s": float(dt_s)}
+
+            previous_position = self._position.copy()
+            previous_velocity = self._velocity.copy()
+            candidate_velocity = (pose.position - previous_position) / dt_s
+            delta_velocity = candidate_velocity - previous_velocity
+            position_accel_m_s2 = float(np.linalg.norm(delta_velocity) / dt_s)
+            position_velocity_m_s = float(np.linalg.norm(candidate_velocity))
+            previous_velocity_m_s = float(np.linalg.norm(previous_velocity))
+            predicted_position = previous_position + previous_velocity * dt_s
+            position_innovation_m = float(np.linalg.norm(pose.position - predicted_position))
+
+            return {
+                "prediction_valid": True,
+                "dt_s": float(dt_s),
+                "previous_position": previous_position.tolist(),
+                "previous_velocity": previous_velocity.tolist(),
+                "candidate_velocity": candidate_velocity.tolist(),
+                "position_innovation_m": position_innovation_m,
+                "position_velocity_m_s": position_velocity_m_s,
+                "previous_velocity_m_s": previous_velocity_m_s,
+                "position_accel_m_s2": position_accel_m_s2,
+            }
+
     def get_diagnostics(self) -> Dict[str, Any]:
         """Return diagnostics used by tracking logs and replay summaries."""
         latest = self._pose_history[-1] if self._pose_history else None
@@ -1205,6 +1439,8 @@ class RigidBodyTracker:
             "rigid_hint_pose": dict(self._last_rigid_hint_pose),
             "subset_hypothesis": dict(self._last_subset_hypothesis),
             "reacquire_guard": dict(self._last_reacquire_guard),
+            "pose_continuity_guard": dict(self._last_pose_continuity_guard),
+            "position_continuity_guard": dict(self._last_position_continuity_guard),
             "rms_error_m": latest_rms,
             "observed_markers": latest_observed,
             "real_ray_count": latest_observed,
@@ -1372,6 +1608,10 @@ class RigidBodyEstimator:
         reprojection_match_gate_px: float = 12.0,
         reacquire_guard_config: ReacquireGuardConfig = ReacquireGuardConfig(),
         object_gating_config: ObjectGatingConfig = ObjectGatingConfig(),
+        pose_continuity_guard_config: PoseContinuityGuardConfig = PoseContinuityGuardConfig(),
+        position_continuity_guard_config: PositionContinuityGuardConfig = (
+            PositionContinuityGuardConfig()
+        ),
         subset_solve_config: SubsetSolveConfig = SubsetSolveConfig(),
         subset_diagnostics_mode: str = "full",
         subset_time_budget_ms: Optional[float] = None,
@@ -1399,6 +1639,8 @@ class RigidBodyEstimator:
         self.reprojection_match_gate_px = float(reprojection_match_gate_px)
         self.reacquire_guard_config = reacquire_guard_config
         self.object_gating_config = object_gating_config
+        self.pose_continuity_guard_config = pose_continuity_guard_config
+        self.position_continuity_guard_config = position_continuity_guard_config
         self.subset_solve_config = subset_solve_config
         self.subset_diagnostics_mode = str(subset_diagnostics_mode or "full")
         if self.subset_diagnostics_mode not in {"full", "sampled", "off"}:
@@ -2114,11 +2356,75 @@ class RigidBodyEstimator:
                     generic_pose=selected_pose,
                     generic_score=selected_score,
                 )
+                position_guard = self._evaluate_position_continuity_guard(
+                    tracker,
+                    pattern,
+                    selected_pose,
+                    selected_score,
+                )
+                if (
+                    position_guard.get("enforced")
+                    and position_guard.get("would_reject")
+                ):
+                    clamped_pose = self._pose_with_position_accel_limit(
+                        position_guard,
+                        source_pose=selected_pose,
+                    )
+                    if clamped_pose is not None:
+                        selected_pose = clamped_pose
+                        selected_source = "position_continuity_guard"
+                        position_guard["clamped_position"] = True
+                continuity_guard = self._evaluate_pose_continuity_guard(
+                    tracker,
+                    pattern,
+                    selected_pose,
+                    selected_score,
+                )
+                if (
+                    continuity_guard.get("enforced")
+                    and continuity_guard.get("would_reject")
+                    and self.pose_continuity_guard_config.hold_prediction_on_reject
+                ):
+                    held_pose = self._pose_with_continuity_rotation_hold(
+                        continuity_guard.get("prediction", {}),
+                        source_pose=selected_pose,
+                    )
+                    if held_pose is not None:
+                        selected_pose = held_pose
+                        selected_source = "pose_continuity_guard"
+                        continuity_guard["held_prediction"] = True
+                        continuity_guard["held_rotation"] = True
                 guard = self._evaluate_reacquire_guard(tracker, selected_pose, selected_score)
                 tracker.record_reprojection_score(selected_score)
                 tracker.record_rigid_hint_pose(hint_diagnostic)
                 tracker.record_subset_hypothesis(subset_diagnostic)
+                tracker.record_position_continuity_guard(position_guard)
+                tracker.record_pose_continuity_guard(continuity_guard)
                 tracker.record_reacquire_guard(guard)
+                if (
+                    position_guard.get("enforced")
+                    and position_guard.get("would_reject")
+                    and not position_guard.get("clamped_position")
+                ):
+                    rejected_pose = self._invalid_pose(timestamp)
+                    poses[pattern.name] = rejected_pose
+                    tracker.update(
+                        rejected_pose,
+                        invalid_reason="position_continuity_guard_rejected",
+                    )
+                    continue
+                if (
+                    continuity_guard.get("enforced")
+                    and continuity_guard.get("would_reject")
+                    and not continuity_guard.get("held_prediction")
+                ):
+                    rejected_pose = self._invalid_pose(timestamp)
+                    poses[pattern.name] = rejected_pose
+                    tracker.update(
+                        rejected_pose,
+                        invalid_reason="pose_continuity_guard_rejected",
+                    )
+                    continue
                 if guard.get("enforced") and guard.get("would_reject"):
                     rejected_pose = self._invalid_pose(timestamp)
                     poses[pattern.name] = rejected_pose
@@ -2185,15 +2491,91 @@ class RigidBodyEstimator:
                     )
                 )
                 if selected_pose.valid:
+                    position_guard = self._evaluate_position_continuity_guard(
+                        tracker,
+                        pattern,
+                        selected_pose,
+                        score,
+                    )
+                    if (
+                        position_guard.get("enforced")
+                        and position_guard.get("would_reject")
+                    ):
+                        clamped_pose = self._pose_with_position_accel_limit(
+                            position_guard,
+                            source_pose=selected_pose,
+                        )
+                        if clamped_pose is not None:
+                            selected_pose = clamped_pose
+                            poses[pattern.name] = selected_pose
+                            position_guard["clamped_position"] = True
+                    continuity_guard = self._evaluate_pose_continuity_guard(
+                        tracker,
+                        pattern,
+                        selected_pose,
+                        score,
+                    )
+                    if (
+                        continuity_guard.get("enforced")
+                        and continuity_guard.get("would_reject")
+                        and self.pose_continuity_guard_config.hold_prediction_on_reject
+                    ):
+                        held_pose = self._pose_with_continuity_rotation_hold(
+                            continuity_guard.get("prediction", {}),
+                            source_pose=selected_pose,
+                        )
+                        if held_pose is not None:
+                            selected_pose = held_pose
+                            poses[pattern.name] = selected_pose
+                            continuity_guard["held_prediction"] = True
+                            continuity_guard["held_rotation"] = True
                     guard = self._evaluate_reacquire_guard(tracker, selected_pose, score)
                 else:
+                    continuity_guard = _empty_pose_continuity_guard(
+                        enabled=self.pose_continuity_guard_config.enabled,
+                        enforced=self.pose_continuity_guard_config.enforced,
+                        reason="no_valid_pose",
+                        thresholds=self.pose_continuity_guard_config.thresholds_dict(),
+                    )
+                    position_guard = _empty_position_continuity_guard(
+                        enabled=self.position_continuity_guard_config.enabled,
+                        enforced=self.position_continuity_guard_config.enforced,
+                        reason="no_valid_pose",
+                        thresholds=self.position_continuity_guard_config.thresholds_dict(),
+                    )
                     guard = _empty_reacquire_guard(
                         enabled=self.reacquire_guard_config.shadow_enabled,
                         enforced=self.reacquire_guard_config.enforced,
                         reason="no_valid_pose",
                         thresholds=self.reacquire_guard_config.thresholds_dict(),
                     )
+                tracker.record_position_continuity_guard(position_guard)
+                tracker.record_pose_continuity_guard(continuity_guard)
                 tracker.record_reacquire_guard(guard)
+                if (
+                    position_guard.get("enforced")
+                    and position_guard.get("would_reject")
+                    and not position_guard.get("clamped_position")
+                ):
+                    rejected_pose = self._invalid_pose(timestamp)
+                    poses[pattern.name] = rejected_pose
+                    tracker.update(
+                        rejected_pose,
+                        invalid_reason="position_continuity_guard_rejected",
+                    )
+                    continue
+                if (
+                    continuity_guard.get("enforced")
+                    and continuity_guard.get("would_reject")
+                    and not continuity_guard.get("held_prediction")
+                ):
+                    rejected_pose = self._invalid_pose(timestamp)
+                    poses[pattern.name] = rejected_pose
+                    tracker.update(
+                        rejected_pose,
+                        invalid_reason="pose_continuity_guard_rejected",
+                    )
+                    continue
                 if guard.get("enforced") and guard.get("would_reject"):
                     rejected_pose = self._invalid_pose(timestamp)
                     poses[pattern.name] = rejected_pose
@@ -2260,6 +2642,262 @@ class RigidBodyEstimator:
             observed_markers=observed_markers,
             valid=valid,
         )
+
+    @staticmethod
+    def _pose_with_continuity_rotation_hold(
+        prediction: Dict[str, Any],
+        *,
+        source_pose: RigidBodyPose,
+    ) -> Optional[RigidBodyPose]:
+        try:
+            quaternion = _normalize_quaternion(
+                np.asarray(prediction["quaternion"], dtype=np.float64).reshape(4)
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+        if not np.isfinite(source_pose.position).all() or not np.isfinite(quaternion).all():
+            return None
+        return RigidBodyPose(
+            timestamp=int(source_pose.timestamp),
+            position=source_pose.position.copy(),
+            rotation=_rotation_from_wxyz(quaternion),
+            quaternion=quaternion,
+            rms_error=float(source_pose.rms_error),
+            observed_markers=int(source_pose.observed_markers),
+            valid=True,
+        )
+
+    def _pose_with_position_accel_limit(
+        self,
+        guard: Dict[str, Any],
+        *,
+        source_pose: RigidBodyPose,
+    ) -> Optional[RigidBodyPose]:
+        try:
+            limited_position = np.asarray(
+                guard["limited_position"],
+                dtype=np.float64,
+            ).reshape(3)
+        except (KeyError, TypeError, ValueError):
+            return None
+        if not np.isfinite(limited_position).all():
+            return None
+        return RigidBodyPose(
+            timestamp=int(source_pose.timestamp),
+            position=limited_position,
+            rotation=source_pose.rotation.copy(),
+            quaternion=source_pose.quaternion.copy(),
+            rms_error=float(source_pose.rms_error),
+            observed_markers=int(source_pose.observed_markers),
+            valid=True,
+        )
+
+    def _evaluate_position_continuity_guard(
+        self,
+        tracker: RigidBodyTracker,
+        pattern: MarkerPattern,
+        pose: RigidBodyPose,
+        score: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        config = self.position_continuity_guard_config
+        thresholds = config.thresholds_dict()
+        if not config.enabled and not config.enforced:
+            return _empty_position_continuity_guard(
+                enabled=False,
+                enforced=False,
+                reason="disabled",
+                thresholds=thresholds,
+            )
+        if not pose.valid:
+            return _empty_position_continuity_guard(
+                enabled=config.enabled,
+                enforced=config.enforced,
+                reason="invalid_pose",
+                thresholds=thresholds,
+            )
+
+        score = score if isinstance(score, dict) else {}
+        observed_markers = int(pose.observed_markers)
+        expected_markers = int(pattern.num_markers)
+        matched_views = int(score.get("matched_marker_views", 0) or 0)
+        expected_views = int(score.get("expected_marker_views", expected_markers * 2) or 0)
+        missing_views = int(score.get("missing_marker_views", 0) or 0)
+        occluded = bool(observed_markers < expected_markers or missing_views > 0)
+        if config.apply_to_occlusion_only and not occluded:
+            return _empty_position_continuity_guard(
+                enabled=config.enabled,
+                enforced=config.enforced,
+                reason="not_occluded",
+                thresholds=thresholds,
+            )
+
+        metrics = tracker.position_continuity_metrics(pose)
+        if not metrics.get("prediction_valid"):
+            return _empty_position_continuity_guard(
+                enabled=config.enabled,
+                enforced=config.enforced,
+                reason="no_prediction",
+                thresholds=thresholds,
+            )
+
+        dt_s = float(metrics.get("dt_s", 0.0))
+        previous_velocity = np.asarray(
+            metrics.get("previous_velocity", [0.0, 0.0, 0.0]),
+            dtype=np.float64,
+        ).reshape(3)
+        candidate_velocity = np.asarray(
+            metrics.get("candidate_velocity", [0.0, 0.0, 0.0]),
+            dtype=np.float64,
+        ).reshape(3)
+        previous_position = np.asarray(
+            metrics.get("previous_position", [0.0, 0.0, 0.0]),
+            dtype=np.float64,
+        ).reshape(3)
+        delta_velocity = candidate_velocity - previous_velocity
+        delta_velocity_norm = float(np.linalg.norm(delta_velocity))
+        max_delta_velocity = max(0.0, float(config.max_accel_m_s2)) * dt_s
+        limited_velocity = candidate_velocity.copy()
+        if delta_velocity_norm > max_delta_velocity > 0.0:
+            limited_velocity = previous_velocity + delta_velocity * (
+                max_delta_velocity / delta_velocity_norm
+            )
+
+        limited_speed = float(np.linalg.norm(limited_velocity))
+        max_velocity = max(0.0, float(config.max_velocity_m_s))
+        if limited_speed > max_velocity > 0.0:
+            limited_velocity = limited_velocity * (max_velocity / limited_speed)
+            limited_speed = max_velocity
+        limited_position = previous_position + limited_velocity * dt_s
+
+        position_accel_m_s2 = float(metrics.get("position_accel_m_s2", 0.0))
+        position_velocity_m_s = float(metrics.get("position_velocity_m_s", 0.0))
+        previous_velocity_m_s = float(metrics.get("previous_velocity_m_s", 0.0))
+        position_innovation_m = float(metrics.get("position_innovation_m", 0.0))
+        reasons: List[str] = []
+        if position_accel_m_s2 > config.max_accel_m_s2:
+            reasons.append("position_accel_too_high")
+        if position_velocity_m_s > config.max_velocity_m_s:
+            reasons.append("position_velocity_too_high")
+
+        passed = not reasons
+        return {
+            "enabled": bool(config.enabled or config.enforced),
+            "enforced": bool(config.enforced),
+            "evaluated": True,
+            "passed": bool(passed),
+            "would_reject": bool(not passed),
+            "clamped_position": False,
+            "reason": "ok" if passed else ",".join(reasons),
+            "thresholds": thresholds,
+            "occluded": occluded,
+            "observed_markers": observed_markers,
+            "expected_markers": expected_markers,
+            "matched_marker_views": matched_views,
+            "expected_marker_views": expected_views,
+            "missing_marker_views": missing_views,
+            "dt_s": dt_s,
+            "position_innovation_m": position_innovation_m,
+            "position_velocity_m_s": position_velocity_m_s,
+            "previous_velocity_m_s": previous_velocity_m_s,
+            "position_accel_m_s2": position_accel_m_s2,
+            "limited_velocity_m_s": float(limited_speed),
+            "limited_position": limited_position.tolist(),
+            "evaluated_count": 0,
+            "would_reject_count": 0,
+            "clamped_count": 0,
+        }
+
+    def _evaluate_pose_continuity_guard(
+        self,
+        tracker: RigidBodyTracker,
+        pattern: MarkerPattern,
+        pose: RigidBodyPose,
+        score: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        config = self.pose_continuity_guard_config
+        thresholds = config.thresholds_dict()
+        if not config.enabled and not config.enforced:
+            return _empty_pose_continuity_guard(
+                enabled=False,
+                enforced=False,
+                reason="disabled",
+                thresholds=thresholds,
+            )
+        if not pose.valid:
+            return _empty_pose_continuity_guard(
+                enabled=config.enabled,
+                enforced=config.enforced,
+                reason="invalid_pose",
+                thresholds=thresholds,
+            )
+
+        score = score if isinstance(score, dict) else {}
+        observed_markers = int(pose.observed_markers)
+        expected_markers = int(pattern.num_markers)
+        matched_views = int(score.get("matched_marker_views", 0) or 0)
+        expected_views = int(score.get("expected_marker_views", expected_markers * 2) or 0)
+        missing_views = int(score.get("missing_marker_views", 0) or 0)
+        occluded = bool(observed_markers < expected_markers or missing_views > 0)
+        if config.apply_to_occlusion_only and not occluded:
+            return _empty_pose_continuity_guard(
+                enabled=config.enabled,
+                enforced=config.enforced,
+                reason="not_occluded",
+                thresholds=thresholds,
+            )
+
+        metrics = tracker.pose_continuity_metrics(pose)
+        if not metrics.get("prediction_valid"):
+            return _empty_pose_continuity_guard(
+                enabled=config.enabled,
+                enforced=config.enforced,
+                reason="no_prediction",
+                thresholds=thresholds,
+            )
+
+        position_innovation_m = float(metrics.get("position_innovation_m", 0.0))
+        rotation_innovation_deg = float(metrics.get("rotation_innovation_deg", 0.0))
+        angular_velocity_deg_s = float(metrics.get("angular_velocity_deg_s", 0.0))
+        previous_angular_velocity_deg_s = float(
+            metrics.get("previous_angular_velocity_deg_s", 0.0)
+        )
+        angular_accel_deg_s2 = float(metrics.get("angular_accel_deg_s2", 0.0))
+
+        reasons: List[str] = []
+        if rotation_innovation_deg > config.max_rotation_innovation_deg:
+            reasons.append("rotation_innovation_too_high")
+        if angular_velocity_deg_s > config.max_angular_velocity_deg_s:
+            reasons.append("angular_velocity_too_high")
+        if angular_accel_deg_s2 > config.max_angular_accel_deg_s2:
+            reasons.append("angular_accel_too_high")
+
+        passed = not reasons
+        return {
+            "enabled": bool(config.enabled or config.enforced),
+            "enforced": bool(config.enforced),
+            "evaluated": True,
+            "passed": bool(passed),
+            "would_reject": bool(not passed),
+            "held_prediction": False,
+            "held_rotation": False,
+            "reason": "ok" if passed else ",".join(reasons),
+            "thresholds": thresholds,
+            "occluded": occluded,
+            "observed_markers": observed_markers,
+            "expected_markers": expected_markers,
+            "matched_marker_views": matched_views,
+            "expected_marker_views": expected_views,
+            "missing_marker_views": missing_views,
+            "position_innovation_m": position_innovation_m,
+            "rotation_innovation_deg": rotation_innovation_deg,
+            "angular_velocity_deg_s": angular_velocity_deg_s,
+            "previous_angular_velocity_deg_s": previous_angular_velocity_deg_s,
+            "angular_accel_deg_s2": angular_accel_deg_s2,
+            "prediction": dict(metrics.get("prediction", {})),
+            "evaluated_count": 0,
+            "would_reject_count": 0,
+            "held_count": 0,
+        }
 
     def _evaluate_rigid_hint_pose(
         self,

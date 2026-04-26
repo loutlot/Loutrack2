@@ -1774,7 +1774,16 @@ def test_tracking_page_surfaces_start_stop_status_messages() -> None:
     assert "reacquire_guard_shadow_enabled: false" in HTML_PAGE
     assert "reacquire_guard_event_logging: false" in HTML_PAGE
     assert "reacquire_guard_enforced: false" in HTML_PAGE
-    assert "object_gating_enforced: false" in HTML_PAGE
+    assert "object_gating_enforced: true" in HTML_PAGE
+    assert "pose_continuity_guard_enabled: true" in HTML_PAGE
+    assert "pose_continuity_guard_enforced: true" in HTML_PAGE
+    assert "pose_continuity_max_rotation_deg: 90" in HTML_PAGE
+    assert "pose_continuity_max_angular_velocity_deg_s: 2500" in HTML_PAGE
+    assert "pose_continuity_max_angular_accel_deg_s2: 200000" in HTML_PAGE
+    assert "position_continuity_guard_enabled: true" in HTML_PAGE
+    assert "position_continuity_guard_enforced: true" in HTML_PAGE
+    assert "position_continuity_max_accel_m_s2: 60" in HTML_PAGE
+    assert "position_continuity_max_velocity_m_s: 8" in HTML_PAGE
     assert 'id="focus" type="range"' not in HTML_PAGE
     assert "trackingClientDiagnostics" in HTML_PAGE
     assert "sseInterArrivalMs" in HTML_PAGE

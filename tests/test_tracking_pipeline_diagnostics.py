@@ -478,6 +478,15 @@ def test_tracking_pipeline_maps_rigid_stabilization_flags_to_configs() -> None:
             "object_conditioned_gating": False,
             "object_gating_enforced": True,
             "object_gating_activation_mode": "reacquire_only",
+            "pose_continuity_guard_enabled": True,
+            "pose_continuity_guard_enforced": True,
+            "pose_continuity_max_rotation_deg": 45.0,
+            "pose_continuity_max_angular_velocity_deg_s": 900.0,
+            "pose_continuity_max_angular_accel_deg_s2": 12000.0,
+            "position_continuity_guard_enabled": True,
+            "position_continuity_guard_enforced": True,
+            "position_continuity_max_accel_m_s2": 25.0,
+            "position_continuity_max_velocity_m_s": 4.0,
             "subset_ransac": False,
             "reacquire_guard_event_logging": True,
         },
@@ -491,6 +500,15 @@ def test_tracking_pipeline_maps_rigid_stabilization_flags_to_configs() -> None:
     assert pipeline.rigid_estimator.object_gating_config.enabled is False
     assert pipeline.rigid_estimator.object_gating_config.enforce is True
     assert pipeline.rigid_estimator.object_gating_config.activation_mode == "reacquire_only"
+    assert pipeline.rigid_estimator.pose_continuity_guard_config.enabled is True
+    assert pipeline.rigid_estimator.pose_continuity_guard_config.enforced is True
+    assert pipeline.rigid_estimator.pose_continuity_guard_config.max_rotation_innovation_deg == 45.0
+    assert pipeline.rigid_estimator.pose_continuity_guard_config.max_angular_velocity_deg_s == 900.0
+    assert pipeline.rigid_estimator.pose_continuity_guard_config.max_angular_accel_deg_s2 == 12000.0
+    assert pipeline.rigid_estimator.position_continuity_guard_config.enabled is True
+    assert pipeline.rigid_estimator.position_continuity_guard_config.enforced is True
+    assert pipeline.rigid_estimator.position_continuity_guard_config.max_accel_m_s2 == 25.0
+    assert pipeline.rigid_estimator.position_continuity_guard_config.max_velocity_m_s == 4.0
     assert pipeline.rigid_estimator.subset_solve_config.enabled is False
 
 

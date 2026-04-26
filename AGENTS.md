@@ -1,4 +1,4 @@
-0. NEVER use local directory writing on .md files
+0. NEVER write absolute directory path in .md files, write relative path on this repo instead.
 1. When making implementation progress, update `/changelog.md` in the same change.
    - Add a concise bullet describing the user-visible behavior, workflow change, bug fix, or architectural progress.
    - Prefer concrete outcomes over process notes.

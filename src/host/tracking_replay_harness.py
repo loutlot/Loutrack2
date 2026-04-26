@@ -28,6 +28,8 @@ from .rigid import (
     MarkerPattern,
     ReacquireGuardConfig,
     ObjectGatingConfig,
+    PoseContinuityGuardConfig,
+    PositionContinuityGuardConfig,
 )
 from .pipeline import (
     DEFAULT_PIPELINE_VARIANT,
@@ -69,6 +71,10 @@ class TrackingReplaySummary:
     reacquire_guard_summary: Dict[str, Any]
     object_gating_events: List[Dict[str, Any]]
     object_gating_summary: Dict[str, Any]
+    position_continuity_guard_events: List[Dict[str, Any]]
+    position_continuity_guard_summary: Dict[str, Any]
+    pose_continuity_guard_events: List[Dict[str, Any]]
+    pose_continuity_guard_summary: Dict[str, Any]
     rigid_hint_events: List[Dict[str, Any]]
     rigid_hint_summary: Dict[str, Any]
     rigid_hint_pose_events: List[Dict[str, Any]]
@@ -101,6 +107,10 @@ class TrackingReplaySummary:
             "reacquire_guard_summary": self.reacquire_guard_summary,
             "object_gating_events": self.object_gating_events,
             "object_gating_summary": self.object_gating_summary,
+            "position_continuity_guard_events": self.position_continuity_guard_events,
+            "position_continuity_guard_summary": self.position_continuity_guard_summary,
+            "pose_continuity_guard_events": self.pose_continuity_guard_events,
+            "pose_continuity_guard_summary": self.pose_continuity_guard_summary,
             "rigid_hint_events": self.rigid_hint_events,
             "rigid_hint_summary": self.rigid_hint_summary,
             "rigid_hint_pose_events": self.rigid_hint_pose_events,
@@ -132,6 +142,15 @@ def replay_tracking_log(
     reacquire_guard_max_rotation_deg: float = 136.0,
     object_gating_enforced: bool = False,
     object_gating_activation_mode: str = "always",
+    pose_continuity_guard_enabled: bool = False,
+    pose_continuity_guard_enforced: bool = False,
+    pose_continuity_max_rotation_deg: float = 90.0,
+    pose_continuity_max_angular_velocity_deg_s: float = 2500.0,
+    pose_continuity_max_angular_accel_deg_s2: float = 200000.0,
+    position_continuity_guard_enabled: bool = False,
+    position_continuity_guard_enforced: bool = False,
+    position_continuity_max_accel_m_s2: float = 60.0,
+    position_continuity_max_velocity_m_s: float = 8.0,
     start_timestamp_us: Optional[int] = None,
     end_timestamp_us: Optional[int] = None,
     start_received_at: Optional[str] = None,
@@ -166,6 +185,19 @@ def replay_tracking_log(
         object_gating_config=ObjectGatingConfig(
             enforce=bool(object_gating_enforced),
             activation_mode=str(object_gating_activation_mode),
+        ),
+        pose_continuity_guard_config=PoseContinuityGuardConfig(
+            enabled=bool(pose_continuity_guard_enabled),
+            enforced=bool(pose_continuity_guard_enforced),
+            max_rotation_innovation_deg=float(pose_continuity_max_rotation_deg),
+            max_angular_velocity_deg_s=float(pose_continuity_max_angular_velocity_deg_s),
+            max_angular_accel_deg_s2=float(pose_continuity_max_angular_accel_deg_s2),
+        ),
+        position_continuity_guard_config=PositionContinuityGuardConfig(
+            enabled=bool(position_continuity_guard_enabled),
+            enforced=bool(position_continuity_guard_enforced),
+            max_accel_m_s2=float(position_continuity_max_accel_m_s2),
+            max_velocity_m_s=float(position_continuity_max_velocity_m_s),
         ),
         reacquire_guard_event_logging=bool(reacquire_guard_event_logging),
         pipeline_variant=pipeline_variant,
@@ -222,6 +254,16 @@ def replay_tracking_log(
         if hasattr(pipeline, "get_object_gating_events")
         else []
     )
+    position_continuity_guard_events = (
+        pipeline.get_position_continuity_guard_events()
+        if hasattr(pipeline, "get_position_continuity_guard_events")
+        else []
+    )
+    pose_continuity_guard_events = (
+        pipeline.get_pose_continuity_guard_events()
+        if hasattr(pipeline, "get_pose_continuity_guard_events")
+        else []
+    )
     rigid_hint_events = (
         pipeline.get_rigid_hint_events()
         if hasattr(pipeline, "get_rigid_hint_events")
@@ -265,6 +307,16 @@ def replay_tracking_log(
         reacquire_guard_summary=guard_summary,
         object_gating_events=object_gating_events,
         object_gating_summary=_summarize_object_gating(tracking, object_gating_events),
+        position_continuity_guard_events=position_continuity_guard_events,
+        position_continuity_guard_summary=_summarize_position_continuity_guard(
+            tracking,
+            position_continuity_guard_events,
+        ),
+        pose_continuity_guard_events=pose_continuity_guard_events,
+        pose_continuity_guard_summary=_summarize_pose_continuity_guard(
+            tracking,
+            pose_continuity_guard_events,
+        ),
         rigid_hint_events=rigid_hint_events,
         rigid_hint_summary=_summarize_rigid_hints(rigid_hint_events),
         rigid_hint_pose_events=rigid_hint_pose_events,
@@ -556,6 +608,15 @@ def compare_pipeline_variants(
     reacquire_guard_max_rotation_deg: float = 136.0,
     object_gating_enforced: bool = False,
     object_gating_activation_mode: str = "always",
+    pose_continuity_guard_enabled: bool = False,
+    pose_continuity_guard_enforced: bool = False,
+    pose_continuity_max_rotation_deg: float = 90.0,
+    pose_continuity_max_angular_velocity_deg_s: float = 2500.0,
+    pose_continuity_max_angular_accel_deg_s2: float = 200000.0,
+    position_continuity_guard_enabled: bool = False,
+    position_continuity_guard_enforced: bool = False,
+    position_continuity_max_accel_m_s2: float = 60.0,
+    position_continuity_max_velocity_m_s: float = 8.0,
     start_timestamp_us: Optional[int] = None,
     end_timestamp_us: Optional[int] = None,
     start_received_at: Optional[str] = None,
@@ -580,6 +641,15 @@ def compare_pipeline_variants(
             reacquire_guard_max_rotation_deg=reacquire_guard_max_rotation_deg,
             object_gating_enforced=object_gating_enforced,
             object_gating_activation_mode=object_gating_activation_mode,
+            pose_continuity_guard_enabled=pose_continuity_guard_enabled,
+            pose_continuity_guard_enforced=pose_continuity_guard_enforced,
+            pose_continuity_max_rotation_deg=pose_continuity_max_rotation_deg,
+            pose_continuity_max_angular_velocity_deg_s=pose_continuity_max_angular_velocity_deg_s,
+            pose_continuity_max_angular_accel_deg_s2=pose_continuity_max_angular_accel_deg_s2,
+            position_continuity_guard_enabled=position_continuity_guard_enabled,
+            position_continuity_guard_enforced=position_continuity_guard_enforced,
+            position_continuity_max_accel_m_s2=position_continuity_max_accel_m_s2,
+            position_continuity_max_velocity_m_s=position_continuity_max_velocity_m_s,
             start_timestamp_us=start_timestamp_us,
             end_timestamp_us=end_timestamp_us,
             start_received_at=start_received_at,
@@ -627,6 +697,15 @@ def compare_epipolar_pruning(
     reacquire_guard_max_rotation_deg: float = 136.0,
     object_gating_enforced: bool = False,
     object_gating_activation_mode: str = "always",
+    pose_continuity_guard_enabled: bool = False,
+    pose_continuity_guard_enforced: bool = False,
+    pose_continuity_max_rotation_deg: float = 90.0,
+    pose_continuity_max_angular_velocity_deg_s: float = 2500.0,
+    pose_continuity_max_angular_accel_deg_s2: float = 200000.0,
+    position_continuity_guard_enabled: bool = False,
+    position_continuity_guard_enforced: bool = False,
+    position_continuity_max_accel_m_s2: float = 60.0,
+    position_continuity_max_velocity_m_s: float = 8.0,
     start_timestamp_us: Optional[int] = None,
     end_timestamp_us: Optional[int] = None,
     start_received_at: Optional[str] = None,
@@ -648,6 +727,15 @@ def compare_epipolar_pruning(
         "reacquire_guard_max_rotation_deg": reacquire_guard_max_rotation_deg,
         "object_gating_enforced": object_gating_enforced,
         "object_gating_activation_mode": object_gating_activation_mode,
+        "pose_continuity_guard_enabled": pose_continuity_guard_enabled,
+        "pose_continuity_guard_enforced": pose_continuity_guard_enforced,
+        "pose_continuity_max_rotation_deg": pose_continuity_max_rotation_deg,
+        "pose_continuity_max_angular_velocity_deg_s": pose_continuity_max_angular_velocity_deg_s,
+        "pose_continuity_max_angular_accel_deg_s2": pose_continuity_max_angular_accel_deg_s2,
+        "position_continuity_guard_enabled": position_continuity_guard_enabled,
+        "position_continuity_guard_enforced": position_continuity_guard_enforced,
+        "position_continuity_max_accel_m_s2": position_continuity_max_accel_m_s2,
+        "position_continuity_max_velocity_m_s": position_continuity_max_velocity_m_s,
         "start_timestamp_us": start_timestamp_us,
         "end_timestamp_us": end_timestamp_us,
         "start_received_at": start_received_at,
@@ -707,6 +795,15 @@ def compare_performance_upgrades(
     reacquire_guard_max_rotation_deg: float = 136.0,
     object_gating_enforced: bool = False,
     object_gating_activation_mode: str = "always",
+    pose_continuity_guard_enabled: bool = False,
+    pose_continuity_guard_enforced: bool = False,
+    pose_continuity_max_rotation_deg: float = 90.0,
+    pose_continuity_max_angular_velocity_deg_s: float = 2500.0,
+    pose_continuity_max_angular_accel_deg_s2: float = 200000.0,
+    position_continuity_guard_enabled: bool = False,
+    position_continuity_guard_enforced: bool = False,
+    position_continuity_max_accel_m_s2: float = 60.0,
+    position_continuity_max_velocity_m_s: float = 8.0,
     start_timestamp_us: Optional[int] = None,
     end_timestamp_us: Optional[int] = None,
     start_received_at: Optional[str] = None,
@@ -728,6 +825,15 @@ def compare_performance_upgrades(
         "reacquire_guard_max_rotation_deg": reacquire_guard_max_rotation_deg,
         "object_gating_enforced": object_gating_enforced,
         "object_gating_activation_mode": object_gating_activation_mode,
+        "pose_continuity_guard_enabled": pose_continuity_guard_enabled,
+        "pose_continuity_guard_enforced": pose_continuity_guard_enforced,
+        "pose_continuity_max_rotation_deg": pose_continuity_max_rotation_deg,
+        "pose_continuity_max_angular_velocity_deg_s": pose_continuity_max_angular_velocity_deg_s,
+        "pose_continuity_max_angular_accel_deg_s2": pose_continuity_max_angular_accel_deg_s2,
+        "position_continuity_guard_enabled": position_continuity_guard_enabled,
+        "position_continuity_guard_enforced": position_continuity_guard_enforced,
+        "position_continuity_max_accel_m_s2": position_continuity_max_accel_m_s2,
+        "position_continuity_max_velocity_m_s": position_continuity_max_velocity_m_s,
         "start_timestamp_us": start_timestamp_us,
         "end_timestamp_us": end_timestamp_us,
         "start_received_at": start_received_at,
@@ -1102,6 +1208,119 @@ def _summarize_object_gating(
         "generic_fallback_blob_count": int(sum(int(event.get("generic_fallback_blob_count", 0)) for event in event_list)),
     }
     return {"by_rigid": by_rigid, "totals": totals, "event_totals": event_totals}
+
+
+def _summarize_pose_continuity_guard(
+    tracking: Dict[str, Dict[str, Any]],
+    events: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    by_rigid: Dict[str, Any] = {}
+    for name, status in tracking.items():
+        guard = status.get("pose_continuity_guard", {}) if isinstance(status, dict) else {}
+        if not isinstance(guard, dict):
+            continue
+        by_rigid[str(name)] = {
+            "enabled": bool(guard.get("enabled", False)),
+            "enforced": bool(guard.get("enforced", False)),
+            "evaluated_count": int(guard.get("evaluated_count", 0)),
+            "would_reject_count": int(guard.get("would_reject_count", 0)),
+            "held_count": int(guard.get("held_count", 0)),
+            "last_reason": str(guard.get("reason", "")),
+        }
+
+    event_list = list(events or [])
+    reason_counts: Dict[str, int] = {}
+    for event in event_list:
+        reason = str(event.get("reason", ""))
+        for part in reason.split(","):
+            item = part.strip()
+            if item:
+                reason_counts[item] = int(reason_counts.get(item, 0)) + 1
+
+    return {
+        "by_rigid": by_rigid,
+        "event_totals": {
+            "event_count": int(len(event_list)),
+            "would_reject_count": int(sum(1 for event in event_list if event.get("would_reject"))),
+            "held_count": int(
+                sum(
+                    1
+                    for event in event_list
+                    if event.get("held_prediction") or event.get("held_rotation")
+                )
+            ),
+            "occluded_count": int(sum(1 for event in event_list if event.get("occluded"))),
+            "reason_counts": reason_counts,
+            "position_innovation_m": _numeric_summary(
+                [float(event.get("position_innovation_m", 0.0)) for event in event_list]
+            ),
+            "rotation_innovation_deg": _numeric_summary(
+                [float(event.get("rotation_innovation_deg", 0.0)) for event in event_list]
+            ),
+            "angular_velocity_deg_s": _numeric_summary(
+                [float(event.get("angular_velocity_deg_s", 0.0)) for event in event_list]
+            ),
+            "angular_accel_deg_s2": _numeric_summary(
+                [float(event.get("angular_accel_deg_s2", 0.0)) for event in event_list]
+            ),
+        },
+    }
+
+
+def _summarize_position_continuity_guard(
+    tracking: Dict[str, Dict[str, Any]],
+    events: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    by_rigid: Dict[str, Any] = {}
+    for name, status in tracking.items():
+        guard = status.get("position_continuity_guard", {}) if isinstance(status, dict) else {}
+        if not isinstance(guard, dict):
+            continue
+        by_rigid[str(name)] = {
+            "enabled": bool(guard.get("enabled", False)),
+            "enforced": bool(guard.get("enforced", False)),
+            "evaluated_count": int(guard.get("evaluated_count", 0)),
+            "would_reject_count": int(guard.get("would_reject_count", 0)),
+            "clamped_count": int(guard.get("clamped_count", 0)),
+            "last_reason": str(guard.get("reason", "")),
+        }
+
+    event_list = list(events or [])
+    reason_counts: Dict[str, int] = {}
+    for event in event_list:
+        reason = str(event.get("reason", ""))
+        for part in reason.split(","):
+            item = part.strip()
+            if item:
+                reason_counts[item] = int(reason_counts.get(item, 0)) + 1
+
+    return {
+        "by_rigid": by_rigid,
+        "event_totals": {
+            "event_count": int(len(event_list)),
+            "would_reject_count": int(sum(1 for event in event_list if event.get("would_reject"))),
+            "clamped_count": int(
+                sum(1 for event in event_list if event.get("clamped_position"))
+            ),
+            "occluded_count": int(sum(1 for event in event_list if event.get("occluded"))),
+            "reason_counts": reason_counts,
+            "position_innovation_m": _numeric_summary(
+                [float(event.get("position_innovation_m", 0.0)) for event in event_list]
+            ),
+            "position_velocity_m_s": _numeric_summary(
+                [float(event.get("position_velocity_m_s", 0.0)) for event in event_list]
+            ),
+            "previous_velocity_m_s": _numeric_summary(
+                [float(event.get("previous_velocity_m_s", 0.0)) for event in event_list]
+            ),
+            "position_accel_m_s2": _numeric_summary(
+                [float(event.get("position_accel_m_s2", 0.0)) for event in event_list]
+            ),
+            "limited_velocity_m_s": _numeric_summary(
+                [float(event.get("limited_velocity_m_s", 0.0)) for event in event_list]
+            ),
+        },
+    }
 
 
 def _summarize_rigid_hints(events: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
@@ -1725,6 +1944,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--reacquire-guard-max-rotation-deg", type=float, default=136.0, help="Rotation innovation threshold used by the guard.")
     parser.add_argument("--object-gating-enforced", action="store_true", help="Replay with Phase 5 object-gating rigid-hint pose enforcement enabled.")
     parser.add_argument("--object-gating-activation-mode", default="always", choices=["always", "reacquire_only", "boot_or_reacquire"], help="Limit object-gating evaluation to selected tracker modes.")
+    parser.add_argument("--pose-continuity-guard-enabled", action="store_true", help="Evaluate low-marker temporal pose continuity guard diagnostics.")
+    parser.add_argument("--pose-continuity-guard-enforced", action="store_true", help="Hold predicted pose when the low-marker continuity guard rejects a candidate.")
+    parser.add_argument("--pose-continuity-max-rotation-deg", type=float, default=90.0, help="Maximum low-marker rotation innovation before continuity guard rejection.")
+    parser.add_argument("--pose-continuity-max-angular-velocity-deg-s", type=float, default=2500.0, help="Maximum low-marker angular velocity before continuity guard rejection.")
+    parser.add_argument("--pose-continuity-max-angular-accel-deg-s2", type=float, default=200000.0, help="Maximum low-marker angular acceleration before continuity guard rejection.")
+    parser.add_argument("--position-continuity-guard-enabled", action="store_true", help="Evaluate low-marker position acceleration guard diagnostics.")
+    parser.add_argument("--position-continuity-guard-enforced", action="store_true", help="Clamp low-marker position updates when acceleration or velocity is too high.")
+    parser.add_argument("--position-continuity-max-accel-m-s2", type=float, default=60.0, help="Maximum low-marker position acceleration before position guard clamping.")
+    parser.add_argument("--position-continuity-max-velocity-m-s", type=float, default=8.0, help="Maximum low-marker position velocity after acceleration limiting.")
     parser.add_argument("--compare-reacquire-guard-enforcement", action="store_true", help="Run both shadow and enforced Phase 4.5 replays and compare go/no-go.")
     parser.add_argument("--compare-object-gating-enforcement", action="store_true", help="Run diagnostics-only and enforced object-gating replays and compare go/no-go.")
     parser.add_argument("--pipeline-variant", default=DEFAULT_PIPELINE_VARIANT, choices=list(PIPELINE_VARIANTS), help="Replay through the official tracking path or an explicit comparison variant.")
@@ -1770,6 +1998,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             reacquire_guard_max_rotation_deg=args.reacquire_guard_max_rotation_deg,
             object_gating_enforced=bool(args.object_gating_enforced),
             object_gating_activation_mode=args.object_gating_activation_mode,
+            pose_continuity_guard_enabled=bool(args.pose_continuity_guard_enabled),
+            pose_continuity_guard_enforced=bool(args.pose_continuity_guard_enforced),
+            pose_continuity_max_rotation_deg=args.pose_continuity_max_rotation_deg,
+            pose_continuity_max_angular_velocity_deg_s=args.pose_continuity_max_angular_velocity_deg_s,
+            pose_continuity_max_angular_accel_deg_s2=args.pose_continuity_max_angular_accel_deg_s2,
+            position_continuity_guard_enabled=bool(args.position_continuity_guard_enabled),
+            position_continuity_guard_enforced=bool(args.position_continuity_guard_enforced),
+            position_continuity_max_accel_m_s2=args.position_continuity_max_accel_m_s2,
+            position_continuity_max_velocity_m_s=args.position_continuity_max_velocity_m_s,
             start_timestamp_us=args.start_timestamp_us,
             end_timestamp_us=args.end_timestamp_us,
             start_received_at=args.start_received_at,
@@ -1791,6 +2028,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             reacquire_guard_max_rotation_deg=args.reacquire_guard_max_rotation_deg,
             object_gating_enforced=bool(args.object_gating_enforced),
             object_gating_activation_mode=args.object_gating_activation_mode,
+            pose_continuity_guard_enabled=bool(args.pose_continuity_guard_enabled),
+            pose_continuity_guard_enforced=bool(args.pose_continuity_guard_enforced),
+            pose_continuity_max_rotation_deg=args.pose_continuity_max_rotation_deg,
+            pose_continuity_max_angular_velocity_deg_s=args.pose_continuity_max_angular_velocity_deg_s,
+            pose_continuity_max_angular_accel_deg_s2=args.pose_continuity_max_angular_accel_deg_s2,
+            position_continuity_guard_enabled=bool(args.position_continuity_guard_enabled),
+            position_continuity_guard_enforced=bool(args.position_continuity_guard_enforced),
+            position_continuity_max_accel_m_s2=args.position_continuity_max_accel_m_s2,
+            position_continuity_max_velocity_m_s=args.position_continuity_max_velocity_m_s,
             start_timestamp_us=args.start_timestamp_us,
             end_timestamp_us=args.end_timestamp_us,
             start_received_at=args.start_received_at,
@@ -1812,6 +2058,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             reacquire_guard_max_rotation_deg=args.reacquire_guard_max_rotation_deg,
             object_gating_enforced=bool(args.object_gating_enforced),
             object_gating_activation_mode=args.object_gating_activation_mode,
+            pose_continuity_guard_enabled=bool(args.pose_continuity_guard_enabled),
+            pose_continuity_guard_enforced=bool(args.pose_continuity_guard_enforced),
+            pose_continuity_max_rotation_deg=args.pose_continuity_max_rotation_deg,
+            pose_continuity_max_angular_velocity_deg_s=args.pose_continuity_max_angular_velocity_deg_s,
+            pose_continuity_max_angular_accel_deg_s2=args.pose_continuity_max_angular_accel_deg_s2,
+            position_continuity_guard_enabled=bool(args.position_continuity_guard_enabled),
+            position_continuity_guard_enforced=bool(args.position_continuity_guard_enforced),
+            position_continuity_max_accel_m_s2=args.position_continuity_max_accel_m_s2,
+            position_continuity_max_velocity_m_s=args.position_continuity_max_velocity_m_s,
             start_timestamp_us=args.start_timestamp_us,
             end_timestamp_us=args.end_timestamp_us,
             start_received_at=args.start_received_at,
@@ -1862,6 +2117,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             reacquire_guard_max_rotation_deg=args.reacquire_guard_max_rotation_deg,
             object_gating_enforced=bool(args.object_gating_enforced),
             object_gating_activation_mode=args.object_gating_activation_mode,
+            pose_continuity_guard_enabled=bool(args.pose_continuity_guard_enabled),
+            pose_continuity_guard_enforced=bool(args.pose_continuity_guard_enforced),
+            pose_continuity_max_rotation_deg=args.pose_continuity_max_rotation_deg,
+            pose_continuity_max_angular_velocity_deg_s=args.pose_continuity_max_angular_velocity_deg_s,
+            pose_continuity_max_angular_accel_deg_s2=args.pose_continuity_max_angular_accel_deg_s2,
+            position_continuity_guard_enabled=bool(args.position_continuity_guard_enabled),
+            position_continuity_guard_enforced=bool(args.position_continuity_guard_enforced),
+            position_continuity_max_accel_m_s2=args.position_continuity_max_accel_m_s2,
+            position_continuity_max_velocity_m_s=args.position_continuity_max_velocity_m_s,
             start_timestamp_us=args.start_timestamp_us,
             end_timestamp_us=args.end_timestamp_us,
             start_received_at=args.start_received_at,

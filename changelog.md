@@ -1,3 +1,7 @@
+- tracking now has a switchable low-marker position acceleration guard that clamps occlusion jumps while keeping replay AB controls
+- pose-continuity guard now holds only rotation during low-marker jumps so position stays on the normal tracking path
+- GUI tracking start now enables the tested object-gating plus low-marker pose-continuity guard in the standard start payload
+- tracking replay now has an experimental low-marker pose-continuity guard that can hold predicted poses during blob occlusion while preserving the default live path
 - GUI tracking now starts the official live path with `fast_ABCDHRF` and `subset_diagnostics_mode=off` for lower-latency 32-blob operation
 - docs/10_in_progress/performance_upgrade_log.md is now fully localized in Japanese while preserving benchmark paths and commands
 - rigid body design notes now record 5-marker, mode-policy, and subset-whitelist PDCA results in `docs/10_in_progress/rigid_body_design.md`

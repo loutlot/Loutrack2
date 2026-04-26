@@ -1,0 +1,111 @@
+{
+  "log_path": "logs/tracking_gui.jsonl",
+  "frame_count": 1472,
+  "diagnostics_event_count": 7,
+  "duration_s": 6.362797,
+  "patterns": [
+    "waist"
+  ],
+  "thresholds": {
+    "min_accepted_points": 4,
+    "jump_threshold_m": 0.1,
+    "flip_threshold_deg": 90.0,
+    "window_padding_s": 2.0
+  },
+  "by_rigid": {
+    "waist": {
+      "event_count": 7,
+      "valid_count": 5,
+      "invalid_count": 2,
+      "valid_ratio": 0.7142857142857143,
+      "accepted_points": {
+        "count": 7,
+        "mean": 3.4285714285714284,
+        "p95": 4.0,
+        "max": 4.0
+      },
+      "reprojection_mean_px": {
+        "count": 7,
+        "mean": 0.17552019281419495,
+        "p95": 0.3025685226515754,
+        "max": 0.3025685226515754
+      },
+      "epipolar_mean_px": {
+        "count": 7,
+        "mean": 0.45079715224175443,
+        "p95": 0.7765758825908067,
+        "max": 0.7765758825908067
+      },
+      "rigid_ms": {
+        "count": 7,
+        "mean": 1.049392857142857,
+        "p95": 2.773791,
+        "max": 2.773791
+      },
+      "pipeline_pair_ms": {
+        "count": 7,
+        "mean": 7.177768,
+        "p95": 14.325583,
+        "max": 14.325583
+      },
+      "failure_event_count": 2,
+      "failure_segments": [
+        {
+          "start": "2026-04-27T02:18:21.007771",
+          "end": "2026-04-27T02:18:26.029307",
+          "event_count": 2,
+          "reasons": [
+            "invalid",
+            "low_accepted_points",
+            "pose_jump"
+          ],
+          "max_pose_jump_m": 742.3374911344496,
+          "max_pose_flip_deg": 48.92906542698692,
+          "min_accepted_points": 2
+        }
+      ],
+      "failure_events": [
+        {
+          "event_index": 5,
+          "timestamp": "2026-04-27T02:18:23.007771",
+          "window_start": "2026-04-27T02:18:21.007771",
+          "window_end": "2026-04-27T02:18:25.007771",
+          "reasons": [
+            "invalid",
+            "low_accepted_points",
+            "pose_jump"
+          ],
+          "mode": "reacquire",
+          "valid": false,
+          "accepted_points": 2,
+          "observed_markers": 0,
+          "invalid_reason": "no_valid_candidate",
+          "max_pose_jump_m": 3.070711854135687,
+          "max_pose_flip_deg": 23.332945478727595,
+          "jump_increase_m": 3.0592819320683966,
+          "flip_increase_deg": 0.0
+        },
+        {
+          "event_index": 6,
+          "timestamp": "2026-04-27T02:18:24.029307",
+          "window_start": "2026-04-27T02:18:22.029307",
+          "window_end": "2026-04-27T02:18:26.029307",
+          "reasons": [
+            "invalid",
+            "low_accepted_points",
+            "pose_jump"
+          ],
+          "mode": "reacquire",
+          "valid": false,
+          "accepted_points": 2,
+          "observed_markers": 0,
+          "invalid_reason": "no_valid_candidate",
+          "max_pose_jump_m": 742.3374911344496,
+          "max_pose_flip_deg": 48.92906542698692,
+          "jump_increase_m": 739.2667792803139,
+          "flip_increase_deg": 25.59611994825932
+        }
+      ]
+    }
+  }
+}

@@ -3750,7 +3750,16 @@
             reacquire_guard_shadow_enabled: false,
             reacquire_guard_event_logging: false,
             reacquire_guard_enforced: false,
-            object_gating_enforced: false,
+            object_gating_enforced: true,
+            pose_continuity_guard_enabled: true,
+            pose_continuity_guard_enforced: true,
+            pose_continuity_max_rotation_deg: 90,
+            pose_continuity_max_angular_velocity_deg_s: 2500,
+            pose_continuity_max_angular_accel_deg_s2: 200000,
+            position_continuity_guard_enabled: true,
+            position_continuity_guard_enforced: true,
+            position_continuity_max_accel_m_s2: 60,
+            position_continuity_max_velocity_m_s: 8,
           },
         });
         trackingUiState = { phase: "idle", error: "" };

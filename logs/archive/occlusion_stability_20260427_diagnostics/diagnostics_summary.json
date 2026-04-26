@@ -1,0 +1,174 @@
+{
+  "log_path": "logs/tracking_gui.jsonl",
+  "frame_count": 2310,
+  "diagnostics_event_count": 10,
+  "duration_s": 9.828046,
+  "patterns": [
+    "waist"
+  ],
+  "thresholds": {
+    "min_accepted_points": 4,
+    "jump_threshold_m": 0.1,
+    "flip_threshold_deg": 90.0,
+    "window_padding_s": 2.0
+  },
+  "by_rigid": {
+    "waist": {
+      "event_count": 10,
+      "valid_count": 8,
+      "invalid_count": 2,
+      "valid_ratio": 0.8,
+      "accepted_points": {
+        "count": 10,
+        "mean": 3.3,
+        "p95": 4.0,
+        "max": 4.0
+      },
+      "reprojection_mean_px": {
+        "count": 10,
+        "mean": 0.20672987294466472,
+        "p95": 0.42427504731683047,
+        "max": 0.42427504731683047
+      },
+      "epipolar_mean_px": {
+        "count": 10,
+        "mean": 0.5360668277658402,
+        "p95": 1.1028347929340108,
+        "max": 1.1028347929340108
+      },
+      "rigid_ms": {
+        "count": 10,
+        "mean": 1.2761208,
+        "p95": 3.052125,
+        "max": 3.052125
+      },
+      "pipeline_pair_ms": {
+        "count": 10,
+        "mean": 5.3715124,
+        "p95": 7.983542,
+        "max": 7.983542
+      },
+      "failure_event_count": 5,
+      "failure_segments": [
+        {
+          "start": "2026-04-27T01:56:50.482498",
+          "end": "2026-04-27T01:56:57.550594",
+          "event_count": 4,
+          "reasons": [
+            "invalid",
+            "low_accepted_points"
+          ],
+          "max_pose_jump_m": 0.005475506657128999,
+          "max_pose_flip_deg": 10.756352623108098,
+          "min_accepted_points": 2
+        },
+        {
+          "start": "2026-04-27T01:56:57.748054",
+          "end": "2026-04-27T01:57:01.748054",
+          "event_count": 1,
+          "reasons": [
+            "invalid",
+            "low_accepted_points"
+          ],
+          "max_pose_jump_m": 0.012468835237393488,
+          "max_pose_flip_deg": 11.287633350446194,
+          "min_accepted_points": 2
+        }
+      ],
+      "failure_events": [
+        {
+          "event_index": 3,
+          "timestamp": "2026-04-27T01:56:52.482498",
+          "window_start": "2026-04-27T01:56:50.482498",
+          "window_end": "2026-04-27T01:56:54.482498",
+          "reasons": [
+            "low_accepted_points"
+          ],
+          "mode": "continue",
+          "valid": true,
+          "accepted_points": 3,
+          "observed_markers": 3,
+          "invalid_reason": "continue_measurement_accepted",
+          "max_pose_jump_m": 0.0,
+          "max_pose_flip_deg": 0.0,
+          "jump_increase_m": 0.0,
+          "flip_increase_deg": 0.0
+        },
+        {
+          "event_index": 4,
+          "timestamp": "2026-04-27T01:56:53.504658",
+          "window_start": "2026-04-27T01:56:51.504658",
+          "window_end": "2026-04-27T01:56:55.504658",
+          "reasons": [
+            "low_accepted_points"
+          ],
+          "mode": "continue",
+          "valid": true,
+          "accepted_points": 3,
+          "observed_markers": 3,
+          "invalid_reason": "boot_confirmed",
+          "max_pose_jump_m": 0.003608625203869516,
+          "max_pose_flip_deg": 10.756352623108098,
+          "jump_increase_m": 0.003608625203869516,
+          "flip_increase_deg": 10.756352623108098
+        },
+        {
+          "event_index": 5,
+          "timestamp": "2026-04-27T01:56:54.527843",
+          "window_start": "2026-04-27T01:56:52.527843",
+          "window_end": "2026-04-27T01:56:56.527843",
+          "reasons": [
+            "low_accepted_points"
+          ],
+          "mode": "continue",
+          "valid": true,
+          "accepted_points": 3,
+          "observed_markers": 3,
+          "invalid_reason": "continue_measurement_accepted",
+          "max_pose_jump_m": 0.005475506657128999,
+          "max_pose_flip_deg": 10.756352623108098,
+          "jump_increase_m": 0.0018668814532594833,
+          "flip_increase_deg": 0.0
+        },
+        {
+          "event_index": 6,
+          "timestamp": "2026-04-27T01:56:55.550594",
+          "window_start": "2026-04-27T01:56:53.550594",
+          "window_end": "2026-04-27T01:56:57.550594",
+          "reasons": [
+            "invalid",
+            "low_accepted_points"
+          ],
+          "mode": "reacquire",
+          "valid": false,
+          "accepted_points": 2,
+          "observed_markers": 0,
+          "invalid_reason": "no_valid_candidate",
+          "max_pose_jump_m": 0.005475506657128999,
+          "max_pose_flip_deg": 10.756352623108098,
+          "jump_increase_m": 0.0,
+          "flip_increase_deg": 0.0
+        },
+        {
+          "event_index": 10,
+          "timestamp": "2026-04-27T01:56:59.748054",
+          "window_start": "2026-04-27T01:56:57.748054",
+          "window_end": "2026-04-27T01:57:01.748054",
+          "reasons": [
+            "invalid",
+            "low_accepted_points"
+          ],
+          "mode": "reacquire",
+          "valid": false,
+          "accepted_points": 2,
+          "observed_markers": 0,
+          "invalid_reason": "no_valid_candidate",
+          "max_pose_jump_m": 0.012468835237393488,
+          "max_pose_flip_deg": 11.287633350446194,
+          "jump_increase_m": 0.0,
+          "flip_increase_deg": 0.0
+        }
+      ]
+    }
+  }
+}
