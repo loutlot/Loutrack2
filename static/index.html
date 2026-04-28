@@ -631,6 +631,51 @@
     .int-stat { font-size: 12px; color: var(--ink-muted); margin-bottom: 4px; }
     .int-stat strong { color: var(--ink); }
     .int-camera-list { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+    .pi-admin-panel {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) auto auto;
+      gap: 12px;
+      align-items: stretch;
+      margin: 10px 0;
+      padding: 12px;
+    }
+    .pi-admin-copy { display:flex; flex-direction:column; gap:4px; min-width:0; }
+    .pi-admin-title { display:flex; align-items:center; gap:8px; font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:0.06em; }
+    .pi-admin-subtitle { color:#94a3b8; font-size:11px; line-height:1.4; }
+    .pi-admin-actions { display:flex; flex-wrap:wrap; gap:7px; align-content:center; justify-content:flex-end; min-width:240px; }
+    .pi-admin-danger {
+      display:flex;
+      flex-wrap:wrap;
+      gap:7px;
+      align-content:center;
+      justify-content:flex-end;
+      border-left:1px solid rgba(239,68,68,0.22);
+      padding-left:12px;
+      min-width:260px;
+    }
+    .pi-admin-danger-label {
+      width:100%;
+      color:#fca5a5;
+      font-size:10px;
+      font-weight:800;
+      text-transform:uppercase;
+      letter-spacing:0.08em;
+      text-align:right;
+    }
+    button.pi-admin-primary { background: rgba(14,165,233,0.18); color:#bae6fd; border:1px solid rgba(14,165,233,0.28); }
+    button.pi-admin-service { background: rgba(34,197,94,0.15); color:#86efac; border:1px solid rgba(34,197,94,0.24); }
+    button.pi-admin-stop { background: rgba(249,115,22,0.15); color:#fdba74; border:1px solid rgba(249,115,22,0.26); }
+    button.pi-admin-risk { background: rgba(239,68,68,0.13); color:#fecaca; border:1px solid rgba(239,68,68,0.32); }
+    .admin-mini { display:grid; grid-template-columns: repeat(3, max-content); gap:5px; font-size:11px; align-items:center; }
+    .admin-meta { display:flex; gap:8px; flex-wrap:wrap; margin-top:5px; color:#94a3b8; font-size:11px; }
+    .admin-meta strong { color:#e2e8f0; font-weight:700; }
+    .admin-log { max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #94a3b8; margin-top:4px; }
+    @media (max-width: 1180px) {
+      .pi-admin-panel { grid-template-columns: 1fr; }
+      .pi-admin-actions, .pi-admin-danger { justify-content:flex-start; min-width:0; }
+      .pi-admin-danger { border-left:0; border-top:1px solid rgba(239,68,68,0.22); padding-left:0; padding-top:10px; }
+      .pi-admin-danger-label { text-align:left; }
+    }
     .int-slider-title { display: inline-flex; align-items: baseline; gap: 4px; white-space: nowrap; }
 
     /* ── Floor / countdown ────────────────────────────── */
@@ -808,6 +853,27 @@
           <div class="stat-card"><div class="stat-label">Running</div><div class="stat-value">0</div></div>
           <div class="stat-card"><div class="stat-label">Mask Ready</div><div class="stat-value">0</div></div>
         </div>
+        <div class="panel pi-admin-panel" id="piAdminPanel">
+          <div class="pi-admin-copy">
+            <div class="pi-admin-title">
+              <span>Pi Admin</span>
+              <span class="badge muted" id="piAdminSelectedCount">0 selected</span>
+            </div>
+            <div class="pi-admin-subtitle" id="piAdminSummary">Select cameras, then refresh admin status before service or power actions.</div>
+          </div>
+          <div class="pi-admin-actions" aria-label="Pi service actions">
+            <button class="btn-sm pi-admin-primary" data-pi-admin-status>Refresh Status</button>
+            <button class="btn-sm pi-admin-service" data-pi-admin-action="service_start">Start Service</button>
+            <button class="btn-sm pi-admin-stop" data-pi-admin-action="service_stop">Stop Service</button>
+          </div>
+          <div class="pi-admin-danger" aria-label="Pi release and power actions">
+            <div class="pi-admin-danger-label">Release / Power</div>
+            <button class="btn-sm pi-admin-risk" data-pi-admin-action="update" data-danger="true">Update</button>
+            <button class="btn-sm pi-admin-risk" data-pi-admin-action="rollback" data-danger="true">Rollback</button>
+            <button class="btn-sm pi-admin-risk" data-pi-admin-action="reboot" data-danger="true">Reboot</button>
+            <button class="btn-sm pi-admin-risk" data-pi-admin-action="shutdown" data-danger="true">Shutdown</button>
+          </div>
+        </div>
         <div class="split" style="flex:1;min-height:0">
           <div class="split-left" style="flex:2;display:flex;flex-direction:column;min-height:0">
             <div class="panel" style="flex:1;display:flex;flex-direction:column;min-height:0">
@@ -815,7 +881,7 @@
                 <table>
                   <thead>
                     <tr>
-                      <th>☑</th><th>ID</th><th>IP</th><th>State</th><th>Blobs</th><th>Mask%</th><th>Health</th><th>Clock</th>
+                      <th>☑</th><th>ID</th><th>IP</th><th>State</th><th>Blobs</th><th>Mask%</th><th>Health</th><th>Clock</th><th>Pi Admin</th>
                     </tr>
                   </thead>
                   <tbody id="cameraRows"></tbody>
@@ -2407,9 +2473,11 @@
 
     function renderCameraRows(cameras) {
       renderMjpegGrids(cameras);
+      renderPiAdminPanel(cameras);
       // Main cameras view table (compact)
       elements.rows.innerHTML = cameras.map((camera) => {
         const diagnostics = camera.diagnostics || {};
+        const admin = camera.admin || {};
         const blob = diagnostics.blob_diagnostics || {};
         const maskRatio = diagnostics.mask_ratio != null ? `${(Number(diagnostics.mask_ratio) * 100).toFixed(1)}%` : "-";
         const clockSync = diagnostics.clock_sync || {};
@@ -2417,6 +2485,15 @@
         const offsetLabel = Number.isFinite(offsetUs) ? `${Math.round(offsetUs)}us` : "n/a";
         const clockVariant = clockSync.status === "locked" ? "ok" : (clockSync.status === "degraded" ? "warn" : "muted");
         const clockLabel = clockSync.status || "?";
+        const adminOk = admin.ok === true || admin.ssh_reachable === true;
+        const serviceActive = admin.service_active || "";
+        const serviceVariant = serviceActive === "active" ? "ok" : (serviceActive ? "warn" : "muted");
+        const sshVariant = adminOk ? "ok" : (admin.error_code ? "warn" : "muted");
+        const release = admin.release || "-";
+        const temp = admin.cpu_temp_c != null ? `${admin.cpu_temp_c}C` : "-";
+        const disk = admin.disk || "";
+        const lastAdmin = camera.last_admin_action || {};
+        const lastAdminText = lastAdmin.action ? `${lastAdmin.action}: ${lastAdmin.ok ? "ok" : (lastAdmin.error || "failed")}` : "";
         return `
           <tr>
             <td><input type="checkbox" data-camera="${escapeHtml(camera.camera_id)}" ${camera.selected ? "checked" : ""}></td>
@@ -2427,6 +2504,18 @@
             <td>${escapeHtml(maskRatio)}</td>
             <td>${camera.healthy ? badge("OK", "ok") : badge("No Ack", "warn")}</td>
             <td>${badge(clockLabel, clockVariant)} ${escapeHtml(offsetLabel)}</td>
+            <td>
+              <div class="admin-mini">
+                ${badge(adminOk ? "SSH" : "SSH?", sshVariant)}
+                ${badge(serviceActive || "svc?", serviceVariant)}
+                ${badge(admin.ptp_active || "ptp?", admin.ptp_active === "active" ? "ok" : "muted")}
+              </div>
+              <div class="admin-meta">
+                <span>rel <strong>${escapeHtml(release)}</strong></span>
+                <span>temp <strong>${escapeHtml(temp)}</strong></span>
+              </div>
+              <div class="admin-log" title="${escapeHtml(disk)}">${escapeHtml(lastAdminText || disk)}</div>
+            </td>
           </tr>
         `;
       }).join("");
@@ -2488,6 +2577,28 @@
             <td>${camera.healthy ? badge("OK","ok") : badge("No Ack","warn")}</td>
           </tr>`;
         }).join("");
+      }
+    }
+
+    function renderPiAdminPanel(cameras) {
+      const selected = cameras.filter((camera) => camera.selected);
+      const selectedCount = document.getElementById("piAdminSelectedCount");
+      const summary = document.getElementById("piAdminSummary");
+      if (selectedCount) {
+        selectedCount.textContent = `${selected.length} selected`;
+        selectedCount.className = `badge ${selected.length > 0 ? "ok" : "warn"}`;
+      }
+      if (summary) {
+        const adminKnown = selected.filter((camera) => camera.admin && (camera.admin.ok === true || camera.admin.error_code)).length;
+        const active = selected.filter((camera) => camera.admin?.service_active === "active").length;
+        const failed = selected.filter((camera) => camera.admin?.error_code).length;
+        if (selected.length === 0) {
+          summary.textContent = "Select cameras before running service, release, or power actions.";
+        } else if (adminKnown === 0) {
+          summary.textContent = "Admin status has not been refreshed for the selected cameras.";
+        } else {
+          summary.textContent = `${adminKnown}/${selected.length} checked · ${active} services active · ${failed} admin errors`;
+        }
       }
     }
 
@@ -3607,6 +3718,47 @@
           showStatus(`${command} completed.`, "success");
         } catch (error) {
           reportUiError(`command_${command}`, error);
+        }
+      });
+    });
+
+    document.querySelector("[data-pi-admin-status]")?.addEventListener("click", async () => {
+      try {
+        const cameraIds = selectedCameraIds();
+        if (cameraIds.length === 0) {
+          showStatus("Select at least one camera for Pi admin status.", "error");
+          return;
+        }
+        showStatus("Refreshing Pi admin status...", "info");
+        const result = await postJson("/api/pi/admin/status", { camera_ids: cameraIds });
+        elements.status.textContent = JSON.stringify(result, null, 2);
+        await safeLoadState();
+        showStatus("Pi admin status refreshed.", "success");
+      } catch (error) {
+        reportUiError("pi_admin_status", error);
+      }
+    });
+
+    document.querySelectorAll("[data-pi-admin-action]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const action = button.dataset.piAdminAction || "";
+        const cameraIds = selectedCameraIds();
+        if (cameraIds.length === 0) {
+          showStatus("Select at least one camera for Pi admin action.", "error");
+          return;
+        }
+        if (button.dataset.danger === "true") {
+          const ok = window.confirm(`Run ${action} on ${cameraIds.join(", ")}?`);
+          if (!ok) return;
+        }
+        try {
+          showStatus(`Running Pi admin ${action}...`, "info");
+          const result = await postJson("/api/pi/admin/action", { action, camera_ids: cameraIds });
+          elements.status.textContent = JSON.stringify(result, null, 2);
+          await safeLoadState();
+          showStatus(`Pi admin ${action} completed.`, "success");
+        } catch (error) {
+          reportUiError(`pi_admin_${action}`, error);
         }
       });
     });

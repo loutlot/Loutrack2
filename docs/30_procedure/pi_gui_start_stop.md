@@ -193,6 +193,26 @@ PYTHONPATH=src .venv/bin/python -m host.control \
 
 Expected result is a timeout or connection failure.
 
+## Manage Pi Services From The GUI
+
+The Camera Status page includes Pi Admin actions for selected cameras after each Pi has been installed and can be reached over SSH.
+
+The GUI uses the default deployment key named `loutrack_deploy_key`, SSH user `pi`, and the inventory/discovery camera targets. It runs service management over SSH without requiring host-side shell scripts, which keeps the path usable from Windows packages.
+
+Available actions:
+
+- `Refresh Admin Status`: checks SSH reachability, `loutrack.service`, PTP service state, uptime, CPU temperature, disk usage, current release, and recent service logs.
+- `Start Service`: restarts `loutrack.service`.
+- `Stop Service`: stops `loutrack.service`.
+- `Update`: uploads `src/pi` and `src/camera-calibration`, switches the Loutrack remote `current` release, updates the service file, and restarts the service.
+- `Rollback`: switches to the previous Loutrack remote release and restarts the service.
+- `Reboot`: reboots the selected Pi cameras.
+- `Shutdown`: powers off the selected Pi cameras.
+
+The Pi user must be able to run the required commands with non-interactive sudo. A typical sudoers entry is:
+
+Allow `systemctl`, `shutdown`, `reboot`, `tee`, `mkdir`, and `chown` for the Pi management user.
+
 ## Troubleshooting
 
 - If GUI startup fails with UDP bind errors on port `5000`, stop the old GUI/tracking process first, then start the GUI again.
@@ -206,4 +226,3 @@ ssh -i ~/.ssh/loutrack_deploy_key -o BatchMode=yes -o ConnectTimeout=5 pi@192.16
 ssh -i ~/.ssh/loutrack_deploy_key -o BatchMode=yes -o ConnectTimeout=5 pi@192.168.8.100 \
   'systemctl status loutrack-ptp4l.service --no-pager'
 ```
-

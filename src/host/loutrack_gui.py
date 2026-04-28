@@ -47,6 +47,7 @@ if __package__ in (None, ""):
     from host.gui_calibration_config_service import GuiCalibrationConfigService
     from host.gui_command_service import GuiCommandService
     from host.gui_tracking_rigid_store import GuiTrackingRigidStore
+    from host.pi_admin_service import PiAdminService
 else:
     from .receiver import UDPReceiver
     from .logger import FrameLogger
@@ -73,6 +74,7 @@ else:
     from .gui_calibration_config_service import GuiCalibrationConfigService
     from .gui_command_service import GuiCommandService
     from .gui_tracking_rigid_store import GuiTrackingRigidStore
+    from .pi_admin_service import PiAdminService
 
 
 DEFAULT_SETTINGS_PATH = Path("logs") / "loutrack_gui_settings.json"
@@ -203,6 +205,7 @@ class LoutrackGuiState:
         self._state_presenter = GuiStatePresenter(self)
         self._calibration_config_service = GuiCalibrationConfigService(self)
         self._command_service = GuiCommandService(self)
+        self._pi_admin_service = PiAdminService(PROJECT_ROOT)
         self._ensure_settings_file_exists()
         settings_bundle = self._load_settings_bundle()
         ui_payload = settings_bundle.get("ui", {})
@@ -984,6 +987,22 @@ class LoutrackGuiState:
     def run_command(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self._command_service.run_command(payload)
 
+    def get_pi_admin_status(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        targets = self._resolve_requested_targets(payload)
+        result = {"pi_admin_status": self._pi_admin_service.status(targets)}
+        self._update_camera_admin_status(result["pi_admin_status"], "status")
+        self.last_result = result
+        return result
+
+    def run_pi_admin_action(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        action = str(payload.get("action", "")).strip()
+        targets = self._resolve_requested_targets(payload)
+        responses = self._pi_admin_service.run_action(targets, action)
+        result = {"pi_admin_action": {"action": action, "responses": responses}}
+        self._update_camera_admin_status(responses, action)
+        self.last_result = result
+        return result
+
     def generate_extrinsics(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self._extrinsics_service.generate_extrinsics(payload)
 
@@ -1072,6 +1091,21 @@ class LoutrackGuiState:
 
     def _update_camera_status(self, result: Dict[str, Dict[str, Dict[str, Any]]]) -> None:
         self._camera_status_store.update_camera_status(result)
+
+    def _update_camera_admin_status(self, responses: Dict[str, Dict[str, Any]], action: str) -> None:
+        with self.lock:
+            for camera_id, response in responses.items():
+                entry = self.camera_status.setdefault(camera_id, {"camera_id": camera_id, "ip": "unknown"})
+                previous_admin = entry.get("admin", {})
+                entry["admin"] = {
+                    **(previous_admin if isinstance(previous_admin, dict) else {}),
+                    **dict(response),
+                }
+                entry["last_admin_action"] = {
+                    "action": action,
+                    "ok": bool(response.get("ok")),
+                    "error": response.get("error") or response.get("error_code"),
+                }
 
     def _on_frame_received(self, frame: Any) -> None:
         self._capture_log_service.on_frame_received(frame)
@@ -1166,6 +1200,16 @@ class LoutrackGuiHandler(BaseHTTPRequestHandler):
                     f"POST /api/command command={payload.get('command')} camera_ids={payload.get('camera_ids')}"
                 )
                 self._send_json(self.state.run_command(payload))
+                return
+            if self.path == "/api/pi/admin/status":
+                self._debug_log(f"POST /api/pi/admin/status camera_ids={payload.get('camera_ids')}")
+                self._send_json(self.state.get_pi_admin_status(payload))
+                return
+            if self.path == "/api/pi/admin/action":
+                self._debug_log(
+                    f"POST /api/pi/admin/action action={payload.get('action')} camera_ids={payload.get('camera_ids')}"
+                )
+                self._send_json(self.state.run_pi_admin_action(payload))
                 return
             if self.path == "/api/generate_extrinsics":
                 self._debug_log("POST /api/generate_extrinsics")

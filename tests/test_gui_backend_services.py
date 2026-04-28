@@ -28,6 +28,7 @@ from host.loutrack_gui import (
     LoutrackGuiState,
     PROJECT_ROOT,
 )
+from host.pi_admin_service import PiAdminConfig, PiAdminService
 from host.wand_session import CameraTarget, FIXED_FPS
 
 
@@ -331,6 +332,99 @@ class _BrokenPipeWriter:
         return None
 
 
+class _FakeChannel:
+    def __init__(self, exit_status: int) -> None:
+        self._exit_status = exit_status
+
+    def recv_exit_status(self) -> int:
+        return self._exit_status
+
+
+class _FakeSSHStream:
+    def __init__(self, text: str, exit_status: int = 0) -> None:
+        self._text = text
+        self.channel = _FakeChannel(exit_status)
+
+    def read(self) -> bytes:
+        return self._text.encode("utf-8")
+
+
+class _FakeSFTP:
+    def __init__(self) -> None:
+        self.mkdir_calls: list[str] = []
+        self.put_calls: list[tuple[str, str]] = []
+
+    def mkdir(self, path: str) -> None:
+        self.mkdir_calls.append(path)
+
+    def put(self, localpath: str, remotepath: str) -> None:
+        self.put_calls.append((localpath, remotepath))
+
+    def close(self) -> None:
+        return None
+
+
+class _FakeSSHClient:
+    def __init__(self, responses: Dict[str, tuple[int, str, str]] | None = None) -> None:
+        self.responses = responses or {}
+        self.commands: list[str] = []
+        self.sftp = _FakeSFTP()
+        self.connected = False
+
+    def set_missing_host_key_policy(self, _policy) -> None:  # noqa: ANN001
+        return None
+
+    def connect(self, **_kwargs) -> None:  # noqa: ANN003
+        self.connected = True
+
+    def exec_command(self, command: str, timeout=None):  # noqa: ANN001
+        self.commands.append(command)
+        status, stdout, stderr = self.responses.get(command, (0, "", ""))
+        return (
+            _FakeSSHStream("", 0),
+            _FakeSSHStream(stdout, status),
+            _FakeSSHStream(stderr, status),
+        )
+
+    def open_sftp(self) -> _FakeSFTP:
+        return self.sftp
+
+    def close(self) -> None:
+        return None
+
+
+class _FakePiAdminService:
+    def __init__(self) -> None:
+        self.status_calls: list[list[str]] = []
+        self.action_calls: list[tuple[str, list[str]]] = []
+
+    def status(self, targets):  # noqa: ANN001
+        camera_ids = [target.camera_id for target in targets]
+        self.status_calls.append(camera_ids)
+        return {
+            target.camera_id: {
+                "ok": True,
+                "ssh_reachable": True,
+                "service_active": "active",
+                "release": "gui-test",
+            }
+            for target in targets
+        }
+
+    def run_action(self, targets, action):  # noqa: ANN001
+        camera_ids = [target.camera_id for target in targets]
+        self.action_calls.append((action, camera_ids))
+        return {
+            target.camera_id: {
+                "ok": True,
+                "action": action,
+                "stdout": "",
+                "stderr": "",
+            }
+            for target in targets
+        }
+
+
 def _build_state(
     tmp_path: Path,
     *,
@@ -464,6 +558,105 @@ def test_gui_command_service_dispatches_mask_commands_with_expected_validation(t
     assert state.session.broadcast_history[-2]["kwargs"] == state._mask_params()
     assert state.session.broadcast_history[-1]["fn_name"] == "mask_stop"
     assert state.session.broadcast_history[-1]["kwargs"] == {}
+
+
+def test_pi_admin_service_status_and_actions_use_paramiko_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    key_path = tmp_path / "loutrack_deploy_key"
+    key_path.write_text("fake-key", encoding="utf-8")
+    client = _FakeSSHClient(
+        {
+            "systemctl is-active loutrack.service": (0, "active\n", ""),
+            "systemctl is-enabled loutrack.service": (0, "enabled\n", ""),
+            "systemctl is-active loutrack-ptp4l.service ptp4l-master.service ptp4l-slave.service 2>/dev/null": (
+                0,
+                "active\n",
+                "",
+            ),
+            "uptime -p": (0, "up 1 hour\n", ""),
+            "cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || true": (0, "42123\n", ""),
+            "df -h /opt / | tail -n 1": (0, "/dev/root 29G 4G 24G 15% /\n", ""),
+            "readlink -f /opt/loutrack/current 2>/dev/null || true": (
+                0,
+                "/opt/loutrack/releases/gui-20260427010101\n",
+                "",
+            ),
+            "journalctl -u loutrack.service -n 20 --no-pager 2>/dev/null": (0, "service log\n", ""),
+            "sudo -n systemctl restart loutrack.service": (0, "", ""),
+        }
+    )
+
+    class _Paramiko:
+        class AutoAddPolicy:
+            pass
+
+    monkeypatch.setattr(PiAdminService, "_load_paramiko", staticmethod(lambda: _Paramiko))
+    service = PiAdminService(
+        project_root=tmp_path,
+        config=PiAdminConfig(ssh_key_path=key_path),
+        ssh_client_factory=lambda: client,
+        pkey_loader=lambda _path: object(),
+    )
+
+    target = CameraTarget(camera_id="pi-cam-01", ip="192.168.1.10")
+    status = service.status([target])["pi-cam-01"]
+    action = service.run_action([target], "service_start")["pi-cam-01"]
+
+    assert status["ok"] is True
+    assert status["service_active"] == "active"
+    assert status["release"] == "gui-20260427010101"
+    assert status["cpu_temp_c"] == 42.1
+    assert action["ok"] is True
+    assert "sudo -n systemctl restart loutrack.service" in client.commands
+
+
+def test_pi_admin_service_reports_missing_key_and_sudo_password(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    missing_key = tmp_path / "missing_key"
+    target = CameraTarget(camera_id="pi-cam-01", ip="192.168.1.10")
+    service = PiAdminService(project_root=tmp_path, config=PiAdminConfig(ssh_key_path=missing_key))
+
+    missing = service.run_action([target], "service_stop")["pi-cam-01"]
+
+    assert missing["ok"] is False
+    assert missing["error_code"] == "ssh_key_missing"
+
+    key_path = tmp_path / "loutrack_deploy_key"
+    key_path.write_text("fake-key", encoding="utf-8")
+    client = _FakeSSHClient(
+        {"sudo -n systemctl stop loutrack.service": (1, "", "sudo: a password is required\n")}
+    )
+
+    class _Paramiko:
+        class AutoAddPolicy:
+            pass
+
+    monkeypatch.setattr(PiAdminService, "_load_paramiko", staticmethod(lambda: _Paramiko))
+    service = PiAdminService(
+        project_root=tmp_path,
+        config=PiAdminConfig(ssh_key_path=key_path),
+        ssh_client_factory=lambda: client,
+        pkey_loader=lambda _path: object(),
+    )
+
+    sudo_failed = service.run_action([target], "service_stop")["pi-cam-01"]
+
+    assert sudo_failed["ok"] is False
+    assert sudo_failed["error_code"] == "sudo_requires_password"
+
+
+def test_gui_state_pi_admin_status_and_action_update_camera_status(tmp_path: Path) -> None:
+    state = _build_state(tmp_path)
+    fake_admin = _FakePiAdminService()
+    state._pi_admin_service = fake_admin  # type: ignore[assignment]
+
+    status = state.get_pi_admin_status({"camera_ids": ["pi-cam-01"]})
+    action = state.run_pi_admin_action({"action": "service_start", "camera_ids": ["pi-cam-01"]})
+
+    assert fake_admin.status_calls == [["pi-cam-01"]]
+    assert fake_admin.action_calls == [("service_start", ["pi-cam-01"])]
+    assert status["pi_admin_status"]["pi-cam-01"]["service_active"] == "active"
+    assert action["pi_admin_action"]["responses"]["pi-cam-01"]["ok"] is True
+    assert state.camera_status["pi-cam-01"]["admin"]["release"] == "gui-test"
+    assert state.camera_status["pi-cam-01"]["last_admin_action"]["action"] == "service_start"
 
 
 def test_gui_command_service_dispatches_pose_capture_through_capture_log_service(tmp_path: Path) -> None:

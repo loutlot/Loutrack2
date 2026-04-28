@@ -15,6 +15,12 @@
 
 - `pi.service.capture_runtime`
 
+## 初回インストール
+
+Fresh Raspberry Pi OS から Loutrack camera node を作る手順は [`INSTALL.md`](INSTALL.md) にあります。
+
+最初は Raspberry Pi Imager で username を `pi`、hostname / camera id を `pi-cam-01`, `pi-cam-02` のように揃えるのがおすすめです。
+
 ## ローカルで実行（ダミーバックエンド）
 
 macOS / Linux での開発用です。合成されたドットフレームを生成します。

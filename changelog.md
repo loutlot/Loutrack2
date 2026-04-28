@@ -1,3 +1,5 @@
+- Added a first-install Pi node script and README covering Raspberry Pi Imager naming, PTP roles, service setup, and GUI discovery.
+- Camera Status now has a grouped Pi Admin panel for selected-camera service status, update/rollback, reboot, and shutdown controls.
 - tracking now has a switchable low-marker position acceleration guard that clamps occlusion jumps while keeping replay AB controls
 - pose-continuity guard now holds only rotation during low-marker jumps so position stays on the normal tracking path
 - GUI tracking start now enables the tested object-gating plus low-marker pose-continuity guard in the standard start payload
