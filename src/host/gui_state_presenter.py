@@ -46,6 +46,7 @@ class GuiStatePresenter:
             "extrinsics_methods": owner._generate_extrinsics_registry.to_payload(),
             "last_result": owner.last_result,
             "receiver": owner.receiver.stats,
+            "network_preflight": owner.network_preflight(cameras),
             "tracking": tracking_status,
             "intrinsics_settings": owner._load_intrinsics_settings(),
             "settings_meta": {

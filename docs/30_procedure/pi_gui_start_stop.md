@@ -202,7 +202,7 @@ The GUI uses the default deployment key named `loutrack_deploy_key`, SSH user `p
 Available actions:
 
 - `Refresh Admin Status`: checks SSH reachability, `loutrack.service`, PTP service state, uptime, CPU temperature, disk usage, current release, and recent service logs.
-- `Start Service`: restarts `loutrack.service`.
+- `Start Service`: refreshes the `loutrack.service` unit with TCP `8554`, UDP `5000`, and MJPEG `8555` settings, then restarts it.
 - `Stop Service`: stops `loutrack.service`.
 - `Update`: uploads `src/pi` and `src/camera-calibration`, switches the Loutrack remote `current` release, updates the service file, and restarts the service.
 - `Rollback`: switches to the previous Loutrack remote release and restarts the service.

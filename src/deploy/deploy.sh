@@ -16,6 +16,10 @@ REMOTE_BASE="/opt/loutrack"
 RELEASES_DIR="$REMOTE_BASE/releases"
 CURRENT_LINK="$REMOTE_BASE/current"
 SERVICE_NAME="loutrack.service"
+TCP_HOST="0.0.0.0"
+TCP_PORT="8554"
+UDP_DEST="255.255.255.255:5000"
+MJPEG_PORT="8555"
 LOCAL_SRC="$SRC_ROOT/pi/"
 LOCAL_CALIB_SRC="$SRC_ROOT/camera-calibration/"
 HOSTS_FILE="$SCRIPT_DIR/hosts.ini"
@@ -83,7 +87,7 @@ User=$REMOTE_USER
 WorkingDirectory=$CURRENT_LINK
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=/usr/bin/python3 $REMOTE_SRC_DIR/pi/service/capture_runtime.py --camera-id $camera_id --udp-dest 255.255.255.255:5000 --sync-role auto
+ExecStart=/usr/bin/python3 $REMOTE_SRC_DIR/pi/service/capture_runtime.py --camera-id $camera_id --tcp-host $TCP_HOST --tcp-port $TCP_PORT --udp-dest $UDP_DEST --mjpeg-port $MJPEG_PORT --sync-role auto
 Restart=always
 RestartSec=5
 

@@ -1,3 +1,17 @@
+- Camera Status in `static/index.html` now labels Pi Admin release, CPU, and last-action details explicitly and hides missing values.
+- Pi Admin Start Service now repairs `loutrack.service` with MJPEG `8555` and re-enables the active GUI preview after restart.
+- Floor / Metric in `static/index.html` now shows a result card beside capture controls with saved/capturing/not-captured status.
+- Camera Status in `static/index.html` no longer shows the redundant four-card summary row above Pi Admin.
+- Pi Admin in `static/index.html` is more compact and aligns service/release action groups with muted status chips.
+- Floor metric capture in `static/index.html` now uses a compact control card and hides the unnecessary Stop button.
+- Intrinsics, camera pose, and floor metric pages in `static/index.html` now open image-backed instruction modals with step-specific calibration guidance.
+- Intrinsics calibration output in `static/index.html` now sits directly below Live Feed instead of being pushed to the bottom of the right column.
+- Intrinsics setup in `static/index.html` now hides fixed board defaults and uses prominent camera selection buttons above the remaining square-length setting.
+- Sidebar calibration steps in `static/index.html` now turn green only when their pose, floor, or extrinsics output files exist.
+- Restyled `static/index.html` with the v2 dark-blue color scheme while keeping the v1 workflow.
+- Removed the discarded `static/index_v2.html` variant after carrying its dark-blue scheme into v1.
+- Camera workflow navigation now uses orange for unfinished setup steps and green for completed steps.
+- Camera Status now shows PTP role warnings, host/Pi network preflight, clearer offline reasons, release/version signals, and Pi update progress.
 - Added a first-install Pi node script and README covering Raspberry Pi Imager naming, PTP roles, service setup, and GUI discovery.
 - Camera Status now has a grouped Pi Admin panel for selected-camera service status, update/rollback, reboot, and shutdown controls.
 - tracking now has a switchable low-marker position acceleration guard that clamps occlusion jumps while keeping replay AB controls

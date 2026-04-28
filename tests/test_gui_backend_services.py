@@ -606,6 +606,13 @@ def test_pi_admin_service_status_and_actions_use_paramiko_client(tmp_path: Path,
     assert status["release"] == "gui-20260427010101"
     assert status["cpu_temp_c"] == 42.1
     assert action["ok"] is True
+    assert any(
+        "tee /etc/systemd/system/loutrack.service" in command
+        and "--tcp-host 0.0.0.0" in command
+        and "--tcp-port 8554" in command
+        and "--mjpeg-port 8555" in command
+        for command in client.commands
+    )
     assert "sudo -n systemctl restart loutrack.service" in client.commands
 
 
@@ -1415,6 +1422,7 @@ def test_gui_workflow_presenter_matches_loutrack_gui_summary(
         "healthy_count": 1,
         "blob_ready_count": 1,
         "mask_ready_count": 2 if scenario == "floor" else 1,
+        "intrinsics_ready_count": 2 if scenario == "floor" else 1,
         "running_count": 0 if scenario == "floor" else 1,
         "preview_enabled_count": 1,
         "preview_active_count": 1,
@@ -1481,6 +1489,7 @@ def test_gui_state_presenter_matches_loutrack_gui_state_payload(tmp_path: Path) 
         "extrinsics_methods": state._generate_extrinsics_registry.to_payload(),
         "last_result": {"tracking_start": {"ok": True, "running": True}},
         "receiver": state.receiver.stats,
+        "network_preflight": state.network_preflight(cameras),
         "tracking": tracking_status,
         "intrinsics_settings": intrinsics_settings,
         "settings_meta": {

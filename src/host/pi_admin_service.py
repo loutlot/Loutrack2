@@ -32,6 +32,10 @@ class PiAdminConfig:
     service_name: str = "loutrack.service"
     remote_user: str = "pi"
     remote_base: str = "/opt/loutrack"
+    tcp_host: str = "0.0.0.0"
+    tcp_port: int = 8554
+    udp_dest: str = "255.255.255.255:5000"
+    mjpeg_port: int = 8555
     release_keep: int = 3
 
     @property
@@ -49,11 +53,13 @@ class PiAdminService:
         *,
         ssh_client_factory: Any | None = None,
         pkey_loader: Any | None = None,
+        progress_callback: Any | None = None,
     ) -> None:
         self.project_root = Path(project_root)
         self.config = config or PiAdminConfig()
         self._ssh_client_factory = ssh_client_factory
         self._pkey_loader = pkey_loader
+        self._progress_callback = progress_callback
 
     def status(self, targets: Iterable[Any]) -> Dict[str, Dict[str, Any]]:
         return {target.camera_id: self._status_one(target) for target in targets}
@@ -84,6 +90,8 @@ class PiAdminService:
             )
             disk = self._run(ssh, "df -h /opt / | tail -n 1", check=False)
             release = self._run(ssh, f"readlink -f {self.config.remote_base}/current 2>/dev/null || true", check=False)
+            ptp_role = self._run(ssh, "cat /etc/linuxptp/loutrack-role 2>/dev/null || true", check=False)
+            timestamping = self._run(ssh, "cat /etc/linuxptp/loutrack-timestamping-mode 2>/dev/null || true", check=False)
             journal = self._run(
                 ssh,
                 f"journalctl -u {self.config.service_name} -n 20 --no-pager 2>/dev/null",
@@ -99,6 +107,8 @@ class PiAdminService:
                 "cpu_temp_c": self._parse_temp_c(temp.stdout),
                 "disk": disk.stdout.strip(),
                 "release": self._release_name(release.stdout.strip()),
+                "ptp_role": ptp_role.stdout.strip(),
+                "timestamping_mode": timestamping.stdout.strip(),
                 "journal_tail": journal.stdout.strip(),
             }
         except Exception as exc:  # noqa: BLE001
@@ -109,9 +119,15 @@ class PiAdminService:
 
     def _action_one(self, target: Any, action: str) -> Dict[str, Any]:
         ssh = None
+        camera_id = str(target.camera_id)
         try:
+            self._emit_progress(camera_id, "connect", "running", "Connecting over SSH")
             ssh = self._connect(str(target.ip))
+            self._emit_progress(camera_id, "connect", "done", "SSH connected")
             if action == "service_start":
+                self._emit_progress(camera_id, "service_install", "running", "Ensuring MJPEG-capable service")
+                self._install_service(ssh, camera_id)
+                self._emit_progress(camera_id, "service_install", "done", "Service unit ready")
                 result = self._run(ssh, f"sudo -n systemctl restart {self.config.service_name}", check=True)
             elif action == "service_stop":
                 result = self._run(ssh, f"sudo -n systemctl stop {self.config.service_name}", check=True)
@@ -120,13 +136,14 @@ class PiAdminService:
             elif action == "shutdown":
                 result = self._run_disconnect_ok(ssh, "sudo -n shutdown -h now")
             elif action == "update":
-                return self._update(ssh, str(target.camera_id))
+                return self._update(ssh, camera_id)
             elif action == "rollback":
                 return self._rollback(ssh)
             else:
                 raise ValueError(f"unsupported pi admin action: {action}")
             return {"ok": True, "action": action, "stdout": result.stdout.strip(), "stderr": result.stderr.strip()}
         except Exception as exc:  # noqa: BLE001
+            self._emit_progress(camera_id, action or "action", "error", str(exc))
             payload = self._error_result(exc)
             payload["action"] = action
             return payload
@@ -138,8 +155,11 @@ class PiAdminService:
         version = time.strftime("gui-%Y%m%d%H%M%S")
         remote_release = posixpath.join(self.config.remote_base, "releases", version)
         remote_src = posixpath.join(remote_release, "src")
+        self._emit_progress(camera_id, "prepare", "running", f"Creating release {version}")
         self._run(ssh, f"sudo -n mkdir -p {shlex.quote(remote_src + '/pi')} {shlex.quote(remote_src + '/camera-calibration')}", check=True)
         self._run(ssh, f"sudo -n chown -R {self.config.remote_user}:{self.config.remote_user} {shlex.quote(self.config.remote_base)}", check=True)
+        self._emit_progress(camera_id, "prepare", "done", f"Release {version} ready")
+        self._emit_progress(camera_id, "upload", "running", "Uploading Pi runtime files")
         sftp = ssh.open_sftp()
         try:
             self._upload_tree(sftp, self.project_root / "src" / "pi", posixpath.join(remote_src, "pi"))
@@ -150,11 +170,21 @@ class PiAdminService:
             )
         finally:
             sftp.close()
+        self._emit_progress(camera_id, "upload", "done", "Upload complete")
+        self._emit_progress(camera_id, "switch", "running", "Switching current release")
         self._run(ssh, f"ln -sfn {shlex.quote(remote_release)} {shlex.quote(posixpath.join(self.config.remote_base, 'current'))}", check=True)
+        self._emit_progress(camera_id, "switch", "done", "Current release switched")
+        self._emit_progress(camera_id, "service_install", "running", "Installing systemd service")
         self._install_service(ssh, camera_id)
+        self._emit_progress(camera_id, "service_install", "done", "Service installed")
+        self._emit_progress(camera_id, "restart", "running", "Restarting Loutrack service")
         self._run(ssh, f"sudo -n systemctl restart {self.config.service_name}", check=True)
+        self._emit_progress(camera_id, "restart", "done", "Service restarted")
+        self._emit_progress(camera_id, "verify", "running", "Verifying service state")
+        active = self._run(ssh, f"systemctl is-active {self.config.service_name}", check=False).stdout.strip()
         self._cleanup_releases(ssh)
-        return {"ok": True, "action": "update", "release": version}
+        self._emit_progress(camera_id, "verify", "done" if active == "active" else "error", f"service={active or 'unknown'}")
+        return {"ok": active == "active", "action": "update", "release": version, "service_active": active}
 
     def _rollback(self, ssh: _SSHLike) -> Dict[str, Any]:
         releases_dir = posixpath.join(self.config.remote_base, "releases")
@@ -166,6 +196,14 @@ class PiAdminService:
         self._run(ssh, f"ln -sfn {shlex.quote(target_release)} {shlex.quote(posixpath.join(self.config.remote_base, 'current'))}", check=True)
         self._run(ssh, f"sudo -n systemctl restart {self.config.service_name}", check=True)
         return {"ok": True, "action": "rollback", "release": previous}
+
+    def _emit_progress(self, camera_id: str, step: str, status: str, message: str) -> None:
+        if self._progress_callback is None:
+            return
+        try:
+            self._progress_callback(camera_id, step, status, message)
+        except Exception:
+            return
 
     def _install_service(self, ssh: _SSHLike, camera_id: str) -> None:
         current = posixpath.join(self.config.remote_base, "current")
@@ -181,7 +219,7 @@ User={self.config.remote_user}
 WorkingDirectory={current}
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=/usr/bin/python3 {remote_src_dir}/pi/service/capture_runtime.py --camera-id {camera_id} --udp-dest 255.255.255.255:5000 --sync-role auto
+ExecStart=/usr/bin/python3 {remote_src_dir}/pi/service/capture_runtime.py --camera-id {camera_id} --tcp-host {self.config.tcp_host} --tcp-port {self.config.tcp_port} --udp-dest {self.config.udp_dest} --mjpeg-port {self.config.mjpeg_port} --sync-role auto
 Restart=always
 RestartSec=5
 

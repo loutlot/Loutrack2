@@ -85,6 +85,8 @@ DEFAULT_WAND_METRIC_LOG_PATH = Path("logs") / "extrinsics_wand_metric.jsonl"
 DEFAULT_EXTRINSICS_OUTPUT_PATH = Path("calibration") / "extrinsics_pose_v2.json"
 DEFAULT_CAPTURE_LOG_DIR = Path("logs")
 DEFAULT_WAND_METRIC_DURATION_S = 1.0
+HOST_GUI_VERSION = "dev"
+HOST_SETTINGS_SCHEMA_VERSION = 2
 STATIC_DIR_CANDIDATES = (
     PROJECT_ROOT / "static",
     MODULE_SRC_ROOT / "static",
@@ -205,7 +207,8 @@ class LoutrackGuiState:
         self._state_presenter = GuiStatePresenter(self)
         self._calibration_config_service = GuiCalibrationConfigService(self)
         self._command_service = GuiCommandService(self)
-        self._pi_admin_service = PiAdminService(PROJECT_ROOT)
+        self._pi_admin_progress: Dict[str, Dict[str, Any]] = {}
+        self._pi_admin_service = PiAdminService(PROJECT_ROOT, progress_callback=self._record_pi_admin_progress)
         self._ensure_settings_file_exists()
         settings_bundle = self._load_settings_bundle()
         ui_payload = settings_bundle.get("ui", {})
@@ -994,9 +997,16 @@ class LoutrackGuiState:
         self.last_result = result
         return result
 
+    def get_pi_admin_progress(self) -> Dict[str, Any]:
+        with self.lock:
+            return {"pi_admin_progress": dict(self._pi_admin_progress)}
+
     def run_pi_admin_action(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         action = str(payload.get("action", "")).strip()
         targets = self._resolve_requested_targets(payload)
+        with self.lock:
+            for target in targets:
+                self._pi_admin_progress[str(target.camera_id)] = {"action": action, "steps": [], "updated_at": time.time()}
         responses = self._pi_admin_service.run_action(targets, action)
         result = {"pi_admin_action": {"action": action, "responses": responses}}
         self._update_camera_admin_status(responses, action)
@@ -1005,6 +1015,55 @@ class LoutrackGuiState:
 
     def generate_extrinsics(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self._extrinsics_service.generate_extrinsics(payload)
+
+    def network_preflight(self, cameras: List[Dict[str, Any]] | None = None) -> Dict[str, Any]:
+        camera_rows = cameras if cameras is not None else list(self.camera_status.values())
+        pi_rows: Dict[str, Dict[str, Any]] = {}
+        for camera in camera_rows:
+            camera_id = str(camera.get("camera_id", ""))
+            diagnostics = camera.get("diagnostics", {}) if isinstance(camera.get("diagnostics"), dict) else {}
+            admin = camera.get("admin", {}) if isinstance(camera.get("admin"), dict) else {}
+            healthy = bool(camera.get("healthy"))
+            preview_error = diagnostics.get("preview_error")
+            pi_rows[camera_id] = {
+                "control_8554": "reachable" if healthy else "unreachable",
+                "mjpeg_8555": "unreachable" if preview_error else ("unknown" if not healthy else "proxied"),
+                "ssh_22": "reachable" if admin.get("ssh_reachable") else ("error" if admin.get("error_code") else "unknown"),
+                "reason": self._camera_offline_reason(camera),
+            }
+        return {
+            "host_gui_version": HOST_GUI_VERSION,
+            "settings_schema_version": HOST_SETTINGS_SCHEMA_VERSION,
+            "host_http": {"host": "127.0.0.1", "port": 8765, "status": "serving"},
+            "host_udp": {
+                "host": getattr(self.receiver, "host", "0.0.0.0"),
+                "port": getattr(self.receiver, "port", 5000),
+                "status": "listening" if getattr(self.receiver, "is_running", False) else "stopped",
+            },
+            "pi": pi_rows,
+        }
+
+    @staticmethod
+    def _camera_offline_reason(camera: Dict[str, Any]) -> str:
+        if bool(camera.get("healthy")):
+            diagnostics = camera.get("diagnostics", {}) if isinstance(camera.get("diagnostics"), dict) else {}
+            clock_sync = diagnostics.get("clock_sync", {}) if isinstance(diagnostics.get("clock_sync"), dict) else {}
+            if clock_sync.get("status") == "degraded":
+                return "PTP not locked"
+            return "OK"
+        admin = camera.get("admin", {}) if isinstance(camera.get("admin"), dict) else {}
+        if admin.get("ssh_reachable") and admin.get("service_active") not in ("active", ""):
+            return "Service stopped"
+        if admin.get("ssh_reachable") and admin.get("service_active") == "active":
+            return "SSH reachable, control port 8554 unreachable"
+        if admin.get("error_code") == "ssh_key_missing":
+            return "SSH key missing"
+        if admin.get("error_code") == "ssh_auth_failed":
+            return "SSH authentication failed"
+        last_error = str(camera.get("last_error") or "")
+        if "timed out" in last_error.lower() or "host is down" in last_error.lower():
+            return "Host unreachable or firewall"
+        return "No control response"
 
     @staticmethod
     def _extract_pose_log_payload(line: str) -> Dict[str, Any] | None:
@@ -1107,6 +1166,18 @@ class LoutrackGuiState:
                     "error": response.get("error") or response.get("error_code"),
                 }
 
+    def _record_pi_admin_progress(self, camera_id: str, step: str, status: str, message: str) -> None:
+        with self.lock:
+            entry = self._pi_admin_progress.setdefault(str(camera_id), {"steps": [], "updated_at": 0.0})
+            steps = entry.setdefault("steps", [])
+            for item in steps:
+                if item.get("step") == step:
+                    item.update({"status": status, "message": message, "updated_at": time.time()})
+                    break
+            else:
+                steps.append({"step": step, "status": status, "message": message, "updated_at": time.time()})
+            entry["updated_at"] = time.time()
+
     def _on_frame_received(self, frame: Any) -> None:
         self._capture_log_service.on_frame_received(frame)
 
@@ -1152,6 +1223,9 @@ class LoutrackGuiHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/state":
             self._send_json(self.state.get_state())
+            return
+        if path == "/api/pi/admin/progress":
+            self._send_json(self.state.get_pi_admin_progress())
             return
         if path == "/api/settings":
             self._send_json(self.state.get_settings())

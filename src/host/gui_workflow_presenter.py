@@ -38,6 +38,19 @@ class GuiWorkflowPresenter:
             for camera in active_cameras
             if str(diagnostics(camera).get("state") or "").upper() in ("READY", "RUNNING")
         )
+        settings_store = getattr(owner, "_settings_store", None)
+        repo_root = getattr(settings_store, "project_root", None)
+        intrinsics_root = (repo_root / "calibration") if repo_root is not None else None
+        intrinsics_ready_count = (
+            sum(
+                1
+                for camera in active_cameras
+                if intrinsics_root is not None
+                and (intrinsics_root / f"calibration_intrinsics_v1_{camera.get('camera_id')}.json").is_file()
+            )
+            if intrinsics_root is not None
+            else 0
+        )
         running_count = sum(
             1 for camera in active_cameras if diagnostics(camera).get("state") == "RUNNING"
         )
@@ -75,6 +88,7 @@ class GuiWorkflowPresenter:
             "healthy_count": healthy_count,
             "blob_ready_count": blob_ready_count,
             "mask_ready_count": mask_ready_count,
+            "intrinsics_ready_count": intrinsics_ready_count,
             "running_count": running_count,
             "preview_enabled_count": preview_enabled_count,
             "preview_active_count": preview_active_count,
