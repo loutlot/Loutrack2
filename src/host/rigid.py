@@ -1598,6 +1598,9 @@ class RigidBodyEstimator:
     
     Integrates clustering, pose estimation, and tracking.
     """
+
+    _MULTI_PATTERN_BOOT_FULL_POINT_LIMIT = 40
+    _MULTI_PATTERN_BOOT_TOP_CANDIDATES = 8
     
     def __init__(
         self,
@@ -1800,6 +1803,96 @@ class RigidBodyEstimator:
                 return None
         self._record_rigid_candidate_separated()
         return pose, score
+
+    def _try_multi_pattern_boot_candidate(
+        self,
+        pattern: MarkerPattern,
+        points_3d: np.ndarray,
+        timestamp: int,
+    ) -> Optional[RigidBodyPose]:
+        """Bootstrap one rigid from a small mixed point cloud when clustering splits markers."""
+        if len(self.patterns) <= 1:
+            return None
+        point_count = int(len(points_3d))
+        if (
+            point_count < pattern.num_markers
+            or point_count > self._MULTI_PATTERN_BOOT_FULL_POINT_LIMIT
+        ):
+            return None
+        reference_signature = self._distance_signature(pattern.marker_positions)
+        distance_matrix = cdist(points_3d, points_3d)
+        edge_indices = tuple(combinations(range(pattern.num_markers), 2))
+        candidate_combos = self._multi_pattern_boot_combos(
+            distance_matrix,
+            pattern,
+            reference_signature,
+        )
+        ranked_combos: List[Tuple[float, Tuple[int, ...]]] = []
+        for combo in candidate_combos:
+            signature = np.sort(
+                np.asarray(
+                    [distance_matrix[combo[i], combo[j]] for i, j in edge_indices],
+                    dtype=np.float64,
+                )
+            )
+            signature_error = float(
+                np.sqrt(np.mean((signature - reference_signature) ** 2))
+            )
+            ranked_combos.append((signature_error, combo))
+        ranked_combos.sort(key=lambda item: item[0])
+
+        best_pose: Optional[RigidBodyPose] = None
+        best_error = float("inf")
+        for _signature_error, combo in ranked_combos[: self._MULTI_PATTERN_BOOT_TOP_CANDIDATES]:
+            pose = self.estimate_pose(points_3d[list(combo)], pattern, timestamp)
+            if pose.valid and pose.rms_error < best_error:
+                best_pose = pose
+                best_error = float(pose.rms_error)
+        if best_pose is not None and best_pose.rms_error <= self.max_rms_error_m:
+            return best_pose
+        return None
+
+    @staticmethod
+    def _distance_signature(points: np.ndarray) -> np.ndarray:
+        arr = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+        distances = [
+            float(np.linalg.norm(arr[i] - arr[j]))
+            for i, j in combinations(range(len(arr)), 2)
+        ]
+        return np.sort(np.asarray(distances, dtype=np.float64))
+
+    def _multi_pattern_boot_combos(
+        self,
+        distance_matrix: np.ndarray,
+        pattern: MarkerPattern,
+        reference_signature: np.ndarray,
+    ) -> List[Tuple[int, ...]]:
+        point_count = int(distance_matrix.shape[0])
+        marker_count = int(pattern.num_markers)
+        if point_count <= 12 or marker_count != 4:
+            return list(combinations(range(point_count), marker_count))
+
+        tolerance = max(0.02, min(0.06, float(self.max_rms_error_m)))
+        min_edge = float(reference_signature[0] - tolerance)
+        max_edge = float(reference_signature[-1] + tolerance)
+        adjacency = [set() for _ in range(point_count)]
+        for i in range(point_count):
+            for j in range(i + 1, point_count):
+                distance = float(distance_matrix[i, j])
+                if min_edge <= distance <= max_edge:
+                    adjacency[i].add(j)
+                    adjacency[j].add(i)
+
+        combos: List[Tuple[int, ...]] = []
+        for a in range(point_count):
+            neighbors_a = {item for item in adjacency[a] if item > a}
+            for b in sorted(neighbors_a):
+                common_ab = {item for item in neighbors_a.intersection(adjacency[b]) if item > b}
+                for c in sorted(common_ab):
+                    common_abc = {item for item in common_ab.intersection(adjacency[c]) if item > c}
+                    for d in sorted(common_abc):
+                        combos.append((a, b, c, d))
+        return combos
 
     def _subset_diagnostics_for_frame(
         self,
@@ -2293,6 +2386,17 @@ class RigidBodyEstimator:
                         best_pose = pose
                         best_error = pose.rms_error
                         best_cluster_idx = idx
+
+            if best_pose is None:
+                boot_pose = self._try_multi_pattern_boot_candidate(
+                    pattern,
+                    points_3d,
+                    timestamp,
+                )
+                if boot_pose is not None:
+                    best_pose = boot_pose
+                    best_error = float(boot_pose.rms_error)
+                    best_cluster_idx = -1
             
             tracker = self.trackers[pattern.name]
             if best_pose is not None:

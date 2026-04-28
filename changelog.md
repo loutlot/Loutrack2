@@ -1,3 +1,5 @@
+- Tracking now bootstraps multiple rigid bodies from mixed blob clouds so `waist` and custom `wand` can both acquire and enter the fast object-gated path even with 32 blobs/camera.
+- Tracking in `static/index.html` now initializes the Three.js viewer before restoring the active view so the first scene is not consumed by the loading placeholder.
 - Intrinsics, Camera Pose Capture, and Floor / Metric in `static/index.html` now have title-level instruction buttons and skippable instruction modals.
 - Floor / Metric result card in `static/index.html` no longer inherits vertical panel spacing while sitting beside capture controls.
 - Floor / Metric capture and result cards in `static/index.html` now share the same grid width and alignment.

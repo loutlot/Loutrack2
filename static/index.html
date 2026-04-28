@@ -4935,6 +4935,7 @@
         reportUiError("load_settings", error);
       }
       syncIntrinsicsMjpegUrl();
+      await initTrackingViewer();
       const initialPage = initialUiState.active_page || "calibration";
       const initialView = initialUiState.active_view || "cameras";
       if (initialPage === "calibration" && initialView) {
@@ -4942,7 +4943,6 @@
       } else {
         setActivePage(initialPage);
       }
-      await initTrackingViewer();
       await safeLoadState();
       setInterval(safeLoadState, 3000);
     })();

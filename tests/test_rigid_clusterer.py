@@ -10,6 +10,7 @@ from scipy.spatial.transform import Rotation
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from host.rigid import (
+    MarkerPattern,
     PointClusterer,
     PositionContinuityGuardConfig,
     PoseContinuityGuardConfig,
@@ -61,6 +62,84 @@ def test_single_pattern_estimator_falls_back_to_full_points_when_80mm_clusters_s
 
     assert pose.valid is True
     assert pose.observed_markers == WAIST_PATTERN.num_markers
+
+
+def test_multi_pattern_boot_finds_rigids_when_marker_clusters_split() -> None:
+    wand_pattern = MarkerPattern(
+        name="wand",
+        marker_positions=np.array(
+            [
+                [-0.16720382613672097, 0.021044859056731813, -0.0003093655967190481],
+                [-0.03215422561435377, -0.101157870515302, 0.0001515195503982332],
+                [0.057345780432333765, -0.006039561048765074, -0.0006549956316947575],
+                [0.14201227131874097, 0.08615257250733527, 0.0008128416780155724],
+            ],
+            dtype=np.float64,
+        ),
+    )
+    waist_offset = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+    wand_offset = np.array([4.0, 5.0, 6.0], dtype=np.float64)
+    mixed_points = np.vstack(
+        [
+            WAIST_PATTERN.marker_positions + waist_offset,
+            wand_pattern.marker_positions + wand_offset,
+        ]
+    )
+    estimator = RigidBodyEstimator(
+        patterns=[WAIST_PATTERN, wand_pattern],
+        cluster_radius_m=0.08,
+        subset_diagnostics_mode="off",
+    )
+
+    poses = estimator.process_points(mixed_points, timestamp=123)
+
+    assert poses["waist"].valid is True
+    assert poses["wand"].valid is True
+    assert poses["waist"].observed_markers == WAIST_PATTERN.num_markers
+    assert poses["wand"].observed_markers == wand_pattern.num_markers
+    assert np.allclose(poses["waist"].position, waist_offset, atol=1e-9)
+    assert np.allclose(poses["wand"].position, wand_offset, atol=1e-9)
+
+
+def test_multi_pattern_boot_finds_rigids_among_32_points() -> None:
+    wand_pattern = MarkerPattern(
+        name="wand",
+        marker_positions=np.array(
+            [
+                [-0.16720382613672097, 0.021044859056731813, -0.0003093655967190481],
+                [-0.03215422561435377, -0.101157870515302, 0.0001515195503982332],
+                [0.057345780432333765, -0.006039561048765074, -0.0006549956316947575],
+                [0.14201227131874097, 0.08615257250733527, 0.0008128416780155724],
+            ],
+            dtype=np.float64,
+        ),
+    )
+    rng = np.random.default_rng(123)
+    noise_points = rng.uniform(-3.0, 3.0, size=(24, 3))
+    noise_points[:, 2] += 8.0
+    waist_offset = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+    wand_offset = np.array([4.0, 5.0, 6.0], dtype=np.float64)
+    mixed_points = np.vstack(
+        [
+            noise_points[:9],
+            WAIST_PATTERN.marker_positions + waist_offset,
+            noise_points[9:17],
+            wand_pattern.marker_positions + wand_offset,
+            noise_points[17:],
+        ]
+    )
+    estimator = RigidBodyEstimator(
+        patterns=[WAIST_PATTERN, wand_pattern],
+        cluster_radius_m=0.08,
+        subset_diagnostics_mode="off",
+    )
+
+    poses = estimator.process_points(mixed_points, timestamp=123)
+
+    assert poses["waist"].valid is True
+    assert poses["wand"].valid is True
+    assert np.allclose(poses["waist"].position, waist_offset, atol=1e-9)
+    assert np.allclose(poses["wand"].position, wand_offset, atol=1e-9)
 
 
 def test_rigid_body_estimator_rejects_pose_over_max_rms(monkeypatch: pytest.MonkeyPatch) -> None:
