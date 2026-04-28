@@ -1,3 +1,10 @@
+- Intrinsics, Camera Pose Capture, and Floor / Metric in `static/index.html` now have title-level instruction buttons and skippable instruction modals.
+- Floor / Metric result card in `static/index.html` no longer inherits vertical panel spacing while sitting beside capture controls.
+- Floor / Metric capture and result cards in `static/index.html` now share the same grid width and alignment.
+- Floor / Metric result card in `static/index.html` now matches the capture card height and typography.
+- Extrinsics and Floor / Metric cards in `static/index.html` now use the same compact panel rhythm as the rest of the GUI.
+- Extrinsics in `static/index.html` now hides developer solver parameters and uses fixed synced-camera defaults behind the Generate action.
+- Sidebar navigation in `static/index.html` now keeps page/view state synchronized when leaving Tracking for calibration pages.
 - Camera Status in `static/index.html` now labels Pi Admin release, CPU, and last-action details explicitly and hides missing values.
 - Pi Admin Start Service now repairs `loutrack.service` with MJPEG `8555` and re-enables the active GUI preview after restart.
 - Floor / Metric in `static/index.html` now shows a result card beside capture controls with saved/capturing/not-captured status.

@@ -159,6 +159,34 @@
       color: var(--ink);
       margin-bottom: 12px;
     }
+    .view-title-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .view-title-row .view-title {
+      margin-bottom: 0;
+    }
+    .instruction-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      height: 24px;
+      padding: 0 8px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #111418;
+      color: var(--ink-soft);
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1;
+    }
+    .instruction-link:hover {
+      border-color: var(--border-strong);
+      color: var(--ink);
+      background: var(--panel-2);
+    }
     .view-sub {
       font-size: 11px;
       color: var(--ink-muted);
@@ -703,9 +731,29 @@
     }
     .instruction-modal-actions {
       display: flex;
-      justify-content: flex-end;
+      justify-content: space-between;
+      align-items: center;
       gap: 8px;
       margin-top: 16px;
+    }
+    .instruction-skip {
+      display: inline-flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 7px;
+      color: var(--ink-muted);
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0;
+      text-transform: none;
+      user-select: none;
+      white-space: nowrap;
+    }
+    .instruction-skip input {
+      flex: 0 0 auto;
+      width: 14px;
+      height: 14px;
+      accent-color: var(--accent);
     }
     @media (max-width: 900px) {
       .instruction-modal-card { grid-template-columns: 1fr; }
@@ -877,6 +925,7 @@
       margin: 0;
       text-align: left;
       padding: 16px;
+      height: 190px;
     }
     .floor-card .panel-title { margin-bottom: 6px; }
     .floor-card p {
@@ -895,24 +944,31 @@
     }
     .floor-workspace {
       display: grid;
-      grid-template-columns: minmax(280px, 520px) minmax(260px, 360px);
+      grid-template-columns: repeat(2, minmax(280px, 520px));
       gap: 12px;
       align-items: stretch;
       margin-top: 10px;
     }
+    .floor-workspace > .panel + .panel {
+      margin-top: 0;
+    }
     .floor-result-card {
-      min-height: 128px;
+      width: min(100%, 520px);
+      max-width: 100%;
+      height: 190px;
       display: flex;
       flex-direction: column;
       gap: 8px;
+      padding: 16px;
     }
     .floor-result-state {
       display: flex;
       align-items: center;
       gap: 8px;
-      font-size: 18px;
-      font-weight: 800;
-      color: var(--ink);
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--ink-soft);
+      line-height: 1.35;
     }
     .floor-result-dot {
       width: 10px;
@@ -927,7 +983,7 @@
     .floor-result-detail {
       color: var(--ink-muted);
       font-size: 12px;
-      line-height: 1.5;
+      line-height: 1.45;
     }
     .floor-result-meta {
       margin-top: auto;
@@ -939,6 +995,26 @@
     }
     @media (max-width: 980px) {
       .floor-workspace { grid-template-columns: 1fr; }
+    }
+    .extrinsics-run-card {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 16px;
+    }
+    .extrinsics-run-copy {
+      color: var(--ink-muted);
+      font-size: 12px;
+      line-height: 1.45;
+      max-width: 520px;
+      margin: 0 0 4px;
+    }
+    .extrinsics-run-note {
+      border-top: 1px solid var(--border);
+      padding-top: 8px;
+      color: var(--ink-soft);
+      font-size: 11px;
+      line-height: 1.45;
     }
 
     /* ── Sidebar section headers ─────────────────────── */
@@ -1242,7 +1318,10 @@
 
       <!-- VIEW: Camera Pose Capture -->
       <div class="view" id="viewPose">
-        <div class="view-title">Camera Pose Capture</div>
+        <div class="view-title-row">
+          <div class="view-title">Camera Pose Capture</div>
+          <button class="instruction-link" type="button" data-instruction-view="pose">? Instruction</button>
+        </div>
         <div class="split" style="flex:1;min-height:0">
           <div class="split-left calib-split-left">
             <div class="panel" style="flex:1;display:flex;flex-direction:column;min-height:0">
@@ -1279,13 +1358,16 @@
 
       <!-- VIEW: Floor / Metric -->
       <div class="view" id="viewFloor">
-        <div class="view-title">Floor / Metric</div>
+        <div class="view-title-row">
+          <div class="view-title">Floor / Metric</div>
+          <button class="instruction-link" type="button" data-instruction-view="floor">? Instruction</button>
+        </div>
         <div class="mjpeg-grid" id="mjpegGridFloor"></div>
         <div class="floor-workspace">
           <div class="panel floor-card">
             <div class="panel-title">Floor / Metric Capture</div>
             <p>
-              Place the wand flat on the floor, then start capture. It will auto-stop.
+              Place the wand flat on the floor, front side up, then start capture. It will auto-stop.
             </p>
             <div class="floor-countdown" id="floorCountdown"></div>
             <div class="btn-row">
@@ -1311,21 +1393,26 @@
         <div class="view-title">Extrinsics Generation</div>
         <div class="split">
           <div class="split-left" style="flex:1.1;overflow-y:auto">
-            <div class="panel">
-              <div class="panel-title">Generation Parameters</div>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 14px">
-                <label>Pair Window (us)<input id="pairWindowUs" type="number" min="1" max="4237" step="1" value="4237"></label>
-                <label>Min Pairs<input id="minPairs" type="number" min="1" step="1" value="8"></label>
-                <label>Wand Pair Window (us)<input id="wandPairWindowUs" type="number" min="1" max="4237" step="1" value="4237"></label>
-                <label>Wand Face Up
-                  <select id="wandFace">
-                    <option value="front_up">Front side up (+X x +Y)</option>
-                    <option value="back_up">Back side up (-(+X x +Y))</option>
-                  </select>
-                </label>
+            <div class="panel extrinsics-run-card">
+              <div class="panel-title">Generate Extrinsics</div>
+              <p class="extrinsics-run-copy">
+                Uses the saved camera pose and floor / metric captures to solve camera positions, floor alignment, and real-world scale.
+              </p>
+              <div class="hidden-compat" aria-hidden="true">
+                <input id="pairWindowUs" type="number" min="1" max="4237" step="1" value="4237">
+                <input id="minPairs" type="number" min="1" step="1" value="8">
+                <input id="wandPairWindowUs" type="number" min="1" max="4237" step="1" value="4237">
+                <select id="wandFace">
+                  <option value="front_up">Front side up (+X x +Y)</option>
+                  <option value="back_up">Back side up (-(+X x +Y))</option>
+                </select>
               </div>
               <div class="btn-row">
-                <button id="generateExtrinsics">Generate Extrinsics</button>
+                <button id="generateExtrinsics" class="btn-teal">Generate Extrinsics</button>
+              </div>
+              <div class="extrinsics-run-note">
+                Sync pairing and minimum-pair solver thresholds are fixed internally for the calibrated camera-sync workflow.
+                Place the wand front side up during Floor / Metric capture.
               </div>
               <div id="extrinsicsValidation" class="validation-summary"></div>
             </div>
@@ -1423,7 +1510,10 @@
 
       <!-- VIEW: Intrinsics (keeps legacy ID pageIntrinsics) -->
       <div class="view" id="pageIntrinsics">
-        <div class="view-title">Intrinsics Calibration</div>
+        <div class="view-title-row">
+          <div class="view-title">Intrinsics Calibration</div>
+          <button class="instruction-link" type="button" data-instruction-view="intrinsics">? Instruction</button>
+        </div>
         <div class="split" style="flex:1;min-height:0">
           <div class="split-left" style="flex:1;display:flex;flex-direction:column;gap:8px;overflow-y:auto">
             <div class="panel">
@@ -1530,6 +1620,10 @@
         <div class="instruction-modal-copy" id="instructionCopy"></div>
         <ol class="instruction-steps" id="instructionSteps"></ol>
         <div class="instruction-modal-actions">
+          <label class="instruction-skip">
+            <input id="instructionSkip" type="checkbox">
+            <span>Do not show this again</span>
+          </label>
           <button id="instructionClose" type="button">Start</button>
         </div>
       </div>
@@ -1714,6 +1808,7 @@
       instructionTitle: document.getElementById("instructionTitle"),
       instructionCopy: document.getElementById("instructionCopy"),
       instructionSteps: document.getElementById("instructionSteps"),
+      instructionSkip: document.getElementById("instructionSkip"),
       instructionClose: document.getElementById("instructionClose"),
     };
     const trackingClientDiagnostics = {
@@ -3220,6 +3315,8 @@
 
     let activeView = "cameras";
     let lastInstructionView = "";
+    let currentInstructionView = "";
+    const INSTRUCTION_SKIP_PREFIX = "loutrack.instruction.skip.";
 
     const INSTRUCTION_CONTENT = {
       intrinsics: {
@@ -3255,10 +3352,10 @@
         title: "Floor / Metric: place the wand flat and keep it still",
         copy: "This step records the floor plane and real-world scale so the extrinsics solver can align the scene to the floor.",
         steps: [
-          ["Place the wand on the floor", "Use the same wand orientation expected by the Wand Face setting in Extrinsics. Keep it flat and fully visible to the cameras."],
+          ["Place the wand on the floor", "Put the wand front side up, keep it flat, and make sure it is fully visible to the cameras."],
           ["Start Capture Floor / Metric", "Press Capture Floor / Metric. The GUI schedules a short synchronized capture and auto-stops after the configured seconds."],
           ["Do not move it", "Leave the wand still during the countdown. Movement or partial visibility makes the metric/floor sample unreliable."],
-          ["Continue to Extrinsics", "After the floor/metric log exists, Generate Extrinsics can use it for scale and floor alignment."],
+          ["Continue to Extrinsics", "After the floor/metric log exists, Generate Extrinsics can use it for scale and floor alignment with the fixed front-side-up convention."],
         ],
       },
     };
@@ -3343,9 +3440,31 @@
     function renderRuntimeHints(settings) {
     }
 
-    function openInstructionModal(viewName) {
+    function instructionSkipKey(viewName) {
+      return `${INSTRUCTION_SKIP_PREFIX}${viewName}`;
+    }
+
+    function shouldSkipInstruction(viewName) {
+      try {
+        return window.localStorage?.getItem(instructionSkipKey(viewName)) === "1";
+      } catch (_) {
+        return false;
+      }
+    }
+
+    function setInstructionSkip(viewName, skip) {
+      if (!viewName) return;
+      try {
+        if (skip) window.localStorage?.setItem(instructionSkipKey(viewName), "1");
+        else window.localStorage?.removeItem(instructionSkipKey(viewName));
+      } catch (_) {}
+    }
+
+    function openInstructionModal(viewName, options = {}) {
       const content = INSTRUCTION_CONTENT[viewName];
       if (!content || !elements.instructionModal) return;
+      if (!options.force && shouldSkipInstruction(viewName)) return;
+      currentInstructionView = viewName;
       if (elements.instructionImage) {
         elements.instructionImage.src = content.image;
         elements.instructionImage.alt = content.alt;
@@ -3358,6 +3477,9 @@
           `<li><strong>${escapeHtml(title)}</strong>${escapeHtml(body)}</li>`
         ).join("");
       }
+      if (elements.instructionSkip) {
+        elements.instructionSkip.checked = shouldSkipInstruction(viewName);
+      }
       elements.instructionModal.classList.add("open");
       elements.instructionModal.setAttribute("aria-hidden", "false");
       elements.instructionClose?.focus();
@@ -3365,8 +3487,10 @@
 
     function closeInstructionModal() {
       if (!elements.instructionModal) return;
+      setInstructionSkip(currentInstructionView, Boolean(elements.instructionSkip?.checked));
       elements.instructionModal.classList.remove("open");
       elements.instructionModal.setAttribute("aria-hidden", "true");
+      currentInstructionView = "";
     }
 
     function renderSettingsMeta(settings) {
@@ -3505,6 +3629,12 @@
       );
       if (target) target.classList.add("active");
       activeView = viewName;
+      activePage = viewName === "tracking" ? "tracking" : viewName === "intrinsics" ? "intrinsics" : "calibration";
+      elements.pageTracking?.classList.toggle("active", viewName === "tracking");
+      elements.pageIntrinsics?.classList.toggle("active", viewName === "intrinsics");
+      elements.tabCalibration?.classList.toggle("active", activePage === "calibration");
+      elements.tabTracking?.classList.toggle("active", activePage === "tracking");
+      elements.tabIntrinsics?.classList.toggle("active", activePage === "intrinsics");
       document.querySelectorAll(".nav-item[data-view]").forEach(item => {
         item.classList.toggle("active", item.dataset.view === viewName);
       });
@@ -3527,7 +3657,7 @@
           if (result) safeLoadState().catch(() => {});
         })
         .catch(() => {});
-      if ((viewName === "intrinsics" || viewName === "pose" || viewName === "floor") && previousView !== viewName && lastInstructionView !== viewName) {
+      if ((viewName === "intrinsics" || viewName === "pose" || viewName === "floor") && previousView !== viewName && lastInstructionView !== viewName && !shouldSkipInstruction(viewName)) {
         lastInstructionView = viewName;
         openInstructionModal(viewName);
       }
@@ -4498,6 +4628,12 @@
 
     elements.instructionClose?.addEventListener("click", () => {
       closeInstructionModal();
+    });
+
+    document.querySelectorAll("[data-instruction-view]").forEach((button) => {
+      button.addEventListener("click", () => {
+        openInstructionModal(button.dataset.instructionView, { force: true });
+      });
     });
 
     elements.instructionModal?.addEventListener("click", (event) => {
