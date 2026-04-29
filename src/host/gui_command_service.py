@@ -18,6 +18,19 @@ class GuiCommandService:
             owner.last_result = result
             return result
 
+        calibration_commands = {
+            "mask_start",
+            "mask_stop",
+            "set_preview",
+            "start",
+            "stop",
+            "start_pose_capture",
+            "stop_pose_capture",
+            "start_wand_metric_capture",
+            "stop_wand_metric_capture",
+        }
+        if command in calibration_commands:
+            owner._assert_calibration_unlocked(command)
         targets = owner._resolve_requested_targets(payload)
         if command in {"mask_start", "start", "start_pose_capture", "start_wand_metric_capture"}:
             owner._ensure_calibration_settings_valid()

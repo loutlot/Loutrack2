@@ -9,7 +9,9 @@
 ただし、最初から巨大な物理シミュレーターにはしない。
 既存の `tests/perf/synthetic_32_blob_benchmark.py`、`tests/test_tracking_replay_harness.py`、
 `src/host/receiver.py` の契約を土台にして、段階的に「合成 2D blob 生成器 + replay 可能な評価器」へ広げる。
-`src/host/sim.py` は現行運用で使っていないため、互換維持よりも multi-rigid 前提での作り直しを優先してよい。
+本アプリの runtime から切り離し、開発用ツールとして `tools/sim/` に置く。
+最初の PDCA は現行 fixture と実ログに合わせて `waist` + `wand` の 2 rigid / 4 marker で回し、吸い込み、reacquire、ownership、118fps を先に固定する。
+その後に 5-marker pattern fixture と 5 rigid scenario へ拡張する。
 
 位置づけは **multi-rigid tracking の風洞**。
 実機の代替ではなく、人間がやりえる高速動作、足組み、左右入れ替え、接近、遮蔽を再現して、アルゴリズム変更の精度と性能を高速に PDCA するための装置にする。
@@ -20,9 +22,14 @@
 
 ### 1.0 目的
 
-目的は、`docs/10_in_progress/rigid_body_design.md` の 5-marker / subset whitelist 方針を前提に、5 rigid bodies を multi camera で安定して追うアルゴリズム最適化の PDCA を高速化すること。
+目的は、まず現行の `waist` + `wand` で multi-rigid occlusion の PDCA を高速化し、その後 `docs/10_in_progress/rigid_body_design.md` の 5-marker / subset whitelist 方針に沿って 5 rigid bodies へ拡張すること。
 
-対象 rigid は以下。
+MVP 対象 rigid は以下。
+
+- `waist`
+- `wand`
+
+拡張対象 rigid は以下。
 
 - `head`
 - `waist`
@@ -30,13 +37,14 @@
 - `left_foot`
 - `right_foot`
 
-それぞれ 5 blobs を持つ前提で、実機で何度も再現するのが難しい動作を synthetic scenario として固定する。
+MVP は現行と同じ 4 marker rigid を扱う。
+5 rigid 版ではそれぞれ 5 blobs を持つ fixture を先に固定し、実機で何度も再現するのが難しい動作を synthetic scenario として固定する。
 特に重要なのは、性能だけを速くするのではなく、精度、所有権、reacquire、flip 耐性を同時に見ながら改善すること。
 
 ### 1.1 主要ゴール
 
-1. 3D 上に 5 rigid bodies x 5 blobs の pattern と human-like trajectory を置く。
-2. `calibration/extrinsics_pose_v2.json` と各 camera intrinsics を使い、4 camera の 2D blob 観測を生成する。
+1. 3D 上に MVP は 2 rigid x 4 blobs、拡張版は 5 rigid bodies x 5 blobs の pattern と human-like trajectory を置く。
+2. `calibration/extrinsics_pose_v2.json` と各 camera intrinsics を使い、2 camera または 4 camera の 2D blob 観測を生成する。
 3. 高速移動、足組み、左右足の接近/入れ替え、身体部位同士の接近、occlusion、missing marker、pixel noise、false blob、camera dropout、timestamp jitter を注入する。
 4. 既存の UDP payload 形式、または replay harness が受け取れる `Frame` / `PairedFrames` 形式へ流す。
 5. ground truth pose と estimator 出力を比較し、pose error / flip / jump / wrong ownership / reacquire / fps を自動集計する。
@@ -45,7 +53,7 @@
 
 ### 1.2 最初に欲しい成果物
 
-- `python -m host.sim` で動く multi-rigid scenario runner。
+- `python -m tools.sim` で動く multi-rigid scenario runner。
 - `tests/sim/` に置く予定の deterministic scenario fixtures。
 - 1 command で `logs/sim/.../summary.json` のような比較結果を出す CLI。
 - GUI や Pi 実機を起動せず、`TrackingPipeline` / `RigidBodyEstimator` の回帰を検出できるテスト。
@@ -72,12 +80,12 @@
 
 ### 3.1 使うもの
 
-- `src/host/sim.py`
-  - 既存実装は single rigid / 2 camera 中心のレガシー扱い。
-  - 使える projection / UDP loopback の考え方は参考にするが、API 互換は必須にしない。
-  - multi-rigid runner を同ファイルへ置き換える。
+- `tools/sim/`
+  - 本アプリ runtime から独立した開発用 simulator package。
+  - 既存 `src/host/sim.py` の projection / UDP loopback の考え方は参考にするが、app package には残さない。
+  - multi-rigid runner と CLI entrypoint をここへ置く。
 - `tests/test_sim_closed_loop.py`
-  - `src/host/sim.py` を作り直すので、現行テストを新しい simulator 契約に合わせて置き換える。
+  - simulator を `tools/sim/` へ移すので、現行テストを新しい simulator 契約に合わせて置き換える。
   - stale な single-rigid 互換テストは残さない。
 - `tests/perf/synthetic_32_blob_benchmark.py`
   - 4 camera / 32 blobs per camera の synthetic benchmark。
@@ -92,11 +100,11 @@
 
 ### 3.2 役割分担
 
-`src/host/sim.py` は使われていないため、互換維持用の薄い wrapper は必須ではない。
-今後の simulation entrypoint は `src/host/sim.py` に固定する。
+`src/host/sim.py` は本アプリの runtime package から外す。
+今後の simulation entrypoint は `tools/sim/` に固定する。
 
 ```text
-src/host/sim.py
+tools/sim/
   multi-rigid scenario runner
   projection / occlusion / UDP loopback
   GT evaluation
@@ -106,7 +114,7 @@ tests/sim/
   regression fixtures
 ```
 
-古い single-rigid API を守るための余分な分岐は置かず、`src/host/sim.py` を multi-rigid 前提で作り直す。
+古い single-rigid API を守るための余分な分岐は置かず、`tools/sim/` を multi-rigid 前提で作る。
 ただし、`Frame` / `PairedFrames` と `pose_capture` UDP payload の外部契約は守る。
 
 ---
@@ -120,7 +128,8 @@ ScenarioConfig
   |
   v
 WorldModel
-  5 rigid x 5 blob patterns
+  MVP: 2 rigid x 4 blob patterns
+  Extended: 5 rigid x 5 blob patterns
   trajectories
   marker GT poses
   |
@@ -175,22 +184,27 @@ class MultiRigidScenarioConfig:
     body_interaction_profile: str
     max_velocity_mps: float
     max_angular_velocity_deg_s: float
+    marker_layout: str
+    camera_rig_source: str
 ```
 
 初期値は以下を想定する。
 
-- `camera_ids`: `pi-cam-01` から `pi-cam-04`
-- `rigid_names`: `head`, `waist`, `chest`, `left_foot`, `right_foot`
+- `camera_ids`: MVP は `pi-cam-01`, `pi-cam-02`。4 camera scenario は `pi-cam-01` から `pi-cam-04`
+- `rigid_names`: MVP は `waist`, `wand`。5 rigid pack は `head`, `waist`, `chest`, `left_foot`, `right_foot`
 - `frames`: `600`
 - `fps`: `118`
 - `false_blobs_per_camera`: `0`, `16`, `32` のプリセット
-- `motion_profile`: `walk`, `fast_step`, `leg_cross`, `feet_swap`, `close_approach`
+- `motion_profile`: `linear`, `occlusion_reacquire`, `walk`, `fast_step`, `leg_cross`, `feet_swap`, `close_approach`
+- `marker_layout`: `current_4marker`, `future_5marker`
+- `camera_rig_source`: `real_2cam`, `generated_4cam_from_1_2_intrinsics`, `dummy`
 
 ### 4.3 Rigid pattern
 
-最初は `calibration/tracking_rigids.json` を読む。
-設計方針は `docs/10_in_progress/rigid_body_design.md` の **5 markers + mode policy + subset whitelist** に合わせる。
-未定義の body がある場合だけ、built-in pattern または deterministic placeholder を使う。
+MVP は現行の `waist` built-in pattern と `calibration/tracking_rigids.json` の `wand` を読む。
+これにより、直近の実ログと同じ 2 rigid / 4 marker 条件で吸い込み対策を PDCA できる。
+5 rigid 版へ進む前に、`docs/10_in_progress/rigid_body_design.md` の **5 markers + mode policy + subset whitelist** に合わせた deterministic 5-marker fixture を追加する。
+5-marker fixture がない状態で 5 rigid / 5 blobs を名乗らない。
 
 重要なのは「5 rigid を同時に置く」こと。単体 tracking が正しくても、混在 blob cloud では以下が起きる。
 
@@ -203,12 +217,14 @@ class MultiRigidScenarioConfig:
 
 ### 4.4 Camera model
 
-projection は実 calibration を優先する。
+projection は scenario の目的に合わせて camera rig source を明示する。
 
-- intrinsics: `calibration/calibration_intrinsics_v1_pi-cam-*.json` に一致する既存 camera、または dummy/generated camera
-- extrinsics: `calibration/extrinsics_pose_v2.json`
+- `real_2cam`: `calibration/calibration_intrinsics_v1_pi-cam-01.json`、`calibration/calibration_intrinsics_v1_pi-cam-02.json`、`calibration/extrinsics_pose_v2.json` を使う。
+- `generated_4cam_from_1_2_intrinsics`: `pi-cam-01` と `pi-cam-02` の intrinsics をコピーして `pi-cam-03` と `pi-cam-04` に割り当て、deterministic generated extrinsics で 4 camera rig を作る。
+- `dummy`: calibration がない CI / unit test 用に deterministic camera rig を作る。
 
-calibration がない CI / unit test では、既存 `create_dummy_calibration()` 互換の deterministic camera rig を使う。
+summary には必ず `camera_rig_source` と `marker_layout` を出す。
+これにより、実 2 camera の回帰、generated 4 camera の負荷、5-marker fixture の評価を混同しない。
 
 ### 4.5 UDP payload
 
@@ -274,6 +290,11 @@ Act:
 - `drop_rate`
 - `reacquire_latency_frames`
 
+GT pose は pattern-local marker positions を body frame とし、scenario trajectory の `R_body_to_world` と `t_body_in_world` を正解にする。
+estimator pose との比較は、同じ marker pattern origin で position error を測る。
+rotation error は `R_est @ R_gt.T` の角度で測り、quaternion は `q` と `-q` を同一姿勢として扱う。
+左右足など identity が意味を持つ rigid は、形状対称性で rotation が曖昧にならない deterministic 5-marker fixture を使う。
+
 ### 5.3 Stability metrics
 
 - `pose_jump_count`
@@ -293,8 +314,10 @@ Act:
 - `left_right_swap_count`
 - `swap_recovery_latency_frames`
 
-ownership 判定には、合成時に各 blob へ hidden metadata を持たせる。
-pipeline へ流す payload には metadata を入れず、evaluator 側だけが `blob_id -> gt_rigid_name / marker_index` を保持する。
+ownership 判定には、合成時に各 emitted blob へ sidecar metadata を持たせる。
+pipeline へ流す payload には metadata を入れず、evaluator 側だけが `(timestamp, camera_id, emitted_blob_index) -> gt_rigid_name / marker_index / synthetic_blob_id` を保持する。
+rigid diagnostics の matched observation / `blob_index` とこの sidecar ledger を突き合わせて、wrong ownership と marker source confusion を集計する。
+pipeline 内で blob 順序が変わる経路を追加した場合は、diagnostics 側に元の `blob_index` が残ることをテスト条件にする。
 
 ### 5.5 Performance metrics
 
@@ -314,28 +337,34 @@ pipeline へ流す payload には metadata を入れず、evaluator 側だけが
 
 ### 6.1 MVP scenarios
 
-1. `single_static_clean`
+1. `single_waist_static_clean`
    - 1 rigid、2 camera、noise なし。
    - simulator 基本動作の sanity check。
-2. `five_static_clean`
-   - 5 rigid x 5 blobs、4 camera、false blob なし。
-   - multi-rigid の基本 ownership を確認。
-3. `five_linear_32_false`
-   - 5 rigid x 5 blobs、4 camera、32 blobs per camera。
+2. `waist_wand_static_clean`
+   - `waist` + `wand`、2 camera、false blob なし。
+   - 現行 tracking fixture で multi-rigid ownership を確認。
+3. `waist_wand_occlusion_reacquire`
+   - `waist` を完全遮蔽し、遮蔽終了後に `wand` 近傍へ吸われないことを確認する。
+   - 直近の実ログ failure を synthetic に固定する最初の本命 scenario。
+4. `waist_wand_linear_32_false`
+   - `waist` + `wand`、2 camera または generated 4 camera、32 blobs per camera。
    - `synthetic_32_blob_benchmark.py` に近い負荷条件。
-4. `five_crossing_occlusion`
+5. `five_static_clean`
+   - 5 rigid x 5 blobs、generated 4 camera、false blob なし。
+   - 5-marker fixture 固定後の multi-rigid 基本 ownership を確認。
+6. `five_crossing_occlusion`
    - 2 body が近距離ですれ違い、一部 marker が遮蔽。
    - wrong ownership と reacquire を狙う。
-5. `five_partial_visibility`
+7. `five_partial_visibility`
    - 3-of-5 / 4-of-5 が混在。
    - subset whitelist / mode policy の評価用。
-6. `five_fast_human_motion`
+8. `five_fast_human_motion`
    - 人間がやりえる高速な上半身/足の movement。
    - prediction gate、velocity limit、pose jump guard の評価用。
-7. `feet_cross_left_right_swap`
+9. `feet_cross_left_right_swap`
    - `left_foot` と `right_foot` が足組みや交差で近接し、見た目の左右が入れ替わる。
    - left/right ownership と recovery latency を評価する。
-8. `body_close_approach`
+10. `body_close_approach`
    - `waist`、`chest`、`head`、feet が短時間近づく。
    - cross-rigid attraction と wrong boot/reacquire を評価する。
 
@@ -359,30 +388,33 @@ pipeline へ流す payload には metadata を入れず、evaluator 側だけが
 目的:
 
 - この文書を実装前の合意点にする。
-- `src/host/sim.py` を作り直してよい方針を固定する。
+- simulator は app runtime ではなく `tools/sim/` に置く方針を固定する。
 
 受入基準:
 
 - ゴール、非ゴール、MVP scenario、評価指標が文書化されている。
+- MVP は `waist` + `wand` / `current_4marker` で PDCA し、その後 `future_5marker` に進む方針が文書化されている。
+- `camera_rig_source`、`marker_layout`、pose convention、ownership sidecar ledger の契約が文書化されている。
 
-### Phase 1 - Multi-rigid in-process generator
+### Phase 1 - Waist + wand in-process generator
 
 目的:
 
-- 5 rigid x 5 blobs / 4 camera の `PairedFrames` を deterministic に生成する。
+- `waist` + `wand` / 2 camera の `PairedFrames` を deterministic に生成する。
 
 実装:
 
-- `src/host/sim.py` を multi-rigid runner として作り直す。
+- `tools/sim/` を multi-rigid runner として作る。
 - `ScenarioConfig`、`WorldModel`、`VirtualCameraRig`、`ObservationSynthesizer` を追加。
-- `calibration/tracking_rigids.json` と `calibration/extrinsics_pose_v2.json` を読む。
-- calibration がない場合は dummy rig に fallback。
+- `waist` built-in pattern、`calibration/tracking_rigids.json` の `wand`、`calibration/extrinsics_pose_v2.json` を読む。
+- `real_2cam` を標準にし、calibration がない場合は `dummy` に fallback。
 
 受入基準:
 
 - 同じ seed の出力が完全に再現する。
-- 1 frame に 5 rigid 分の projected blob が 4 camera へ出る。
+- 1 frame に `waist` + `wand` 分の projected blob が 2 camera へ出る。
 - `tests/sim/` に clean projection の unit test がある。
+- summary に `camera_rig_source: real_2cam` と `marker_layout: current_4marker` が出る。
 
 ### Phase 2 - GT evaluator
 
@@ -393,20 +425,20 @@ pipeline へ流す payload には metadata を入れず、evaluator 側だけが
 実装:
 
 - pose error と ownership metrics を集計。
-- hidden metadata を evaluator 側に保持。
+- sidecar ownership ledger を evaluator 側に保持。
 - `TrackingPipeline` へは通常 payload だけを流す。
 
 受入基準:
 
 - clean scenario で position / rotation error が低い。
-- intentional rigid swap fixture で `wrong_ownership_count` が増える。
+- intentional waist/wand swap fixture で `wrong_ownership_count` が増える。
 - summary が `logs/sim/.../summary.json` に出る。
 
-### Phase 3 - Human motion / occlusion / noise / false blob
+### Phase 3 - Waist + wand occlusion / noise / false blob
 
 目的:
 
-- 人間がやりえる高速動作、足組み、左右入れ替え、遮蔽、吸い込みを合成条件で再現する。
+- 直近の `waist` 完全遮蔽、遮蔽終了、`wand` 近傍への吸い込みを合成条件で再現する。
 
 実装:
 
@@ -416,16 +448,35 @@ pipeline へ流す payload には metadata を入れず、evaluator 側だけが
 - uniform false blobs。
 - adversarial false blobs。
 - timestamp jitter。
-- high-speed human motion。
-- leg crossing / feet swap。
-- close body-part approach。
+- `waist_wand_occlusion_reacquire`。
+- `waist_wand_linear_32_false`。
 
 受入基準:
 
-- `five_crossing_occlusion` で wrong ownership / reacquire の差分が観測できる。
+- `waist_wand_occlusion_reacquire` で wrong ownership / reacquire の差分が観測できる。
 - seed を変えた regression pack を複数回しても summary schema が安定する。
 
-### Phase 4 - UDP loopback compatibility
+### Phase 4 - Generated 4 camera and 5-marker fixture
+
+目的:
+
+- 2 rigid PDCA の基盤を維持したまま、5 rigid / 5 marker へ進む準備をする。
+
+実装:
+
+- `generated_4cam_from_1_2_intrinsics` を追加する。
+- `pi-cam-01` と `pi-cam-02` の intrinsics をコピーし、`pi-cam-03` と `pi-cam-04` に割り当てる。
+- deterministic generated extrinsics で 4 camera rig を作る。
+- 5 rigid 用の deterministic 5-marker fixture を追加する。
+- high-speed human motion、leg crossing、feet swap、close body-part approach を追加する。
+
+受入基準:
+
+- 1 frame に 5 rigid x 5 marker 分の projected blob が generated 4 camera へ出る。
+- summary に `camera_rig_source: generated_4cam_from_1_2_intrinsics` と `marker_layout: future_5marker` が出る。
+- clean 5-marker scenario で wrong ownership が 0 になる。
+
+### Phase 5 - UDP loopback compatibility
 
 目的:
 
@@ -442,7 +493,7 @@ pipeline へ流す payload には metadata を入れず、evaluator 側だけが
 - UDP mode で `TrackingPipeline` が frame を受け、pairing される。
 - payload key が `src/pi/service/capture_runtime.py` の現行 `pose_capture` と揃っている。
 
-### Phase 5 - AB regression runner
+### Phase 6 - AB regression runner
 
 目的:
 
@@ -465,34 +516,36 @@ pipeline へ流す payload には metadata を入れず、evaluator 側だけが
 ## 8. CLI 案
 
 ```bash
-python -m host.sim \
-  --scenario five_crossing_occlusion \
+python -m tools.sim \
+  --scenario waist_wand_occlusion_reacquire \
   --frames 600 \
   --fps 118 \
   --calibration calibration \
   --rigids calibration/tracking_rigids.json \
+  --marker-layout current_4marker \
+  --camera-rig-source real_2cam \
   --mode inprocess \
-  --out logs/sim/five_crossing_occlusion
+  --out logs/sim/waist_wand_occlusion_reacquire
 ```
 
 AB 比較:
 
 ```bash
-python -m host.sim \
-  --scenario-pack multi_rigid_occlusion_v1 \
+python -m tools.sim \
+  --scenario-pack waist_wand_occlusion_v1 \
   --variant baseline \
   --variant fast_ABCDHRF \
-  --out logs/sim/ab_multi_rigid_occlusion_v1
+  --out logs/sim/ab_waist_wand_occlusion_v1
 ```
 
 UDP loopback:
 
 ```bash
-python -m host.sim \
-  --scenario five_linear_32_false \
+python -m tools.sim \
+  --scenario waist_wand_linear_32_false \
   --mode udp \
   --udp-port 5000 \
-  --out logs/sim/five_linear_32_false_udp
+  --out logs/sim/waist_wand_linear_32_false_udp
 ```
 
 ---
@@ -519,9 +572,16 @@ human-motion scenarios:
   swap_recovery_latency_frames <= baseline
   reacquire_latency_frames <= baseline
   pipeline_pair_ms.p95 <= baseline * 1.25
+
+production performance:
+  pipeline_pair_ms.p95 <= 6.0
+  no sustained frames over 8.475ms
+  rigid_ms.p95 <= 1.5
 ```
 
-threshold は固定値だけでなく baseline comparison を使う。遮蔽 scenario は絶対値より「前より悪化していないか」を重視する。
+threshold は固定値だけでなく baseline comparison を使う。
+ただし、production performance は 118fps の絶対条件なので、baseline comparison とは別の go/no-go とする。
+遮蔽 scenario は絶対値より「前より悪化していないか」を重視する。
 
 ---
 
@@ -534,8 +594,8 @@ threshold は固定値だけでなく baseline comparison を使う。遮蔽 sce
 3. stale な simulator API を温存しない。
    - `tests/test_sim_closed_loop.py` は新しい multi-rigid 契約に合わせて更新する。
    - 似た目的の旧テストと新テストを重複させず、必要なら統合する。
-4. 実 calibration を使う mode と dummy calibration mode を分ける。
-   - CI 的な軽いテストは dummy、実運用に近い探索は `calibration/` を使う。
+4. 実 calibration、generated 4 camera、dummy calibration mode を分ける。
+   - CI 的な軽いテストは dummy、実運用に近い探索は `real_2cam`、4 camera 負荷探索は `generated_4cam_from_1_2_intrinsics` を使う。
 5. 重い scenario pack は unit test に入れない。
    - unit は短く deterministic。
    - perf / regression は opt-in CLI にする。
@@ -546,15 +606,17 @@ threshold は固定値だけでなく baseline comparison を使う。遮蔽 sce
 
 ## 11. 最小実装のタスク分解
 
-1. `src/host/sim.py` に `ScenarioConfig` と 5 rigid projection を追加。
-2. `tests/sim/` を作り、clean 1-frame projection test を追加。
+1. `tools/sim/` に `ScenarioConfig` と `waist` + `wand` projection を追加。
+2. `tests/sim/` を作り、`waist_wand_static_clean` の 1-frame projection test を追加。
 3. in-process runner で `PairedFrames` を `TrackingPipeline._on_paired_frames()` に流す。
 4. GT evaluator で pose error と valid/drop を集計。
-5. hidden blob ownership metadata から wrong ownership を集計。
-6. high-speed human motion、足組み、left/right swap、close approach preset を追加。
-7. occlusion / false blob preset を追加。
-8. UDP loopback mode を追加。
-9. scenario pack AB runner を追加。
+5. sidecar ownership ledger から wrong ownership を集計。
+6. `waist_wand_occlusion_reacquire` と `waist_wand_linear_32_false` preset を追加。
+7. scenario pack AB runner と production performance go/no-go を追加。
+8. `generated_4cam_from_1_2_intrinsics` を追加。
+9. 5-marker fixture と 5 rigid projection を追加。
+10. high-speed human motion、足組み、left/right swap、close approach preset を追加。
+11. UDP loopback mode を追加。
 
 ---
 
@@ -564,13 +626,14 @@ threshold は固定値だけでなく baseline comparison を使う。遮蔽 sce
 
 ただし、価値が出る順番は明確にする。
 
-1. deterministic multi-rigid projection。
+1. deterministic `waist` + `wand` projection。
 2. GT evaluator。
-3. human-like motion scenario。
-4. occlusion / false blob。
-5. left/right swap and close-approach scenario。
-6. UDP loopback。
-7. AB regression。
-8. parameter sweep / optimization。
+3. `waist_wand_occlusion_reacquire` と false blob。
+4. AB regression with 118fps go/no-go。
+5. generated 4 camera from copied `pi-cam-01` / `pi-cam-02` intrinsics。
+6. deterministic 5-marker fixture。
+7. left/right swap and close-approach scenario。
+8. UDP loopback。
+9. parameter sweep / optimization。
 
 この順で進めれば、初期実装は小さく、かつ現在の rigid stabilization 作業へすぐ効く。

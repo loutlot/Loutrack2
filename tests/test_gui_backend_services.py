@@ -560,6 +560,33 @@ def test_gui_command_service_dispatches_mask_commands_with_expected_validation(t
     assert state.session.broadcast_history[-1]["kwargs"] == {}
 
 
+@pytest.mark.parametrize(
+    "command",
+    ["mask_start", "mask_stop", "set_preview", "start_pose_capture", "stop_pose_capture", "start_wand_metric_capture"],
+)
+def test_gui_command_service_blocks_calibration_commands_while_tracking(tmp_path: Path, command: str) -> None:
+    runtime = _TrackingRuntime()
+    runtime.running = True
+    state = _build_state(tmp_path, runtime=runtime)
+    service = GuiCommandService(state)
+
+    with pytest.raises(ValueError, match="blocked while tracking is running"):
+        service.run_command({"command": command, "camera_ids": ["pi-cam-01"]})
+
+    assert state.session.broadcast_history == []
+
+
+def test_gui_config_service_blocks_apply_config_while_tracking(tmp_path: Path) -> None:
+    runtime = _TrackingRuntime()
+    runtime.running = True
+    state = _build_state(tmp_path, runtime=runtime)
+
+    with pytest.raises(ValueError, match="calibration config blocked while tracking is running"):
+        state.apply_config({"camera_ids": ["pi-cam-01"], "threshold": 180})
+
+    assert state.session.broadcast_history == []
+
+
 def test_pi_admin_service_status_and_actions_use_paramiko_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     key_path = tmp_path / "loutrack_deploy_key"
     key_path.write_text("fake-key", encoding="utf-8")
@@ -986,6 +1013,21 @@ def test_gui_intrinsics_service_rejects_missing_capability(tmp_path: Path) -> No
         state._intrinsics_service.start_intrinsics_capture({})
 
 
+def test_gui_intrinsics_service_blocks_mutating_actions_while_tracking(tmp_path: Path) -> None:
+    runtime = _TrackingRuntime()
+    runtime.running = True
+    state = _build_state(tmp_path, runtime=runtime)
+
+    with pytest.raises(ValueError, match="intrinsics capture blocked while tracking is running"):
+        state._intrinsics_service.start_intrinsics_capture({})
+    with pytest.raises(ValueError, match="intrinsics clear blocked while tracking is running"):
+        state._intrinsics_service.clear_intrinsics_frames()
+    with pytest.raises(ValueError, match="intrinsics calibration blocked while tracking is running"):
+        state._intrinsics_service.trigger_intrinsics_calibration()
+
+    assert state._intrinsics_host_session is None
+
+
 def test_gui_intrinsics_service_builds_session_and_merges_remote_status(tmp_path: Path) -> None:
     state = _build_state(tmp_path)
     state.apply_settings_draft(
@@ -1080,6 +1122,15 @@ def test_gui_extrinsics_service_reports_missing_pose_log_and_solver_failure(tmp_
 
     assert failed["generate_extrinsics"]["ok"] is False
     assert failed["generate_extrinsics"]["pose_log_summary"]["usable_camera_count"] == 1
+
+
+def test_gui_extrinsics_service_blocks_generation_while_tracking(tmp_path: Path) -> None:
+    runtime = _TrackingRuntime()
+    runtime.running = True
+    state = _build_state(tmp_path, runtime=runtime)
+
+    with pytest.raises(ValueError, match="extrinsics generation blocked while tracking is running"):
+        state._extrinsics_service.generate_extrinsics({})
 
 
 def test_gui_extrinsics_service_returns_quality_summary_on_success(tmp_path: Path, monkeypatch) -> None:

@@ -742,6 +742,17 @@ class LoutrackGuiState:
     def start_tracking(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self._tracking_service.start_tracking(payload)
 
+    def _tracking_is_running(self) -> bool:
+        try:
+            status = self.tracking_runtime.status()
+        except Exception:
+            return False
+        return bool(status.get("running", False)) if isinstance(status, dict) else False
+
+    def _assert_calibration_unlocked(self, action: str = "calibration operation") -> None:
+        if self._tracking_is_running():
+            raise ValueError(f"{action} blocked while tracking is running")
+
     @staticmethod
     def _all_acked_or_already_running(result: Dict[str, Any]) -> bool:
         for response in result.values():

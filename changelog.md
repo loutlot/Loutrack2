@@ -1,4 +1,8 @@
-- Added `docs/10_in_progress/multi_rigid_simulator_plan.md` with PDCA goals, human-motion scenarios, regression metrics, and `src/host/sim.py` as the fixed entrypoint for a 5-rigid, 5-blob, 4-camera simulator.
+- `AGENTS.md` now points simulator work to `tools/sim/` and `docs/40_tools/multi_rigid_simulator.md`.
+- `tools/sim` now hosts the waist+wand 4-marker simulator with sidecar blob ownership metadata, scenario summaries, and generated 4-camera intrinsics-copy support.
+- `tests/sim` and `tests/test_sim_closed_loop.py` now cover waist+wand projection, sidecar ownership metadata, scenario CLI output, and legacy closed-loop metrics.
+- `static/index.html` and host GUI services now block calibration controls and API mutations while tracking is running.
+- Added `docs/10_in_progress/multi_rigid_simulator_plan.md` with a staged waist+wand simulator PDCA plan before generated 4-camera and 5-marker expansion.
 - `src/host/rigid.py` now applies strict 2D recovery checks to previously tracked LOST/BOOT rigid candidates so unscored generic recovery cannot move tracker state toward another rigid.
 - `static/index.html` now starts GUI tracking with reacquire guard enforcement enabled alongside object gating and continuity guards.
 - `src/host/rigid.py` now resolves multi-rigid pose candidates frame-locally before tracker commit, keeps large-innovation reacquire candidates pending, and skips unowned BOOT generic fallback to avoid cross-rigid attraction.

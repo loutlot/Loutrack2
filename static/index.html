@@ -1753,6 +1753,7 @@
       intStop: document.getElementById("intStop"),
       intClear: document.getElementById("intClear"),
       intCalibrate: document.getElementById("intCalibrate"),
+      intApplyCamera: document.getElementById("intApplyCamera"),
       calibrationValidation: document.getElementById("calibrationValidation"),
       intrinsicsValidation: document.getElementById("intrinsicsValidation"),
       extrinsicsValidation: document.getElementById("extrinsicsValidation"),
@@ -2588,6 +2589,38 @@
     let controlsUpdateContext = "controls";
     let controlsUpdateTargetMode = "selected";
     const controlState = { ...CONTROL_DEFAULTS };
+    const CALIBRATION_LOCK_TITLE = "Tracking is running. Stop tracking before calibration operations.";
+    const CALIBRATION_ACTION_ELEMENT_IDS = [
+      "applyConfig",
+      "captureWandMetric",
+      "generateExtrinsics",
+      "intStart",
+      "intStop",
+      "intClear",
+      "intCalibrate",
+      "intApplyCamera",
+    ];
+    const CALIBRATION_INPUT_ELEMENT_IDS = [
+      "exposure",
+      "gain",
+      "threshold",
+      "blobMin",
+      "blobMax",
+      "maskThreshold",
+      "maskSeconds",
+      "intExposure",
+      "intGain",
+      "intSquareMm",
+      "intMarkerMm",
+      "intSquaresX",
+      "intSquaresY",
+      "intMinFrames",
+      "intCooldown",
+      "pairWindowUs",
+      "wandPairWindowUs",
+      "minPairs",
+      "wandFace",
+    ];
     const FIELD_INPUT_IDS = {
       calibration: {
         exposure_us: ["exposure", "intExposure"],
@@ -2619,6 +2652,49 @@
     function reportUiError(context, error) {
       const message = error instanceof Error ? error.message : String(error);
       showStatus(`Failed: ${context}: ${message}`, "error");
+    }
+
+    function trackingRunningForCalibrationLock() {
+      return Boolean(latestTrackingStatus?.running || latestAppState?.tracking?.running);
+    }
+
+    function setCalibrationLockState(element, locked, fallbackDisabled = false) {
+      if (!element) return;
+      element.disabled = Boolean(locked || fallbackDisabled);
+      if (locked) {
+        element.title = CALIBRATION_LOCK_TITLE;
+      } else if (element.title === CALIBRATION_LOCK_TITLE) {
+        element.title = "";
+      }
+    }
+
+    function renderCalibrationOperationLock() {
+      const locked = trackingRunningForCalibrationLock();
+      if (locked && controlsUpdateTimer) {
+        clearTimeout(controlsUpdateTimer);
+        controlsUpdateTimer = null;
+      }
+      CALIBRATION_ACTION_ELEMENT_IDS.forEach((id) => {
+        setCalibrationLockState(elements[id], locked, Boolean(elements[id]?.dataset?.validationDisabled === "true"));
+      });
+      CALIBRATION_INPUT_ELEMENT_IDS.forEach((id) => {
+        setCalibrationLockState(elements[id], locked);
+      });
+      document.querySelectorAll("[data-command]").forEach((button) => {
+        const command = button.dataset.command || "";
+        if (["mask_start", "mask_stop", "start", "stop"].includes(command)) {
+          setCalibrationLockState(button, locked);
+        }
+      });
+      if (locked && elements.intrinsicsValidation) {
+        elements.intrinsicsValidation.textContent = CALIBRATION_LOCK_TITLE;
+      }
+      if (locked && elements.calibrationValidation) {
+        elements.calibrationValidation.textContent = CALIBRATION_LOCK_TITLE;
+      }
+      if (locked && elements.extrinsicsValidation) {
+        elements.extrinsicsValidation.textContent = CALIBRATION_LOCK_TITLE;
+      }
     }
 
     async function initTrackingViewer() {
@@ -3488,6 +3564,9 @@
     function applyPreviewForView(viewName = activeView) {
       const requestPayload = previewRequestForView(viewName);
       if (!requestPayload) return Promise.resolve(null);
+      if (trackingRunningForCalibrationLock()) {
+        return Promise.resolve(null);
+      }
       return postJson("/api/command", requestPayload);
     }
 
@@ -3595,17 +3674,22 @@
       const intrinsicsValid = Object.keys(validation.intrinsics || {}).length === 0;
       const extrinsicsValid = Object.keys(validation.extrinsics || {}).length === 0;
       if (elements.applyConfig) {
+        elements.applyConfig.dataset.validationDisabled = String(!calibrationValid);
         elements.applyConfig.disabled = !calibrationValid;
       }
       if (elements.intStart) {
+        elements.intStart.dataset.validationDisabled = String(!intrinsicsValid);
         elements.intStart.disabled = !intrinsicsValid;
       }
       if (elements.intCalibrate) {
+        elements.intCalibrate.dataset.validationDisabled = String(!intrinsicsValid);
         elements.intCalibrate.disabled = !intrinsicsValid;
       }
       if (elements.generateExtrinsics) {
+        elements.generateExtrinsics.dataset.validationDisabled = String(!extrinsicsValid);
         elements.generateExtrinsics.disabled = !extrinsicsValid;
       }
+      renderCalibrationOperationLock();
     }
 
     function mergeSettingsMetaFromState(meta) {
@@ -4082,6 +4166,11 @@
       const status = await statusResponse.json();
       const scene = includeScene && sceneResponse ? await sceneResponse.json() : latestTrackingScene;
       latestTrackingStatus = status;
+      if (settingsSnapshot) {
+        renderSettingsMeta(settingsSnapshot);
+      } else {
+        renderCalibrationOperationLock();
+      }
       if (status.running) {
         trackingUiState = { phase: "idle", error: "" };
       } else if (trackingUiState.phase === "starting") {
@@ -4370,6 +4459,10 @@
     }
 
     async function flushControlUpdates(context, targetMode) {
+      if (trackingRunningForCalibrationLock()) {
+        renderCalibrationOperationLock();
+        return;
+      }
       try {
         await postJson("/api/config", configPayload(cameraIdsForTargetMode(targetMode)));
       } catch (error) {
@@ -4379,6 +4472,10 @@
     }
 
     function queueControlUpdates(context, targetMode) {
+      if (trackingRunningForCalibrationLock()) {
+        renderCalibrationOperationLock();
+        return;
+      }
       controlsUpdateContext = context;
       controlsUpdateTargetMode = targetMode;
       if (controlsUpdateTimer) {

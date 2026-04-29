@@ -14,6 +14,7 @@ class GuiIntrinsicsService:
 
     def start_intrinsics_capture(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         owner = self._owner
+        owner._assert_calibration_unlocked("intrinsics capture")
         bundle = owner._load_settings_bundle()
         if payload:
             intrinsics_patch = {
@@ -63,12 +64,14 @@ class GuiIntrinsicsService:
 
     def clear_intrinsics_frames(self) -> Dict[str, Any]:
         owner = self._owner
+        owner._assert_calibration_unlocked("intrinsics clear")
         if owner._intrinsics_host_session is None:
             raise ValueError("No intrinsics capture session active")
         owner._intrinsics_host_session.clear()
         return {"ok": True, "status": self.get_intrinsics_status()}
 
     def trigger_intrinsics_calibration(self) -> Dict[str, Any]:
+        self._owner._assert_calibration_unlocked("intrinsics calibration")
         session = self._ensure_intrinsics_host_session_from_settings()
         session.trigger_calibration()
         return {"ok": True, "status": session.get_status()}

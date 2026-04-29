@@ -11,6 +11,7 @@ class GuiCalibrationConfigService:
 
     def apply_config(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         owner = self._owner
+        owner._assert_calibration_unlocked("calibration config")
         targets = owner._resolve_requested_targets(payload)
         bundle = owner._load_settings_bundle()
         calibration = bundle.get("calibration", {})

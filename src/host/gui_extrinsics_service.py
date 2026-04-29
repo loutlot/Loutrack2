@@ -18,6 +18,7 @@ class GuiExtrinsicsService:
 
     def generate_extrinsics(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         owner = self._owner
+        owner._assert_calibration_unlocked("extrinsics generation")
         bundle = owner._load_settings_bundle()
         if payload:
             extrinsics_patch = {
