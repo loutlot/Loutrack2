@@ -11,6 +11,7 @@ Provides functionality to:
 import queue
 import socket
 import json
+import sys
 import threading
 import time
 from typing import Optional, Dict, Any, List, Callable
@@ -70,6 +71,15 @@ class Frame:
         if self.capture_to_send_ms is not None:
             payload["capture_to_send_ms"] = self.capture_to_send_ms
         return payload
+
+
+@dataclass
+class RawFrameDatagram:
+    """Raw UDP datagram captured with host receive timing."""
+    data: bytes
+    addr: tuple
+    received_at: float
+    host_received_at_us: int
 
 
 @dataclass
@@ -494,10 +504,12 @@ class UDPReceiver:
 
     # Maximum single UDP datagram we'll accept (64 KiB covers any JSON blob payload)
     _RECV_BYTES: int = 65536
-    # Kernel socket receive buffer (8 MiB).
-    # At 118 fps × 6 cameras × ~600 B/frame ≈ 425 KB/s steady-state; the enlarged
-    # kernel buffer absorbs multi-second bursts while the processing thread catches up.
-    _KERNEL_RECV_BUF: int = 8 * 1024 * 1024
+    # Kernel socket receive buffer. Live tracking must prefer fresh frames over
+    # preserving a multi-second UDP backlog; a large kernel buffer makes the GUI
+    # render old poses when the host drains slightly slower than the cameras send.
+    _KERNEL_RECV_BUF: int = 128 * 1024
+    _MAX_DRAIN_DATAGRAMS_PER_PASS: int = 512
+    _MAX_ENQUEUE_DATAGRAMS_PER_PASS: int = 16
 
     def __init__(
         self,
@@ -522,6 +534,7 @@ class UDPReceiver:
         self._thread: Optional[threading.Thread] = None
         
         self._frame_callback: Optional[Callable[[Frame], None]] = None
+        self._datagram_callback: Optional[Callable[[RawFrameDatagram], None]] = None
         self._error_callback: Optional[Callable[[Exception], None]] = None
         
         # Camera discovery
@@ -531,10 +544,15 @@ class UDPReceiver:
         self._frames_received = 0
         self._bytes_received = 0
         self._errors = 0
+        self._datagrams_dropped_for_freshness = 0
     
     def set_frame_callback(self, callback: Callable[[Frame], None]) -> None:
         """Set callback for received frames."""
         self._frame_callback = callback
+
+    def set_datagram_callback(self, callback: Callable[[RawFrameDatagram], None]) -> None:
+        """Set callback for raw datagrams captured by the UDP thread."""
+        self._datagram_callback = callback
     
     def set_error_callback(self, callback: Callable[[Exception], None]) -> None:
         """Set callback for errors."""
@@ -572,7 +590,40 @@ class UDPReceiver:
         while self._running:
             try:
                 data, addr = self._socket.recvfrom(self._RECV_BYTES)
+                if self._datagram_callback:
+                    datagrams = [(data, addr)]
+                    try:
+                        self._socket.setblocking(False)
+                        for _ in range(self._MAX_DRAIN_DATAGRAMS_PER_PASS - 1):
+                            try:
+                                datagrams.append(self._socket.recvfrom(self._RECV_BYTES))
+                            except (BlockingIOError, InterruptedError):
+                                break
+                    finally:
+                        self._socket.settimeout(1.0)
+                    dropped = max(0, len(datagrams) - self._MAX_ENQUEUE_DATAGRAMS_PER_PASS)
+                    if dropped:
+                        self._datagrams_dropped_for_freshness += dropped
+                        datagrams = datagrams[-self._MAX_ENQUEUE_DATAGRAMS_PER_PASS:]
+                    for item_data, item_addr in datagrams:
+                        self._bytes_received += len(item_data)
+                        host_received_at = time.time()
+                        host_received_at_us = int(host_received_at * 1_000_000)
+                        self._frames_received += 1
+                        self._datagram_callback(
+                            RawFrameDatagram(
+                                data=item_data,
+                                addr=item_addr,
+                                received_at=host_received_at,
+                                host_received_at_us=host_received_at_us,
+                            )
+                        )
+                    continue
+
                 self._bytes_received += len(data)
+                host_received_at = time.time()
+                host_received_at_us = int(host_received_at * 1_000_000)
+                self._frames_received += 1
 
                 # Parse JSON (uses orjson if available for ~5-10x speedup)
                 try:
@@ -589,8 +640,6 @@ class UDPReceiver:
                     self._errors += 1
                     continue
 
-                host_received_at = time.time()
-                host_received_at_us = int(host_received_at * 1_000_000)
                 frame_index = msg.get("frame_index")
                 
                 # Create Frame object
@@ -612,9 +661,6 @@ class UDPReceiver:
                 # Record camera address
                 self._camera_addresses[frame.camera_id] = addr
                 
-                # Increment counter
-                self._frames_received += 1
-                
                 # Call callback
                 if self._frame_callback:
                     self._frame_callback(frame)
@@ -627,6 +673,16 @@ class UDPReceiver:
                 self._errors += 1
                 if self._error_callback:
                     self._error_callback(e)
+
+    def record_datagram_error(self, error: Exception) -> None:
+        """Record an error raised while parsing a raw datagram off-thread."""
+        self._errors += 1
+        if self._error_callback:
+            self._error_callback(error)
+
+    def record_camera_address(self, camera_id: str, addr: tuple) -> None:
+        """Record the sender address for a parsed raw datagram."""
+        self._camera_addresses[camera_id] = addr
     
     def get_camera_address(self, camera_id: str) -> Optional[tuple]:
         """Get the (ip, port) for a camera."""
@@ -647,6 +703,7 @@ class UDPReceiver:
             "frames_received": self._frames_received,
             "bytes_received": self._bytes_received,
             "errors": self._errors,
+            "datagrams_dropped_for_freshness": self._datagrams_dropped_for_freshness,
             "cameras_discovered": len(self._camera_addresses)
         }
 
@@ -697,9 +754,9 @@ class FrameProcessor:
         self._pair_host_receive_span_ms: deque[float] = deque(maxlen=120)
         self._cleanup_old_frames_dropped = 0
 
-        # Raw frame queue: UDP receive thread only enqueues; a dedicated processing
-        # thread drains it.  This keeps recvfrom() latency-free regardless of how
-        # long triangulation takes.  None is used as a stop sentinel.
+        # Raw datagram/frame queue: UDP receive thread only enqueues; a dedicated
+        # processing thread parses and pairs. This keeps recvfrom() latency-free
+        # regardless of JSON parsing or triangulation cost. None is a stop sentinel.
         self._raw_queue: queue.Queue = queue.Queue()
         self._processing_thread: Optional[threading.Thread] = None
     
@@ -709,6 +766,8 @@ class FrameProcessor:
 
     def start(self) -> None:
         """Start the frame processor."""
+        if sys.getswitchinterval() > 0.001:
+            sys.setswitchinterval(0.001)
         # Processing thread must be running before the receiver so the queue is
         # drained from the moment the first frame arrives.
         self._processing_thread = threading.Thread(
@@ -717,8 +776,9 @@ class FrameProcessor:
             name="FrameProcessor-processing",
         )
         self._processing_thread.start()
-        # UDP receive thread only enqueues frames; it never blocks on processing.
-        self.receiver.set_frame_callback(self._enqueue_frame)
+        # UDP receive thread only enqueues datagrams; it never parses JSON or
+        # blocks on processing.
+        self.receiver.set_datagram_callback(self._enqueue_datagram)
         self.receiver.start()
 
     def stop(self) -> None:
@@ -734,13 +794,51 @@ class FrameProcessor:
         """Enqueue a frame from the UDP receive thread — O(1), never blocks."""
         self._raw_queue.put(frame)
 
+    def _enqueue_datagram(self, datagram: RawFrameDatagram) -> None:
+        """Enqueue a raw datagram from the UDP receive thread — O(1), never blocks."""
+        self._raw_queue.put(datagram)
+
     def _processing_loop(self) -> None:
         """Drain the raw-frame queue on a dedicated thread."""
         while True:
-            frame = self._raw_queue.get()
-            if frame is None:  # stop sentinel
+            item = self._raw_queue.get()
+            if item is None:  # stop sentinel
                 break
+            if isinstance(item, RawFrameDatagram):
+                frame = self._frame_from_datagram(item)
+                if frame is None:
+                    continue
+            else:
+                frame = item
             self._on_frame_received(frame)
+
+    def _frame_from_datagram(self, datagram: RawFrameDatagram) -> Optional[Frame]:
+        """Parse a raw UDP datagram into a Frame on the processing thread."""
+        try:
+            msg = _parse_json(datagram.data)
+            required = ['camera_id', 'timestamp', 'blobs']
+            if not all(k in msg for k in required):
+                raise KeyError("missing required frame field")
+            frame_index = msg.get("frame_index")
+            frame = Frame(
+                camera_id=msg['camera_id'],
+                timestamp=int(msg['timestamp']),
+                frame_index=int(frame_index) if frame_index is not None else None,
+                blobs=msg['blobs'],
+                received_at=datagram.received_at,
+                host_received_at_us=datagram.host_received_at_us,
+                timestamp_source=str(msg["timestamp_source"]) if msg.get("timestamp_source") is not None else None,
+                sensor_timestamp_ns=int(msg["sensor_timestamp_ns"]) if msg.get("sensor_timestamp_ns") is not None else None,
+                sensor_to_dequeue_ms=float(msg["sensor_to_dequeue_ms"]) if msg.get("sensor_to_dequeue_ms") is not None else None,
+                sensor_timestamp_stale=bool(msg.get("sensor_timestamp_stale", False)),
+                capture_to_process_ms=float(msg["capture_to_process_ms"]) if msg.get("capture_to_process_ms") is not None else None,
+                capture_to_send_ms=float(msg["capture_to_send_ms"]) if msg.get("capture_to_send_ms") is not None else None,
+            )
+            self.receiver.record_camera_address(frame.camera_id, datagram.addr)
+            return frame
+        except (ValueError, KeyError, TypeError) as exc:
+            self.receiver.record_datagram_error(exc)
+            return None
 
     def _on_frame_received(self, frame: Frame) -> None:
         """Handle a frame: buffer it and attempt pairing.

@@ -1850,7 +1850,85 @@ class RigidBodyEstimator:
                 best_error = float(pose.rms_error)
         if best_pose is not None and best_pose.rms_error <= self.max_rms_error_m:
             return best_pose
+        three_marker_pose = self._try_multi_pattern_boot_partial_candidate(
+            pattern,
+            points_3d,
+            timestamp,
+        )
+        if three_marker_pose is not None:
+            return three_marker_pose
         return None
+
+    def _try_multi_pattern_boot_partial_candidate(
+        self,
+        pattern: MarkerPattern,
+        points_3d: np.ndarray,
+        timestamp: int,
+    ) -> Optional[RigidBodyPose]:
+        """Bootstrap from a 3-of-4 marker subset when one triangulated point is missing."""
+        point_count = int(len(points_3d))
+        if (
+            len(self.patterns) <= 1
+            or pattern.num_markers != 4
+            or point_count < 3
+            or point_count > 16
+        ):
+            return None
+
+        distance_matrix = cdist(points_3d, points_3d)
+        candidates: List[Tuple[float, Tuple[int, int, int], Tuple[int, int, int]]] = []
+        for marker_combo in combinations(range(pattern.num_markers), 3):
+            reference_signature = self._distance_signature(
+                pattern.marker_positions[list(marker_combo)]
+            )
+            for point_combo in combinations(range(point_count), 3):
+                point_signature = np.sort(
+                    np.asarray(
+                        [
+                            distance_matrix[point_combo[0], point_combo[1]],
+                            distance_matrix[point_combo[0], point_combo[2]],
+                            distance_matrix[point_combo[1], point_combo[2]],
+                        ],
+                        dtype=np.float64,
+                    )
+                )
+                signature_error = float(
+                    np.sqrt(np.mean((point_signature - reference_signature) ** 2))
+                )
+                candidates.append((signature_error, marker_combo, point_combo))
+        candidates.sort(key=lambda item: item[0])
+
+        best_pose: Optional[RigidBodyPose] = None
+        best_error = float("inf")
+        max_candidates = max(self._MULTI_PATTERN_BOOT_TOP_CANDIDATES * 2, 12)
+        for _signature_error, marker_combo, point_combo in candidates[:max_candidates]:
+            reference = np.asarray(
+                [pattern.marker_positions[index] for index in marker_combo],
+                dtype=np.float64,
+            )
+            observed = np.asarray(points_3d[list(point_combo)], dtype=np.float64)
+            try:
+                rotation, position, rms_error = KabschEstimator.estimate(reference, observed)
+                quat_xyzw = Rotation.from_matrix(rotation).as_quat()
+                quaternion = np.array(
+                    [quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]],
+                    dtype=np.float64,
+                )
+            except Exception:
+                continue
+            pose = RigidBodyPose(
+                timestamp=timestamp,
+                position=position,
+                rotation=rotation,
+                quaternion=quaternion,
+                rms_error=float(rms_error),
+                observed_markers=3,
+                valid=bool(float(rms_error) <= self.max_rms_error_m),
+            )
+            if pose.valid and pose.rms_error < best_error:
+                best_pose = pose
+                best_error = float(pose.rms_error)
+        return best_pose
 
     @staticmethod
     def _distance_signature(points: np.ndarray) -> np.ndarray:
@@ -2424,7 +2502,10 @@ class RigidBodyEstimator:
                 selected_pose = best_pose
                 selected_score = score
                 selected_source = "generic"
-                enforce_hint = self._should_select_rigid_hint_pose(hint_diagnostic)
+                enforce_hint = self._should_select_rigid_hint_pose(
+                    tracker,
+                    hint_diagnostic,
+                )
                 if enforce_hint:
                     hint_pose = self._pose_from_payload(
                         hint_diagnostic.get("pose"),
@@ -2505,6 +2586,21 @@ class RigidBodyEstimator:
                 tracker.record_position_continuity_guard(position_guard)
                 tracker.record_pose_continuity_guard(continuity_guard)
                 tracker.record_reacquire_guard(guard)
+                generic_guard_reasons = self._generic_continue_reject_reasons(
+                    tracker,
+                    selected_source=selected_source,
+                    selected_score=selected_score,
+                    hint_diagnostic=hint_diagnostic,
+                )
+                if generic_guard_reasons:
+                    rejected_pose = self._invalid_pose(timestamp)
+                    poses[pattern.name] = rejected_pose
+                    tracker.update(
+                        rejected_pose,
+                        invalid_reason="generic_continue_reprojection_guard_rejected:"
+                        + ",".join(generic_guard_reasons),
+                    )
+                    continue
                 if (
                     position_guard.get("enforced")
                     and position_guard.get("would_reject")
@@ -2558,7 +2654,7 @@ class RigidBodyEstimator:
                     generic_score=score,
                 )
                 selected_pose = predicted
-                if self._should_select_rigid_hint_pose(hint_diagnostic):
+                if self._should_select_rigid_hint_pose(tracker, hint_diagnostic):
                     hint_pose = self._pose_from_payload(
                         hint_diagnostic.get("pose"),
                         fallback_timestamp=timestamp,
@@ -2692,7 +2788,99 @@ class RigidBodyEstimator:
         
         return poses
 
-    def _should_select_rigid_hint_pose(self, diagnostic: Dict[str, Any]) -> bool:
+    def _generic_continue_reject_reasons(
+        self,
+        tracker: RigidBodyTracker,
+        *,
+        selected_source: str,
+        selected_score: Dict[str, Any],
+        hint_diagnostic: Dict[str, Any],
+    ) -> List[str]:
+        """Return reasons to reject a generic continuation pose that object gating cannot confirm."""
+        if (
+            not self.object_gating_config.enabled
+            or not self.object_gating_config.enforce
+            or tracker.mode != TrackMode.CONTINUE
+            or selected_source not in {"generic", "position_continuity_guard", "pose_continuity_guard"}
+        ):
+            return []
+        if bool(hint_diagnostic.get("selected_for_pose", False)):
+            return []
+
+        score = selected_score if isinstance(selected_score, dict) else {}
+        config = self.reacquire_guard_config
+        reasons: List[str] = []
+        if self._other_object_gate_match_count(tracker, score) > 0:
+            reasons.append("matched_other_rigid_gate_blobs")
+        if not score.get("scored", False):
+            reasons.append(f"score_not_available:{score.get('reason', 'unknown')}")
+        if int(score.get("matched_marker_views", 0)) < config.min_matched_marker_views:
+            reasons.append("insufficient_matched_marker_views")
+        if int(score.get("missing_marker_views", 0)) > config.max_missing_marker_views:
+            reasons.append("too_many_missing_marker_views")
+        if float(score.get("mean_error_px", 0.0)) > config.max_mean_reprojection_error_px:
+            reasons.append("mean_reprojection_error_too_high")
+        if float(score.get("p95_error_px", 0.0)) > config.max_p95_reprojection_error_px:
+            reasons.append("p95_reprojection_error_too_high")
+        if (
+            not config.allow_duplicate_assignment
+            and int(score.get("duplicate_assignment_count", 0)) > 0
+        ):
+            reasons.append("duplicate_assignment")
+        return reasons
+
+    def _other_object_gate_match_count(
+        self,
+        tracker: RigidBodyTracker,
+        score: Dict[str, Any],
+    ) -> int:
+        """Count pose matches that reuse blob views already owned by another rigid gate."""
+        matched = score.get("matched_observations", []) if isinstance(score, dict) else []
+        if not isinstance(matched, list) or not matched:
+            return 0
+        matched_views: set[Tuple[str, int]] = set()
+        for item in matched:
+            if not isinstance(item, dict):
+                continue
+            try:
+                blob_index = int(item.get("blob_index", -1))
+            except (TypeError, ValueError):
+                continue
+            if blob_index >= 0:
+                matched_views.add((str(item.get("camera_id", "")), blob_index))
+        if not matched_views:
+            return 0
+
+        owned_elsewhere: set[Tuple[str, int]] = set()
+        current_name = str(tracker.pattern.name)
+        for name, other_tracker in self.trackers.items():
+            if str(name) == current_name:
+                continue
+            gating = other_tracker.get_diagnostics().get("object_gating", {})
+            if not isinstance(gating, dict) or not gating.get("evaluated"):
+                continue
+            per_camera = gating.get("per_camera", {})
+            if not isinstance(per_camera, dict):
+                continue
+            for camera_id, camera_payload in per_camera.items():
+                if not isinstance(camera_payload, dict):
+                    continue
+                for assignment in camera_payload.get("assignments", []) or []:
+                    if not isinstance(assignment, dict):
+                        continue
+                    try:
+                        blob_index = int(assignment.get("blob_index", -1))
+                    except (TypeError, ValueError):
+                        continue
+                    if blob_index >= 0:
+                        owned_elsewhere.add((str(camera_id), blob_index))
+        return len(matched_views & owned_elsewhere)
+
+    def _should_select_rigid_hint_pose(
+        self,
+        tracker: RigidBodyTracker,
+        diagnostic: Dict[str, Any],
+    ) -> bool:
         if not self.object_gating_config.enabled or not self.object_gating_config.enforce:
             return False
         if not isinstance(diagnostic, dict):
@@ -2712,6 +2900,9 @@ class RigidBodyEstimator:
             return False
         if int(score.get("matched_marker_views", 0)) < min_markers * 2:
             diagnostic["selection_reason"] = "insufficient_matched_marker_views"
+            return False
+        if self._other_object_gate_match_count(tracker, score) > 0:
+            diagnostic["selection_reason"] = "matched_other_rigid_gate_blobs"
             return False
         diagnostic["selection_reason"] = "object_gating_enforced"
         return True
@@ -3823,14 +4014,16 @@ class RigidBodyEstimator:
         duplicate_assignments = 0
         unexpected_blobs = 0
         scored_cameras = 0
+        matched_observations: List[Dict[str, Any]] = []
 
         for camera_id, observations in observations_by_camera.items():
             camera = camera_params.get(camera_id)
             if camera is None:
                 continue
-            observed_uvs = self._extract_observation_uvs(observations, space)
-            if not observed_uvs:
+            observed_payloads = self._extract_observation_payloads(observations, space)
+            if not observed_payloads:
                 continue
+            observed_uvs = [payload["uv"] for payload in observed_payloads]
 
             projected_uvs = self._project_markers_to_camera(markers_world, camera, space)
             if not projected_uvs:
@@ -3864,6 +4057,15 @@ class RigidBodyEstimator:
                 matched += 1
                 residuals.append(error)
                 assigned_blob_indices.add(int(col))
+                observation = observed_payloads[int(col)]
+                matched_observations.append(
+                    {
+                        "camera_id": str(camera_id),
+                        "marker_idx": int(row),
+                        "blob_index": int(observation.get("blob_index", int(col))),
+                        "error_px": error,
+                    }
+                )
 
             unexpected_blobs += max(0, len(observed_uvs) - len(assigned_blob_indices))
 
@@ -3894,22 +4096,43 @@ class RigidBodyEstimator:
             "unexpected_blob_count": int(unexpected_blobs),
             "camera_count": int(scored_cameras),
             "match_gate_px": float(self.reprojection_match_gate_px),
+            "matched_observations": matched_observations,
         }
 
     @staticmethod
     def _extract_observation_uvs(observations: List[Any], coordinate_space: str) -> List[Tuple[float, float]]:
+        return [
+            tuple(payload["uv"])
+            for payload in RigidBodyEstimator._extract_observation_payloads(
+                observations,
+                coordinate_space,
+            )
+        ]
+
+    @staticmethod
+    def _extract_observation_payloads(
+        observations: List[Any],
+        coordinate_space: str,
+    ) -> List[Dict[str, Any]]:
         key = "undistorted_uv" if coordinate_space == "undistorted_pixel" else "raw_uv"
-        uvs: List[Tuple[float, float]] = []
-        for observation in observations:
+        payloads: List[Dict[str, Any]] = []
+        for index, observation in enumerate(observations):
             value = None
+            blob_index = index
             if isinstance(observation, dict):
                 value = observation.get(key)
+                blob_index = observation.get("blob_index", index)
             else:
                 value = getattr(observation, key, None)
+                blob_index = getattr(observation, "blob_index", index)
             if value is None or len(value) < 2:
                 continue
-            uvs.append((float(value[0]), float(value[1])))
-        return uvs
+            try:
+                uv = (float(value[0]), float(value[1]))
+                payloads.append({"uv": uv, "blob_index": int(blob_index)})
+            except (TypeError, ValueError, IndexError):
+                continue
+        return payloads
 
     @staticmethod
     def _project_markers_to_camera(

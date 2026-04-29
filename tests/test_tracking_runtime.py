@@ -408,7 +408,9 @@ def test_tracking_runtime_caps_raw_points_in_scene_payload(monkeypatch) -> None:
         def get_latest_triangulation_snapshot(self):
             return {
                 "timestamp": 900,
-                "points_3d": [[float(index), 0.0, 0.0] for index in range(5)],
+                "points_3d": [[99.0, 0.0, 0.0]],
+                "raw_scene_points_3d": [[float(index), 0.0, 0.0] for index in range(5)],
+                "raw_scene_timestamp": 901,
                 "reprojection_errors": [],
                 "triangulation_quality": {},
                 "pair_timestamp_range_us": 0,
@@ -425,6 +427,7 @@ def test_tracking_runtime_caps_raw_points_in_scene_payload(monkeypatch) -> None:
     assert scene["raw_points"] == [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]
     assert scene["raw_point_count"] == 5
     assert scene["raw_points_truncated"] is True
+    assert scene["raw_points_source_timestamp_us"] == 901
 
 
 def test_tracking_runtime_status_uses_short_lived_cache(monkeypatch) -> None:

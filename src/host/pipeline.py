@@ -316,6 +316,14 @@ class TrackingPipeline:
             pipeline_variant=self.pipeline_variant,
             stage_callback=self._record_stage,
         )
+        self._raw_scene_geometry = GeometryPipeline(pipeline_variant="baseline")
+        self._raw_scene_condition = threading.Condition()
+        self._raw_scene_worker: Optional[threading.Thread] = None
+        self._raw_scene_worker_stop = False
+        self._raw_scene_pending_pair: Optional[PairedFrames] = None
+        self._raw_scene_latest_points: List[List[float]] = []
+        self._raw_scene_latest_timestamp = 0
+        self._raw_scene_latest_quality: Dict[str, Any] = _empty_triangulation_quality()
         self.rigid_estimator = RigidBodyEstimator(
             patterns=patterns or [WAIST_PATTERN],
             reacquire_guard_config=reacquire_guard_config
@@ -341,7 +349,7 @@ class TrackingPipeline:
         # Load calibration
         self._calibration_loaded = False
         if calibration_path:
-            self._calibration_loaded = self.geometry.load_calibration(calibration_path) > 0
+            self._calibration_loaded = self.load_calibration(calibration_path) > 0
         self._apply_epipolar_threshold_override()
         
         # Logger
@@ -360,6 +368,9 @@ class TrackingPipeline:
         self._latest_triangulation_snapshot: Dict[str, Any] = {
             "timestamp": 0,
             "points_3d": [],
+            "raw_scene_points_3d": [],
+            "raw_scene_timestamp": 0,
+            "raw_scene_triangulation_quality": _empty_triangulation_quality(),
             "rigid_hint_points_3d": [],
             "observations_by_camera": {},
             "triangulated_points": [],
@@ -434,6 +445,8 @@ class TrackingPipeline:
             Number of cameras loaded
         """
         count = self.geometry.load_calibration(filepath)
+        if count > 0:
+            self._raw_scene_geometry.load_calibration(filepath)
         self._calibration_loaded = count > 0
         self._apply_epipolar_threshold_override()
         return count
@@ -441,9 +454,13 @@ class TrackingPipeline:
     def _apply_epipolar_threshold_override(self) -> None:
         if self._epipolar_threshold_px_override is None:
             return
-        self.geometry.epipolar_threshold_px = float(self._epipolar_threshold_px_override)
-        if self.geometry.triangulator is not None:
-            self.geometry.triangulator.epipolar_threshold_px = float(
+        self._apply_epipolar_threshold_override_to(self.geometry)
+        self._apply_epipolar_threshold_override_to(self._raw_scene_geometry)
+
+    def _apply_epipolar_threshold_override_to(self, geometry: GeometryPipeline) -> None:
+        geometry.epipolar_threshold_px = float(self._epipolar_threshold_px_override)
+        if geometry.triangulator is not None:
+            geometry.triangulator.epipolar_threshold_px = float(
                 self._epipolar_threshold_px_override
             )
     
@@ -462,6 +479,15 @@ class TrackingPipeline:
             ),
             stage_callback=self._record_stage,
         )
+        self._raw_scene_geometry.camera_params = params
+        self._raw_scene_geometry.epipolar_threshold_px = self.geometry.epipolar_threshold_px
+        self._raw_scene_geometry.triangulator = Triangulator(
+            params,
+            epipolar_threshold_px=self._raw_scene_geometry.epipolar_threshold_px,
+            fast_geometry=False,
+            epipolar_pruning_enabled=False,
+            geo_hotpath_optimizations=False,
+        )
         self._calibration_loaded = True
     
     def start(self, session_name: Optional[str] = None) -> None:
@@ -479,6 +505,7 @@ class TrackingPipeline:
         
         # Set up frame callback
         self.frame_processor.set_paired_callback(self._on_paired_frames)
+        self._start_raw_scene_worker()
         
         # Start frame processor
         self.frame_processor.start()
@@ -489,6 +516,7 @@ class TrackingPipeline:
         
         # Stop frame processor
         self.frame_processor.stop()
+        self._stop_raw_scene_worker()
         
         # Stop logging
         log_metadata = {}
@@ -526,6 +554,102 @@ class TrackingPipeline:
             self._variant_counts["full_blob_count"] += int(full_blob_count)
             self._variant_counts["filtered_blob_count"] += int(filtered_blob_count)
 
+    @staticmethod
+    def _serialize_points(points: Any) -> List[List[float]]:
+        serialized: List[List[float]] = []
+        for point in list(points or []):
+            values = point.tolist() if hasattr(point, "tolist") else list(point)
+            if len(values) >= 3:
+                serialized.append([float(values[0]), float(values[1]), float(values[2])])
+        return serialized
+
+    def _raw_scene_snapshot(self) -> tuple[List[List[float]], int, Dict[str, Any]]:
+        with self._triangulation_lock:
+            return (
+                [list(point) for point in self._raw_scene_latest_points],
+                int(self._raw_scene_latest_timestamp),
+                _copy_triangulation_quality(self._raw_scene_latest_quality),
+            )
+
+    def _start_raw_scene_worker(self) -> None:
+        if self._raw_scene_geometry.triangulator is None:
+            return
+        with self._raw_scene_condition:
+            if self._raw_scene_worker is not None and self._raw_scene_worker.is_alive():
+                return
+            self._raw_scene_worker_stop = False
+            self._raw_scene_pending_pair = None
+            self._raw_scene_worker = threading.Thread(
+                target=self._raw_scene_worker_loop,
+                name="loutrack-raw-scene",
+                daemon=True,
+            )
+            self._raw_scene_worker.start()
+
+    def _stop_raw_scene_worker(self) -> None:
+        with self._raw_scene_condition:
+            self._raw_scene_worker_stop = True
+            self._raw_scene_pending_pair = None
+            self._raw_scene_condition.notify_all()
+            worker = self._raw_scene_worker
+        if worker is not None:
+            worker.join(timeout=1.0)
+        with self._raw_scene_condition:
+            if self._raw_scene_worker is worker:
+                self._raw_scene_worker = None
+
+    def _submit_raw_scene_pair(self, paired_frames: PairedFrames) -> None:
+        with self._raw_scene_condition:
+            if self._raw_scene_worker is None or not self._raw_scene_worker.is_alive():
+                return
+            if self._raw_scene_pending_pair is not None:
+                self._record_variant_metric("raw_scene_coalesced_count")
+            self._raw_scene_pending_pair = paired_frames
+            self._raw_scene_condition.notify()
+
+    def _raw_scene_worker_loop(self) -> None:
+        while True:
+            with self._raw_scene_condition:
+                self._raw_scene_condition.wait_for(
+                    lambda: self._raw_scene_worker_stop or self._raw_scene_pending_pair is not None
+                )
+                if self._raw_scene_worker_stop:
+                    return
+                paired_frames = self._raw_scene_pending_pair
+                self._raw_scene_pending_pair = None
+            if paired_frames is None:
+                continue
+            try:
+                result = self._raw_scene_geometry.process_paired_frames(
+                    paired_frames,
+                    min_inlier_views=2,
+                    object_gating=None,
+                )
+                points = self._serialize_points(result.get("points_3d", []))
+                quality = _copy_triangulation_quality(
+                    result.get("triangulation_quality", _empty_triangulation_quality())
+                )
+                timestamp = int(result.get("timestamp", paired_frames.timestamp) or 0)
+                with self._triangulation_lock:
+                    if timestamp >= self._raw_scene_latest_timestamp:
+                        self._raw_scene_latest_points = points
+                        self._raw_scene_latest_timestamp = timestamp
+                        self._raw_scene_latest_quality = quality
+                        latest_timestamp = int(
+                            self._latest_triangulation_snapshot.get("timestamp", 0) or 0
+                        )
+                        if timestamp >= latest_timestamp:
+                            self._latest_triangulation_snapshot["raw_scene_points_3d"] = [
+                                list(point) for point in points
+                            ]
+                            self._latest_triangulation_snapshot["raw_scene_timestamp"] = timestamp
+                            self._latest_triangulation_snapshot[
+                                "raw_scene_triangulation_quality"
+                            ] = quality
+                self._record_variant_metric("raw_scene_update_count")
+            except Exception:
+                self._record_variant_metric("raw_scene_error_count")
+
     def _variant_metrics_snapshot(self) -> Dict[str, Any]:
         with self._variant_metric_lock:
             counts = dict(self._variant_counts)
@@ -543,6 +667,9 @@ class TrackingPipeline:
             "fallback_reason_counts": fallback_reasons,
             "full_blob_count": int(counts.get("full_blob_count", 0)),
             "filtered_blob_count": int(counts.get("filtered_blob_count", 0)),
+            "raw_scene_update_count": int(counts.get("raw_scene_update_count", 0)),
+            "raw_scene_coalesced_count": int(counts.get("raw_scene_coalesced_count", 0)),
+            "raw_scene_error_count": int(counts.get("raw_scene_error_count", 0)),
             "subset_sampled_count": int(rigid_metrics.get("subset_sampled_count", 0)),
             "subset_skipped_count": int(rigid_metrics.get("subset_skipped_count", 0)),
             "subset_budget_exceeded_count": int(
@@ -594,32 +721,40 @@ class TrackingPipeline:
         filtered: Dict[str, set[int]] = {}
         reject_reasons: Counter[str] = Counter()
         usable_rigids = 0
+        partial_filter_rejected = False
         for rigid_name, gating in object_gating.items():
             if not isinstance(gating, dict):
                 reject_reasons["invalid_gating_payload"] += 1
+                partial_filter_rejected = True
                 continue
             if not gating.get("evaluated"):
                 reject_reasons["gating_not_evaluated"] += 1
+                partial_filter_rejected = True
                 continue
             reason = str(gating.get("reason") or "unknown")
             if reason != "ok":
                 reject_reasons[f"gating_reason_{reason}"] += 1
+                partial_filter_rejected = True
                 continue
             assigned_views = int(gating.get("assigned_marker_views", 0))
             if assigned_views < min_assigned_views:
                 reject_reasons["assigned_marker_views_below_min"] += 1
+                partial_filter_rejected = True
                 continue
             two_ray_markers = int(gating.get("markers_with_two_or_more_rays", 0))
             single_ray_candidates = int(gating.get("single_ray_candidates", 0))
             if two_ray_markers < min_two_ray_markers:
                 reject_reasons["two_ray_markers_below_min"] += 1
+                partial_filter_rejected = True
                 continue
             if two_ray_markers < min_markers and single_ray_candidates <= 0:
                 reject_reasons["single_ray_not_available_for_relaxed_gate"] += 1
+                partial_filter_rejected = True
                 continue
             per_camera = gating.get("per_camera", {})
             if not isinstance(per_camera, dict):
                 reject_reasons["missing_per_camera_assignments"] += 1
+                partial_filter_rejected = True
                 continue
             rigid_added = 0
             for camera_id, camera_payload in per_camera.items():
@@ -640,7 +775,11 @@ class TrackingPipeline:
                 usable_rigids += 1
             else:
                 reject_reasons["no_filter_indices"] += 1
+                partial_filter_rejected = True
         self._record_object_gating_filter_reasons(reject_reasons)
+        if usable_rigids > 0 and partial_filter_rejected:
+            reason = reject_reasons.most_common(1)[0][0] if reject_reasons else "unknown"
+            return None, f"partial_object_gating:{reason}"
         if usable_rigids <= 0 or not any(filtered.values()):
             if reject_reasons:
                 reason = reject_reasons.most_common(1)[0][0]
@@ -788,21 +927,28 @@ class TrackingPipeline:
             else:
                 points_3d = []
             self._record_stage("triangulation_ms", self._elapsed_ms(stage_started_ns))
+            self._submit_raw_scene_pair(paired_frames)
 
             points_3d_list = list(points_3d) if points_3d is not None else []
             point_count = len(points_3d_list)
             triangulation_quality = _copy_triangulation_quality(
                 result.get("triangulation_quality", _empty_triangulation_quality())
             )
+            points_3d_serialized = self._serialize_points(points_3d_list)
+            raw_scene_points, raw_scene_timestamp, raw_scene_quality = self._raw_scene_snapshot()
+            if not raw_scene_points:
+                raw_scene_points = [list(point) for point in points_3d_serialized]
+                raw_scene_timestamp = int(timestamp)
+                raw_scene_quality = triangulation_quality
             rigid_hint_points = list(result.get("rigid_hint_points_3d", []) or [])
 
             with self._triangulation_lock:
                 self._latest_triangulation_snapshot = {
                     "timestamp": timestamp,
-                    "points_3d": [
-                        point.tolist() if hasattr(point, "tolist") else list(point)
-                        for point in points_3d_list
-                    ],
+                    "points_3d": points_3d_serialized,
+                    "raw_scene_points_3d": raw_scene_points,
+                    "raw_scene_timestamp": raw_scene_timestamp,
+                    "raw_scene_triangulation_quality": raw_scene_quality,
                     "rigid_hint_points_3d": [
                         point.tolist() if hasattr(point, "tolist") else list(point)
                         for point in rigid_hint_points
@@ -1372,6 +1518,28 @@ class TrackingPipeline:
             return {
                 "timestamp": self._latest_triangulation_snapshot["timestamp"],
                 "points_3d": [list(point) for point in self._latest_triangulation_snapshot["points_3d"]],
+                "raw_scene_points_3d": [
+                    list(point)
+                    for point in self._latest_triangulation_snapshot.get(
+                        "raw_scene_points_3d",
+                        self._latest_triangulation_snapshot["points_3d"],
+                    )
+                ],
+                "raw_scene_timestamp": int(
+                    self._latest_triangulation_snapshot.get(
+                        "raw_scene_timestamp",
+                        self._latest_triangulation_snapshot["timestamp"],
+                    )
+                ),
+                "raw_scene_triangulation_quality": _copy_triangulation_quality(
+                    self._latest_triangulation_snapshot.get(
+                        "raw_scene_triangulation_quality",
+                        self._latest_triangulation_snapshot.get(
+                            "triangulation_quality",
+                            _empty_triangulation_quality(),
+                        ),
+                    )
+                ),
                 "observations_by_camera": {
                     camera_id: [dict(observation) for observation in observations]
                     for camera_id, observations in self._latest_triangulation_snapshot.get(

@@ -44,6 +44,7 @@ class CameraMetrics:
     
     # Rolling windows for FPS calculation
     _timestamps: deque = field(default_factory=lambda: deque(maxlen=60))
+    _frame_timestamps_us: deque = field(default_factory=lambda: deque(maxlen=60))
     _blob_counts: deque = field(default_factory=lambda: deque(maxlen=60))
     _host_latency_ms: deque = field(default_factory=lambda: deque(maxlen=60))
     _capture_to_send_ms: deque = field(default_factory=lambda: deque(maxlen=60))
@@ -166,13 +167,23 @@ class MetricsCollector:
             
             # Record timestamp for FPS calculation
             cam._timestamps.append(frame_received_at)
+            cam._frame_timestamps_us.append(int(timestamp))
             cam._blob_counts.append(blob_count)
             
             # Calculate FPS (frames in last window / time span)
+            receive_fps = 0.0
             if len(cam._timestamps) >= 2:
                 time_span = max(cam._timestamps) - min(cam._timestamps)
                 if time_span > 0:
-                    cam.fps = (len(cam._timestamps) - 1) / time_span
+                    receive_fps = (len(cam._timestamps) - 1) / time_span
+            timestamp_fps = 0.0
+            if len(cam._frame_timestamps_us) >= 2:
+                timestamp_span_s = (
+                    max(cam._frame_timestamps_us) - min(cam._frame_timestamps_us)
+                ) / 1_000_000.0
+                if timestamp_span_s > 0:
+                    timestamp_fps = (len(cam._frame_timestamps_us) - 1) / timestamp_span_s
+            cam.fps = timestamp_fps or receive_fps
             
             # Calculate average blob count
             if cam._blob_counts:
@@ -261,6 +272,7 @@ class MetricsCollector:
             for cam_id, cam in self._cameras.items():
                 cameras[cam_id] = {
                     "fps": round(cam.fps, 2),
+                    "timestamp_fps": round(cam.fps, 2),
                     "latency_ms": round(cam.latency_ms, 2),
                     "host_latency_ms": self._summary(cam._host_latency_ms),
                     "frame_count": cam.frame_count,
@@ -271,6 +283,7 @@ class MetricsCollector:
                     "timestamp_sources": dict(cam._timestamp_sources),
                     "capture_to_process_ms": self._summary(cam._capture_to_process_ms),
                     "capture_to_send_ms": self._summary(cam._capture_to_send_ms),
+                    "receive_fps": round(self._receive_fps(cam), 2),
                 }
             
             return {
@@ -300,6 +313,7 @@ class MetricsCollector:
             return {
                 "camera_id": camera_id,
                 "fps": round(cam.fps, 2),
+                "timestamp_fps": round(cam.fps, 2),
                 "latency_ms": round(cam.latency_ms, 2),
                 "host_latency_ms": self._summary(cam._host_latency_ms),
                 "frame_count": cam.frame_count,
@@ -309,7 +323,17 @@ class MetricsCollector:
                 "timestamp_sources": dict(cam._timestamp_sources),
                 "capture_to_process_ms": self._summary(cam._capture_to_process_ms),
                 "capture_to_send_ms": self._summary(cam._capture_to_send_ms),
+                "receive_fps": round(self._receive_fps(cam), 2),
             }
+
+    @staticmethod
+    def _receive_fps(cam: CameraMetrics) -> float:
+        if len(cam._timestamps) < 2:
+            return 0.0
+        time_span = max(cam._timestamps) - min(cam._timestamps)
+        if time_span <= 0:
+            return 0.0
+        return (len(cam._timestamps) - 1) / time_span
     
     def export_prometheus(self) -> str:
         """

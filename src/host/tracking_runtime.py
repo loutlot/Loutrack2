@@ -103,7 +103,7 @@ class TrackingRuntime:
     _START_BIND_RETRY_TIMEOUT_S = 1.0
     _START_BIND_RETRY_INTERVAL_S = 0.05
 
-    def __init__(self, udp_port: int = 5000, trail_length: int = 120, z_near: float = 0.25):
+    def __init__(self, udp_port: int = 5000, trail_length: int = 30, z_near: float = 0.25):
         self.udp_port = udp_port
         self.trail_length = trail_length
         self.z_near = z_near
@@ -429,7 +429,10 @@ class TrackingRuntime:
                     }
                 )
 
-            raw_points_full = list(triangulation.get("points_3d", []))
+            raw_points_full = list(
+                triangulation.get("raw_scene_points_3d")
+                or triangulation.get("points_3d", [])
+            )
             max_raw_points = max(0, int(self.max_scene_raw_points))
             raw_points = raw_points_full[:max_raw_points] if max_raw_points else []
 
@@ -441,6 +444,10 @@ class TrackingRuntime:
                     "raw_points": raw_points,
                     "raw_point_count": int(len(raw_points_full)),
                     "raw_points_truncated": bool(len(raw_points_full) > len(raw_points)),
+                    "raw_points_source_timestamp_us": int(
+                        triangulation.get("raw_scene_timestamp")
+                        or triangulation.get("timestamp", 0)
+                    ),
                     "triangulation_quality": _copy_triangulation_quality(
                         triangulation.get("triangulation_quality", {})
                     ),
@@ -577,6 +584,9 @@ class TrackingRuntime:
             "raw_points": list(scene["raw_points"]),
             "raw_point_count": int(scene.get("raw_point_count", len(scene["raw_points"]))),
             "raw_points_truncated": bool(scene.get("raw_points_truncated", False)),
+            "raw_points_source_timestamp_us": int(
+                scene.get("raw_points_source_timestamp_us", scene["timestamp_us"])
+            ),
             "triangulation_quality": _copy_triangulation_quality(
                 scene.get("triangulation_quality", {})
             ),
@@ -642,6 +652,7 @@ class TrackingRuntime:
             "raw_points": [],
             "raw_point_count": 0,
             "raw_points_truncated": False,
+            "raw_points_source_timestamp_us": 0,
             "triangulation_quality": {},
             "coordinate_frame": coordinate_frame,
             "coordinate_origin": coordinate_origin,

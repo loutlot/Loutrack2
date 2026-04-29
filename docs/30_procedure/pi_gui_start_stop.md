@@ -14,7 +14,7 @@ Current Pi inventory is defined in `src/deploy/hosts.ini`.
 Run host-side commands from the repository root:
 
 ```bash
-cd /Users/loutlot/Documents/cursor/MOCAP/Loutrack2
+cd <repo-root>
 ```
 
 ## Start Pi Capture Services
@@ -109,10 +109,33 @@ nohup .venv/bin/python src/host/loutrack_gui.py \
   >/tmp/loutrack_gui.log 2>&1 </dev/null &
 ```
 
+On the Codex desktop shell, short-lived command sessions can clean up `nohup ... &`
+children when the shell exits. If the process does not remain visible in `ps` or the
+API never comes back, use launchd instead:
+
+```bash
+launchctl remove loutrack_gui 2>/dev/null || true
+: > /tmp/loutrack_gui.log
+launchctl submit -l loutrack_gui -- /bin/zsh -lc \
+  'cd <repo-root> && exec .venv/bin/python src/host/loutrack_gui.py --host 127.0.0.1 --port 8765 --udp-port 5000 >>/tmp/loutrack_gui.log 2>&1'
+```
+
 Verify the GUI API:
 
 ```bash
 curl -sS --max-time 3 http://127.0.0.1:8765/api/state
+```
+
+Quick restart from a Codex desktop session:
+
+```bash
+pkill -f 'src/host/loutrack_gui.py' || true
+launchctl remove loutrack_gui 2>/dev/null || true
+: > /tmp/loutrack_gui.log
+launchctl submit -l loutrack_gui -- /bin/zsh -lc \
+  'cd <repo-root> && exec .venv/bin/python src/host/loutrack_gui.py --host 127.0.0.1 --port 8765 --udp-port 5000 >>/tmp/loutrack_gui.log 2>&1'
+curl -sS --max-time 3 http://127.0.0.1:8765/api/state >/tmp/loutrack_gui_state.json
+ps -axo pid,command | rg 'src/host/loutrack_gui.py|loutrack_gui.py'
 ```
 
 GUI log:
@@ -153,6 +176,13 @@ Background mode:
 
 ```bash
 pkill -f 'src/host/loutrack_gui.py'
+```
+
+If the GUI was started with `launchctl submit -l loutrack_gui`, stop that job too:
+
+```bash
+launchctl remove loutrack_gui 2>/dev/null || true
+pkill -f 'src/host/loutrack_gui.py' || true
 ```
 
 Confirm the HTTP server is down:

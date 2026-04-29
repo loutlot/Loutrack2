@@ -1,3 +1,20 @@
+- `docs/30_procedure/pi_gui_start_stop.md` now documents the Codex desktop `launchctl submit` GUI restart path when `nohup` children do not survive shell exit.
+- Tracking viewer raw blobs now use a coalesced full-scene triangulation path so `static/index.html` can show all raw points while pose tracking stays on the fast object-gated path.
+- Object-gated rigid-hint pose enforcement now refuses blob views already owned by another rigid body, keeping overlapping multi-rigid occlusion recovery from adopting the wrong target.
+- Object-gated tracking now rejects continuation poses that reuse another rigid body's gated blobs, preventing fully occluded `waist` markers from snapping onto `wand`.
+- Tracking now falls back to full-blob geometry when any rigid body loses its object gate, so a moving `waist` can reacquire instead of disappearing from the fast filtered scene.
+- Object-gated tracking now rejects bad generic continuation poses when rigid-hint confirmation is missing, preventing one rigid body from snapping onto another body's blobs.
+- Tracking diagnostics now reset per Start/Stop and GUI JSON responses ignore client disconnects so real tracking logs are not buried by stale browser metrics or BrokenPipe traces.
+- Host UDP receive now drains bursts and drops stale datagrams before processing so live tracking follows the newest camera frames instead of replaying backlog.
+- Tracking now resets browser scene sequence state on every Start/Stop so a new run's low sequence numbers are not discarded before Three updates.
+- Multi-rigid bootstrapping now accepts 3-of-4 marker candidates so a rigid body can appear when one triangulated blob is missing.
+- Camera Health now keeps the raw clock delta visible as `Clock Δ` while separating it from live GUI latency.
+- Camera Health in `static/index.html` now reports live pair age, timestamp FPS, receive FPS, and Pi send time instead of surfacing cross-clock latency as GUI delay.
+- Host UDP receive buffering now favors fresh live frames over preserving multi-second camera backlogs, reducing GUI pose latency when cameras outpace host drain rate.
+- Tracking scene streaming now uses shorter live trails and a lower Python thread switch interval so the GUI stream and UDP receive loop stay responsive during 2-rigid tracking.
+- Host tracking now keeps the UDP receive thread parse-free so live camera datagrams drain before JSON parsing and tracking work can add latency.
+- Tracking Rigid Bodies in `static/index.html` now reuse row DOM nodes during status refreshes so browser-side ping markers do not stack on the list.
+- Tracking Start in `static/index.html` now keeps object-conditioned gating enabled so the GUI uses the low-latency `fast_ABCDHRF` route.
 - Tracking now bootstraps multiple rigid bodies from mixed blob clouds so `waist` and custom `wand` can both acquire and enter the fast object-gated path even with 32 blobs/camera.
 - Tracking in `static/index.html` now initializes the Three.js viewer before restoring the active view so the first scene is not consumed by the loading placeholder.
 - Intrinsics, Camera Pose Capture, and Floor / Metric in `static/index.html` now have title-level instruction buttons and skippable instruction modals.

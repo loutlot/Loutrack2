@@ -11,11 +11,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from host.rigid import (
     MarkerPattern,
+    ObjectGatingConfig,
     PointClusterer,
     PositionContinuityGuardConfig,
     PoseContinuityGuardConfig,
     RigidBodyEstimator,
     RigidBodyPose,
+    TrackModeConfig,
     WAIST_PATTERN,
 )
 
@@ -142,6 +144,41 @@ def test_multi_pattern_boot_finds_rigids_among_32_points() -> None:
     assert np.allclose(poses["wand"].position, wand_offset, atol=1e-9)
 
 
+def test_multi_pattern_boot_keeps_rigid_with_one_missing_marker() -> None:
+    wand_pattern = MarkerPattern(
+        name="wand",
+        marker_positions=np.array(
+            [
+                [-0.16720382613672097, 0.021044859056731813, -0.0003093655967190481],
+                [-0.03215422561435377, -0.101157870515302, 0.0001515195503982332],
+                [0.057345780432333765, -0.006039561048765074, -0.0006549956316947575],
+                [0.14201227131874097, 0.08615257250733527, 0.0008128416780155724],
+            ],
+            dtype=np.float64,
+        ),
+    )
+    waist_offset = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+    wand_offset = np.array([4.0, 5.0, 6.0], dtype=np.float64)
+    mixed_points = np.vstack(
+        [
+            WAIST_PATTERN.marker_positions + waist_offset,
+            wand_pattern.marker_positions[:3] + wand_offset,
+        ]
+    )
+    estimator = RigidBodyEstimator(
+        patterns=[WAIST_PATTERN, wand_pattern],
+        cluster_radius_m=0.08,
+        subset_diagnostics_mode="off",
+    )
+
+    poses = estimator.process_points(mixed_points, timestamp=123)
+
+    assert poses["waist"].valid is True
+    assert poses["wand"].valid is True
+    assert poses["wand"].observed_markers == 3
+    assert np.allclose(poses["wand"].position, wand_offset, atol=1e-9)
+
+
 def test_rigid_body_estimator_rejects_pose_over_max_rms(monkeypatch: pytest.MonkeyPatch) -> None:
     estimator = RigidBodyEstimator(patterns=[WAIST_PATTERN], max_rms_error_m=0.05)
     points = WAIST_PATTERN.marker_positions + np.array([1.0, 2.0, 3.0], dtype=np.float64)
@@ -162,6 +199,171 @@ def test_rigid_body_estimator_rejects_pose_over_max_rms(monkeypatch: pytest.Monk
 
     assert pose.valid is False
     assert pose.observed_markers == 0
+
+
+def test_object_gated_continue_rejects_bad_generic_reprojection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    estimator = RigidBodyEstimator(
+        patterns=[WAIST_PATTERN],
+        object_gating_config=ObjectGatingConfig(enabled=True, enforce=True),
+        subset_diagnostics_mode="off",
+    )
+    estimator.trackers["waist"].mode_config = TrackModeConfig(boot_consecutive_accepts=1)
+    points = WAIST_PATTERN.marker_positions + np.array([1.0, 2.0, 3.0], dtype=np.float64)
+
+    scores = iter(
+        [
+            {
+                "scored": True,
+                "reason": "ok",
+                "score": 0.9,
+                "mean_error_px": 1.0,
+                "p95_error_px": 2.0,
+                "matched_marker_views": 8,
+                "expected_marker_views": 8,
+                "missing_marker_views": 0,
+                "duplicate_assignment_count": 0,
+            },
+            {
+                "scored": True,
+                "reason": "ok",
+                "score": 0.2,
+                "mean_error_px": 9.0,
+                "p95_error_px": 10.0,
+                "matched_marker_views": 8,
+                "expected_marker_views": 8,
+                "missing_marker_views": 0,
+                "duplicate_assignment_count": 0,
+            },
+        ]
+    )
+
+    def _fake_score(*_args, **_kwargs):  # noqa: ANN002, ANN003
+        return next(scores)
+
+    monkeypatch.setattr(estimator, "_score_pose_reprojection", _fake_score)
+    first = estimator.process_points(points, timestamp=1_000_000)["waist"]
+    second = estimator.process_points(points + np.array([0.2, 0.0, 0.0]), timestamp=1_010_000)[
+        "waist"
+    ]
+
+    status = estimator.get_tracking_status()["waist"]
+    assert first.valid is True
+    assert second.valid is False
+    assert status["last_mode_reason"] == "continue_measurement_rejected"
+    assert status["invalid_reason"].startswith(
+        "generic_continue_reprojection_guard_rejected"
+    )
+    assert "mean_reprojection_error_too_high" in status["invalid_reason"]
+
+
+def test_object_gated_continue_rejects_generic_pose_using_other_rigid_blobs() -> None:
+    wand_pattern = MarkerPattern(
+        name="wand",
+        marker_positions=WAIST_PATTERN.marker_positions + np.array([0.25, 0.0, 0.0]),
+    )
+    estimator = RigidBodyEstimator(
+        patterns=[WAIST_PATTERN, wand_pattern],
+        object_gating_config=ObjectGatingConfig(enabled=True, enforce=True),
+        subset_diagnostics_mode="off",
+    )
+    waist_tracker = estimator.trackers["waist"]
+    wand_tracker = estimator.trackers["wand"]
+    waist_tracker.mode_config = TrackModeConfig(boot_consecutive_accepts=1)
+    wand_tracker.mode_config = TrackModeConfig(boot_consecutive_accepts=1)
+    pose = RigidBodyPose(
+        timestamp=1_000_000,
+        position=np.array([1.0, 2.0, 3.0], dtype=np.float64),
+        rotation=np.eye(3, dtype=np.float64),
+        quaternion=np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64),
+        rms_error=0.001,
+        observed_markers=4,
+        valid=True,
+    )
+    waist_tracker.update(pose)
+    wand_tracker.update(pose)
+    wand_tracker.record_object_gating(
+        {
+            "evaluated": True,
+            "per_camera": {
+                "pi-cam-01": {
+                    "assignments": [
+                        {"marker_idx": 0, "blob_index": 4},
+                        {"marker_idx": 1, "blob_index": 5},
+                    ]
+                },
+                "pi-cam-02": {
+                    "assignments": [
+                        {"marker_idx": 0, "blob_index": 6},
+                        {"marker_idx": 1, "blob_index": 7},
+                    ]
+                },
+            },
+        }
+    )
+    score = {
+        "scored": True,
+        "reason": "ok",
+        "matched_marker_views": 8,
+        "missing_marker_views": 0,
+        "mean_error_px": 1.0,
+        "p95_error_px": 2.0,
+        "duplicate_assignment_count": 0,
+        "matched_observations": [
+            {"camera_id": "pi-cam-01", "blob_index": 4},
+            {"camera_id": "pi-cam-02", "blob_index": 6},
+        ],
+    }
+
+    reasons = estimator._generic_continue_reject_reasons(
+        waist_tracker,
+        selected_source="pose_continuity_guard",
+        selected_score=score,
+        hint_diagnostic={"selected_for_pose": False},
+    )
+
+    assert "matched_other_rigid_gate_blobs" in reasons
+
+
+def test_object_gated_rigid_hint_rejects_pose_using_other_rigid_blobs() -> None:
+    wand_pattern = MarkerPattern(
+        name="wand",
+        marker_positions=WAIST_PATTERN.marker_positions + np.array([0.25, 0.0, 0.0]),
+    )
+    estimator = RigidBodyEstimator(
+        patterns=[WAIST_PATTERN, wand_pattern],
+        object_gating_config=ObjectGatingConfig(enabled=True, enforce=True),
+        subset_diagnostics_mode="off",
+    )
+    waist_tracker = estimator.trackers["waist"]
+    wand_tracker = estimator.trackers["wand"]
+    wand_tracker.record_object_gating(
+        {
+            "evaluated": True,
+            "per_camera": {
+                "pi-cam-01": {"assignments": [{"marker_idx": 0, "blob_index": 4}]},
+                "pi-cam-02": {"assignments": [{"marker_idx": 0, "blob_index": 6}]},
+            },
+        }
+    )
+    diagnostic = {
+        "candidate_points": 4,
+        "valid": True,
+        "score": {
+            "scored": True,
+            "matched_marker_views": 8,
+            "matched_observations": [
+                {"camera_id": "pi-cam-01", "blob_index": 4},
+                {"camera_id": "pi-cam-02", "blob_index": 6},
+            ],
+        },
+    }
+
+    selected = estimator._should_select_rigid_hint_pose(waist_tracker, diagnostic)
+
+    assert selected is False
+    assert diagnostic["selection_reason"] == "matched_other_rigid_gate_blobs"
 
 
 def test_pose_continuity_guard_holds_rotation_only_for_low_marker_rotation_jump(

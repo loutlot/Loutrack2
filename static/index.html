@@ -1844,6 +1844,32 @@
         const total = values.reduce((acc, value) => acc + value, 0);
         return { last: values[values.length - 1], mean: total / values.length, max: Math.max(...values) };
       },
+      reset() {
+        [
+          "sseInterArrivalMs",
+          "jsonParseMs",
+          "sceneApplyMs",
+          "rafWaitMs",
+          "renderMs",
+          "rafFps",
+          "geometryUpdateMs",
+          "webglRenderMs",
+          "eventToRenderMs",
+          "sceneToRenderMs",
+        ].forEach((key) => {
+          if (Array.isArray(this[key])) this[key] = [];
+        });
+        this.sequenceGaps = 0;
+        this.staleScenes = 0;
+        this.longFrames = 0;
+        this.droppedRafFrames = 0;
+        this.pendingSceneDrops = 0;
+        this.lastEventAtMs = 0;
+        this.lastRafAtMs = 0;
+        this.lastSequence = null;
+        this.pendingRenderReceivedAtMs = null;
+        this.lastPanelUpdateMs = 0;
+      },
     };
     let trackingViewer = createTrackingViewer();
     function createTrackingPlaceholderViewer(message = "3D viewer loading...") {
@@ -3198,28 +3224,71 @@
         elements.trackingCameraHealth.innerHTML = '<div class="tracking-empty-sm">Waiting for camera metrics</div>';
         return;
       }
+      const liveAgeMs = Number(status.receiver?.pair_age_ms?.last ?? status.scene?.scene_update_age_ms ?? 0);
+      const liveStatusClass = liveAgeMs > 120 ? "warn" : "ok";
       elements.trackingCameraHealth.innerHTML = entries
         .map(([cameraId, metrics]) => {
-          const latency = Number(metrics.latency_ms ?? 0);
           const fps = Number(metrics.fps ?? 0);
+          const receiveFps = Number(metrics.receive_fps ?? 0);
           const blobAvg = Number(metrics.blob_count_avg ?? 0);
-          const statusClass = latency > 120 ? "warn" : "ok";
+          const sendMs = Number(metrics.capture_to_send_ms?.last ?? 0);
+          const clockDeltaMs = Number(metrics.latency_ms ?? 0);
           return `
             <article class="tracking-camera-card">
               <div class="tracking-card-title">
                 <strong>${escapeHtml(cameraId)}</strong>
-                <span class="tracking-card-badge ${statusClass}">${latency.toFixed(0)}ms latency</span>
+                <span class="tracking-card-badge ${liveStatusClass}">Live ${liveAgeMs.toFixed(0)}ms</span>
               </div>
               <div class="tracking-card-metrics">
                 <span>FPS ${fps.toFixed(1)}</span>
+                <span>RX ${receiveFps.toFixed(1)}</span>
                 <span>Frames ${metrics.frame_count ?? 0}</span>
                 <span>Missing ${metrics.missing_frames ?? 0}</span>
                 <span>Blob avg ${blobAvg.toFixed(1)}</span>
+                <span>Pi send ${sendMs.toFixed(1)}ms</span>
+                <span>Clock Δ ${clockDeltaMs.toFixed(0)}ms</span>
               </div>
             </article>
           `;
         })
         .join("");
+    }
+
+    function createTrackingRigidRow(name) {
+      const row = document.createElement("article");
+      row.className = "tracking-rigid-row";
+      row.dataset.rigidName = name;
+
+      const header = document.createElement("header");
+      const title = document.createElement("strong");
+      title.dataset.role = "name";
+      const actions = document.createElement("span");
+      actions.className = "tracking-rigid-header-actions";
+      const badge = document.createElement("span");
+      badge.dataset.role = "status";
+      actions.appendChild(badge);
+      header.appendChild(title);
+      header.appendChild(actions);
+
+      const metrics = document.createElement("div");
+      metrics.className = "tracking-card-metrics";
+      ["kind", "markers", "rms", "trail"].forEach((role) => {
+        const item = document.createElement("span");
+        item.dataset.role = role;
+        metrics.appendChild(item);
+      });
+
+      const notes = document.createElement("div");
+      notes.dataset.role = "notes";
+      notes.style.fontSize = "11px";
+      notes.style.color = "var(--ink-muted)";
+      notes.style.marginTop = "6px";
+      notes.hidden = true;
+
+      row.appendChild(header);
+      row.appendChild(metrics);
+      row.appendChild(notes);
+      return row;
     }
 
     function renderRigidHealth(scene, status = latestTrackingStatus) {
@@ -3239,46 +3308,69 @@
         }
       });
       if (!names.length) {
-        elements.trackingRigidList.innerHTML = '<div class="tracking-empty-sm">Ctrl/Cmd + drag on the viewer to register a custom rigid.</div>';
+        if (!elements.trackingRigidList.querySelector(".tracking-empty-sm")) {
+          const empty = document.createElement("div");
+          empty.className = "tracking-empty-sm";
+          empty.textContent = "Ctrl/Cmd + drag on the viewer to register a custom rigid.";
+          elements.trackingRigidList.replaceChildren(empty);
+        }
         return;
       }
-      elements.trackingRigidList.innerHTML = names
-        .map((name) => {
-          const body = rigidByName.get(name);
-          const definition = catalogByName.get(name) || {};
-          const tracked = Boolean(body);
-          const validClass = body && body.valid === false ? " invalid" : "";
-          const statusLabel = tracked ? (body.valid ? "Valid" : "Lost") : "Defined";
-          const badgeClass = tracked ? (body.valid ? "ok" : "warn") : "info";
-          const rms = tracked ? Number(body.rms_error ?? 0).toFixed(3) : "—";
-          const trailLength = tracked ? (body.trail || []).length : 0;
-          const markerCount = tracked
-            ? body.observed_markers ?? definition.marker_count ?? 0
-            : definition.marker_count ?? 0;
-          const deleteButton = definition.is_custom
-            ? `<button class="tracking-rigid-delete" type="button" data-delete-rigid="${escapeHtml(name)}">Delete</button>`
-            : "";
-          const notes = definition.notes ? `<div style="font-size:11px;color:var(--ink-muted);margin-top:6px">${escapeHtml(definition.notes)}</div>` : "";
-          return `
-            <article class="tracking-rigid-row${validClass}">
-              <header>
-                <strong>${escapeHtml(name)}</strong>
-                <span class="tracking-rigid-header-actions">
-                  ${deleteButton}
-                  <span class="tracking-card-badge ${badgeClass}">${statusLabel}</span>
-                </span>
-              </header>
-              <div class="tracking-card-metrics">
-                <span>${definition.is_custom ? "Custom" : "Built-in"}</span>
-                <span>Markers ${markerCount}</span>
-                <span>RMS ${rms}</span>
-                <span>Trail ${trailLength}</span>
-              </div>
-              ${notes}
-            </article>
-          `;
-        })
-        .join("");
+      const rowsByName = new Map(
+        Array.from(elements.trackingRigidList.querySelectorAll(".tracking-rigid-row"))
+          .map((row) => [row.dataset.rigidName, row])
+      );
+      const nextRows = [];
+      names.forEach((name) => {
+        const body = rigidByName.get(name);
+        const definition = catalogByName.get(name) || {};
+        const tracked = Boolean(body);
+        const row = rowsByName.get(name) || createTrackingRigidRow(name);
+        row.className = `tracking-rigid-row${body && body.valid === false ? " invalid" : ""}`;
+        row.dataset.rigidName = name;
+        row.querySelector('[data-role="name"]').textContent = name;
+
+        const actions = row.querySelector(".tracking-rigid-header-actions");
+        let deleteButton = row.querySelector(".tracking-rigid-delete");
+        if (definition.is_custom) {
+          if (!deleteButton) {
+            deleteButton = document.createElement("button");
+            deleteButton.className = "tracking-rigid-delete";
+            deleteButton.type = "button";
+            deleteButton.textContent = "Delete";
+            actions.insertBefore(deleteButton, actions.firstChild);
+          }
+          deleteButton.dataset.deleteRigid = name;
+        } else if (deleteButton) {
+          deleteButton.remove();
+        }
+
+        const badge = row.querySelector('[data-role="status"]');
+        const badgeClass = tracked ? (body.valid ? "ok" : "warn") : "info";
+        badge.className = `tracking-card-badge ${badgeClass}`;
+        badge.textContent = tracked ? (body.valid ? "Valid" : "Lost") : "Defined";
+
+        const rms = tracked ? Number(body.rms_error ?? 0).toFixed(3) : "—";
+        const trailLength = tracked ? (body.trail || []).length : 0;
+        const markerCount = tracked
+          ? body.observed_markers ?? definition.marker_count ?? 0
+          : definition.marker_count ?? 0;
+        row.querySelector('[data-role="kind"]').textContent = definition.is_custom ? "Custom" : "Built-in";
+        row.querySelector('[data-role="markers"]').textContent = `Markers ${markerCount}`;
+        row.querySelector('[data-role="rms"]').textContent = `RMS ${rms}`;
+        row.querySelector('[data-role="trail"]').textContent = `Trail ${trailLength}`;
+
+        const notes = row.querySelector('[data-role="notes"]');
+        notes.textContent = definition.notes || "";
+        notes.hidden = !definition.notes;
+        nextRows.push(row);
+      });
+      const currentRows = Array.from(elements.trackingRigidList.children);
+      const sameRows = currentRows.length === nextRows.length
+        && nextRows.every((row, index) => currentRows[index] === row);
+      if (!sameRows) {
+        elements.trackingRigidList.replaceChildren(...nextRows);
+      }
     }
 
     function renderTrackingClientDiagnostics() {
@@ -3916,6 +4008,15 @@
       });
     }
 
+    function resetTrackingSceneSequenceState() {
+      latestTrackingSceneSequence = null;
+      trackingSceneBootstrapped = false;
+      pendingTrackingSceneRaw = null;
+      pendingTrackingSceneReceivedAtMs = 0;
+      trackingScenePayloadQueued = false;
+      trackingClientDiagnostics.reset();
+    }
+
     function handleTrackingScenePayload(rawData) {
       const receivedAtMs = performance.now();
       if (trackingClientDiagnostics.lastEventAtMs > 0) {
@@ -3962,6 +4063,8 @@
       pendingTrackingSceneRaw = null;
       pendingTrackingSceneReceivedAtMs = 0;
       trackingScenePayloadQueued = false;
+      latestTrackingSceneSequence = null;
+      trackingClientDiagnostics.lastSequence = null;
     }
 
     async function loadTracking(options = {}) {
@@ -4545,6 +4648,7 @@
     elements.trackingStart.addEventListener("click", async () => {
       showStatus("Starting tracking...", "info");
       trackingUiState = { phase: "starting", error: "" };
+      resetTrackingSceneSequenceState();
       renderTrackingBadge(latestTrackingStatus);
       renderTrackingControlState(latestTrackingStatus);
       try {
@@ -4555,7 +4659,7 @@
           camera_ids: selectedCameraIds(),
           epipolar_threshold_px: Number(elements.trackingEpipolarThreshold?.value || 3.5),
           rigid_stabilization: {
-            object_conditioned_gating: false,
+            object_conditioned_gating: true,
             subset_ransac: false,
             reacquire_guard_shadow_enabled: false,
             reacquire_guard_event_logging: false,
@@ -4598,6 +4702,7 @@
       try {
         await postJson("/api/tracking/stop", {});
         trackingUiState = { phase: "idle", error: "" };
+        resetTrackingSceneSequenceState();
         setActivePage("tracking");
         await safeLoadState();
         showStatus("Tracking stopped.", "success");

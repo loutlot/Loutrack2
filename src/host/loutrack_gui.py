@@ -1354,7 +1354,10 @@ class LoutrackGuiHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            return
 
     def _send_text(self, body: str, status: HTTPStatus = HTTPStatus.OK) -> None:
         data = body.encode("utf-8")
