@@ -52,6 +52,9 @@ def test_multi_rigid_summary_includes_mvp_metadata(tmp_path):
     assert metadata["camera_rig_source"] == "dummy"
     assert metadata["marker_layout"] == "current_4marker"
     assert tuple(metadata["rigid_names"]) == ("waist", "wand")
+    assert "performance_budget" in summary
+    assert "variant_metrics" in summary
+    assert "pipeline_pair_no_sustained_over_8_475ms" in summary["production_go_no_go"]
 
 
 def test_sim_closed_loop_static_no_noise_metrics_and_logs(tmp_path):

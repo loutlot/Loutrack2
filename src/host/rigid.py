@@ -1866,6 +1866,33 @@ class RigidBodyEstimator:
             self._rigid_candidate_fallback_count += 1
             self._rigid_candidate_fallback_reason_counts[str(reason or "unknown")] += 1
 
+    def _should_hold_unseen_tracked_rigid(
+        self,
+        pattern: MarkerPattern,
+        tracker: RigidBodyTracker,
+        timestamp: int,
+        hint_markers_by_rigid: Dict[str, Dict[int, Dict[str, Any]]],
+    ) -> bool:
+        """Keep an established rigid on prediction when only other rigids are observed."""
+        if len(self.patterns) <= 1:
+            return False
+        if int(tracker.track_count) <= 0:
+            return False
+        if tracker.mode not in {TrackMode.CONTINUE, TrackMode.REACQUIRE, TrackMode.LOST}:
+            return False
+        if hint_markers_by_rigid.get(pattern.name):
+            return False
+        if not tracker.peek_prediction(timestamp).valid:
+            return False
+
+        for other in self.patterns:
+            if other.name == pattern.name:
+                continue
+            required = max(3, int(other.num_markers) - 1)
+            if len(hint_markers_by_rigid.get(other.name, {})) >= required:
+                return True
+        return False
+
     def _rigid_hint_candidate_cluster(
         self,
         pattern: MarkerPattern,
@@ -2753,6 +2780,15 @@ class RigidBodyEstimator:
 
         candidates: List[_PoseCandidate] = []
         used_clusters: set[int] = set()
+        hint_markers_by_rigid: Dict[str, Dict[int, Dict[str, Any]]] = {}
+        if has_rigid_hints:
+            hint_markers_by_rigid = {
+                pattern.name: self._rigid_hint_markers_by_index(
+                    pattern,
+                    rigid_hint_triangulated_points,
+                )
+                for pattern in self.patterns
+            }
 
         for pattern in self.patterns:
             best_pose = None
@@ -2761,6 +2797,8 @@ class RigidBodyEstimator:
             best_score_from_separated: Optional[Dict[str, Any]] = None
             tracker = self.trackers[pattern.name]
             skip_unowned_boot_generic = False
+            skip_unseen_tracked_generic = False
+            prediction_reason = "no_valid_pose"
 
             if self.rigid_candidate_separation_enabled and has_rigid_hints:
                 separated = self._try_rigid_separated_candidate(
@@ -2783,17 +2821,26 @@ class RigidBodyEstimator:
                         other is not tracker and int(other.track_count) > 0
                         for other in self.trackers.values()
                     )
-                    and len(
-                        self._rigid_hint_markers_by_index(
-                            pattern,
-                            rigid_hint_triangulated_points,
-                        )
-                    )
+                    and len(hint_markers_by_rigid.get(pattern.name, {}))
                     < max(3, pattern.num_markers - 1)
                 ):
                     skip_unowned_boot_generic = True
 
-            if best_pose is None and not skip_unowned_boot_generic:
+            if self._should_hold_unseen_tracked_rigid(
+                pattern,
+                tracker,
+                timestamp,
+                hint_markers_by_rigid,
+            ):
+                skip_unseen_tracked_generic = True
+                prediction_reason = "tracked_rigid_unseen_hold_prediction"
+                self._record_rigid_candidate_fallback(prediction_reason)
+
+            if (
+                best_pose is None
+                and not skip_unowned_boot_generic
+                and not skip_unseen_tracked_generic
+            ):
                 for idx, cluster in enumerate(get_clusters()):
                     if idx in used_clusters:
                         continue
@@ -2816,7 +2863,11 @@ class RigidBodyEstimator:
                         best_error = pose.rms_error
                         best_cluster_idx = idx
 
-            if best_pose is None and not skip_unowned_boot_generic:
+            if (
+                best_pose is None
+                and not skip_unowned_boot_generic
+                and not skip_unseen_tracked_generic
+            ):
                 boot_pose = self._try_multi_pattern_boot_candidate(
                     pattern,
                     points_3d,
@@ -2989,7 +3040,7 @@ class RigidBodyEstimator:
             else:
                 predicted = tracker.predict()
                 predicted.timestamp = timestamp
-                score = _empty_reprojection_score("no_valid_pose")
+                score = _empty_reprojection_score(prediction_reason)
                 hint_diagnostic = self._evaluate_rigid_hint_pose(
                     pattern,
                     timestamp,
@@ -3081,19 +3132,19 @@ class RigidBodyEstimator:
                     continuity_guard = _empty_pose_continuity_guard(
                         enabled=self.pose_continuity_guard_config.enabled,
                         enforced=self.pose_continuity_guard_config.enforced,
-                        reason="no_valid_pose",
+                        reason=prediction_reason,
                         thresholds=self.pose_continuity_guard_config.thresholds_dict(),
                     )
                     position_guard = _empty_position_continuity_guard(
                         enabled=self.position_continuity_guard_config.enabled,
                         enforced=self.position_continuity_guard_config.enforced,
-                        reason="no_valid_pose",
+                        reason=prediction_reason,
                         thresholds=self.position_continuity_guard_config.thresholds_dict(),
                     )
                     guard = _empty_reacquire_guard(
                         enabled=self.reacquire_guard_config.shadow_enabled,
                         enforced=self.reacquire_guard_config.enforced,
-                        reason="no_valid_pose",
+                        reason=prediction_reason,
                         thresholds=self.reacquire_guard_config.thresholds_dict(),
                     )
 
@@ -3112,6 +3163,8 @@ class RigidBodyEstimator:
                     invalid_reason = "pose_continuity_guard_rejected"
                 elif guard.get("enforced") and guard.get("would_reject"):
                     invalid_reason = "reprojection_guard_rejected"
+                elif not selected_pose.valid and prediction_reason != "no_valid_pose":
+                    invalid_reason = prediction_reason
 
                 candidates.append(
                     _PoseCandidate(

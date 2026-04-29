@@ -9,4 +9,4 @@
 2. When updating `/changelog.md`, verify that referenced file and directory paths still exist or clearly describe renamed/moved locations.
 3. when adding or updating tests, do not leave overlapping temporary tests or stale duplicate test coverage; consolidate similar tests and remove leftovers in the same change
 4. Pi / GUI startup and shutdown procedure lives at `docs/30_procedure/pi_gui_start_stop.md`
-5. Multi-rigid simulator is a development tool under `tools/sim/`; usage and validation steps live at `docs/40_tools/multi_rigid_simulator.md`.
+5. Multi-rigid simulator "sim" is a development tool under `tools/sim/`; usage and validation steps live at `docs/40_tools/multi_rigid_simulator.md`.

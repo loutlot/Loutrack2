@@ -1,3 +1,5 @@
+- `src/host/rigid.py` now holds established but unseen multi-rigid bodies on prediction instead of scanning other visible rigid clusters during occlusion.
+- `tools/sim` summaries now include sustained 118fps budget checks and rigid variant metrics for waist+wand occlusion PDCA.
 - `AGENTS.md` now points simulator work to `tools/sim/` and `docs/40_tools/multi_rigid_simulator.md`.
 - `tools/sim` now hosts the waist+wand 4-marker simulator with sidecar blob ownership metadata, scenario summaries, and generated 4-camera intrinsics-copy support.
 - `tests/sim` and `tests/test_sim_closed_loop.py` now cover waist+wand projection, sidecar ownership metadata, scenario CLI output, and legacy closed-loop metrics.

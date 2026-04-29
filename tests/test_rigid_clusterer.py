@@ -146,6 +146,69 @@ def test_multi_pattern_boot_finds_rigids_among_32_points() -> None:
     assert np.allclose(poses["wand"].position, wand_offset, atol=1e-9)
 
 
+def test_tracked_unseen_rigid_holds_prediction_instead_of_generic_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wand_pattern = MarkerPattern(
+        name="wand",
+        marker_positions=WAIST_PATTERN.marker_positions + np.array([0.25, 0.0, 0.0]),
+    )
+    estimator = RigidBodyEstimator(
+        patterns=[WAIST_PATTERN, wand_pattern],
+        rigid_candidate_separation_enabled=True,
+        subset_diagnostics_mode="off",
+    )
+    for tracker in estimator.trackers.values():
+        tracker.mode_config = TrackModeConfig(boot_consecutive_accepts=1)
+
+    waist_offset = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+    wand_offset = np.array([4.0, 5.0, 6.0], dtype=np.float64)
+    estimator.process_points(
+        np.vstack(
+            [
+                WAIST_PATTERN.marker_positions + waist_offset,
+                wand_pattern.marker_positions + wand_offset,
+            ]
+        ),
+        timestamp=1_000_000,
+    )
+
+    original_estimate_pose = estimator.estimate_pose
+    estimate_calls: list[str] = []
+
+    def _spy_estimate_pose(points, pattern, timestamp):  # noqa: ANN001
+        estimate_calls.append(pattern.name)
+        return original_estimate_pose(points, pattern, timestamp)
+
+    monkeypatch.setattr(estimator, "estimate_pose", _spy_estimate_pose)
+    wand_points = wand_pattern.marker_positions + wand_offset
+    rigid_hints = [
+        {
+            "rigid_name": "wand",
+            "marker_idx": marker_idx,
+            "point": point.copy(),
+            "contributing_rays": 2,
+        }
+        for marker_idx, point in enumerate(wand_points)
+    ]
+
+    poses = estimator.process_context(
+        wand_points,
+        1_016_000,
+        rigid_hint_triangulated_points=rigid_hints,
+    )
+
+    assert poses["waist"].valid is False
+    assert "waist" not in estimate_calls
+    assert estimator.get_tracking_status()["waist"]["invalid_reason"] == (
+        "tracked_rigid_unseen_hold_prediction"
+    )
+    metrics = estimator.get_variant_metrics()
+    assert metrics["rigid_candidate_fallback_reason_counts"][
+        "tracked_rigid_unseen_hold_prediction"
+    ] == 1
+
+
 def test_multi_pattern_boot_keeps_rigid_with_one_missing_marker() -> None:
     wand_pattern = MarkerPattern(
         name="wand",
