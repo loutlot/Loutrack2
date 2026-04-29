@@ -1,3 +1,7 @@
+- Added `docs/10_in_progress/multi_rigid_simulator_plan.md` with PDCA goals, human-motion scenarios, regression metrics, and `src/host/sim.py` as the fixed entrypoint for a 5-rigid, 5-blob, 4-camera simulator.
+- `src/host/rigid.py` now applies strict 2D recovery checks to previously tracked LOST/BOOT rigid candidates so unscored generic recovery cannot move tracker state toward another rigid.
+- `static/index.html` now starts GUI tracking with reacquire guard enforcement enabled alongside object gating and continuity guards.
+- `src/host/rigid.py` now resolves multi-rigid pose candidates frame-locally before tracker commit, keeps large-innovation reacquire candidates pending, and skips unowned BOOT generic fallback to avoid cross-rigid attraction.
 - `docs/30_procedure/pi_gui_start_stop.md` now documents the Codex desktop `launchctl submit` GUI restart path when `nohup` children do not survive shell exit.
 - Tracking viewer raw blobs now use a coalesced full-scene triangulation path so `static/index.html` can show all raw points while pose tracking stays on the fast object-gated path.
 - Object-gated rigid-hint pose enforcement now refuses blob views already owned by another rigid body, keeping overlapping multi-rigid occlusion recovery from adopting the wrong target.

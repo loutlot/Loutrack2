@@ -1112,10 +1112,67 @@ class RigidBodyTracker:
             _empty_position_continuity_guard()
         )
     
-    def update(self, pose: RigidBodyPose, *, invalid_reason: Optional[str] = None) -> None:
+    def update(
+        self,
+        pose: RigidBodyPose,
+        *,
+        invalid_reason: Optional[str] = None,
+        stage_reacquire: bool = True,
+    ) -> None:
         """Update tracker with new pose estimate, including velocity estimation."""
         with self._lock:
+            if stage_reacquire and self._mode == TrackMode.REACQUIRE and pose.valid:
+                self._record_innovation_locked(pose)
+                if self._measurement_matches_prediction_locked(pose):
+                    self._mode_consecutive_accepts += 1
+                    self._mode_consecutive_rejects = 0
+                    reason = "reacquire_candidate_consistent"
+                else:
+                    self._mode_consecutive_accepts = 0
+                    self._mode_consecutive_rejects += 1
+                    reason = "reacquire_candidate_large_innovation"
+
+                ready = (
+                    self._mode_consecutive_accepts
+                    >= self.mode_config.reacquire_consecutive_accepts
+                )
+                if not ready:
+                    rejected_pose = RigidBodyPose(
+                        timestamp=int(pose.timestamp),
+                        position=np.zeros(3, dtype=np.float64),
+                        rotation=np.eye(3, dtype=np.float64),
+                        quaternion=np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64),
+                        valid=False,
+                    )
+                    previous_valid = self._pose_history[-1].valid if self._pose_history else False
+                    self._pose_history.append(rejected_pose)
+                    self.total_frames += 1
+                    self.stats.record(
+                        rejected_pose,
+                        previous_valid=previous_valid,
+                        invalid_reason=invalid_reason
+                        or "reacquire_pending_confirmation:" + reason,
+                    )
+                    self.lost_frames += 1
+                    if self._mode_consecutive_rejects >= self.mode_config.reacquire_lost_frames:
+                        self._transition_mode_locked(
+                            TrackMode.LOST,
+                            pose.timestamp,
+                            "reacquire_timeout",
+                        )
+                    else:
+                        self._last_mode_reason = reason
+                        self._mode_frame_count += 1
+                    return
+
             previous_valid = self._pose_history[-1].valid if self._pose_history else False
+            if (
+                self._mode == TrackMode.REACQUIRE
+                and not pose.valid
+                and invalid_reason
+                and not str(invalid_reason).startswith("reacquire_pending_confirmation")
+            ):
+                self._mode_consecutive_accepts = 0
             self._update_mode_locked(pose)
             self._pose_history.append(pose)
             self.total_frames += 1
@@ -1136,6 +1193,65 @@ class RigidBodyTracker:
                 self._position = pose.position.copy()
                 self._quaternion = pose.quaternion.copy()
                 self._last_valid_timestamp = pose.timestamp
+                self.track_count += 1
+                self.lost_frames = 0
+            else:
+                self.lost_frames += 1
+
+    def prepare_reacquire_candidate(self, pose: RigidBodyPose) -> Tuple[bool, str]:
+        """Evaluate a reacquire candidate without committing it to the pose state."""
+        with self._lock:
+            if self._mode != TrackMode.REACQUIRE:
+                return True, "not_reacquire"
+            if not pose.valid:
+                self._mode_consecutive_rejects += 1
+                self._mode_consecutive_accepts = 0
+                reason = "reacquire_waiting"
+            else:
+                self._record_innovation_locked(pose)
+                if self._measurement_matches_prediction_locked(pose):
+                    self._mode_consecutive_accepts += 1
+                    self._mode_consecutive_rejects = 0
+                    reason = "reacquire_candidate_consistent"
+                else:
+                    self._mode_consecutive_accepts = 0
+                    self._mode_consecutive_rejects += 1
+                    reason = "reacquire_candidate_large_innovation"
+
+            ready = bool(
+                pose.valid
+                and self._mode_consecutive_accepts
+                >= self.mode_config.reacquire_consecutive_accepts
+            )
+            if not ready and self._mode_consecutive_rejects >= self.mode_config.reacquire_lost_frames:
+                self._transition_mode_locked(TrackMode.LOST, pose.timestamp, "reacquire_timeout")
+                reason = "reacquire_timeout"
+            else:
+                self._last_mode_reason = reason
+                self._mode_frame_count += 1
+            return ready, reason
+
+    def _stage_reacquire_candidate(self, pose: RigidBodyPose) -> Tuple[bool, str]:
+        """Compatibility wrapper for tests and internal staging terminology."""
+        return self.prepare_reacquire_candidate(pose)
+
+    def record_non_committed_frame(
+        self,
+        pose: RigidBodyPose,
+        *,
+        invalid_reason: Optional[str] = None,
+    ) -> None:
+        """Record a frame without letting its pose update prediction state."""
+        with self._lock:
+            previous_valid = self._pose_history[-1].valid if self._pose_history else False
+            self._pose_history.append(pose)
+            self.total_frames += 1
+            self.stats.record(
+                pose,
+                previous_valid=previous_valid,
+                invalid_reason=invalid_reason,
+            )
+            if pose.valid:
                 self.track_count += 1
                 self.lost_frames = 0
             else:
@@ -1491,7 +1607,8 @@ class RigidBodyTracker:
             self._record_innovation_locked(pose)
         else:
             self._mode_consecutive_rejects += 1
-            self._mode_consecutive_accepts = 0
+            if self._mode != TrackMode.REACQUIRE:
+                self._mode_consecutive_accepts = 0
             self._last_mode_reason = "measurement_rejected"
 
         next_mode = self._mode
@@ -1586,10 +1703,45 @@ class RigidBodyTracker:
     def _measurement_matches_prediction_locked(self, pose: RigidBodyPose) -> bool:
         if self.track_count == 0 or self._last_valid_timestamp <= 0:
             return True
-        return (
-            self._last_position_innovation_m <= self.mode_config.continue_position_gate_m
-            and self._last_rotation_innovation_deg <= self.mode_config.continue_rotation_gate_deg
+        dt_s = max(0.0, float(pose.timestamp - self._last_valid_timestamp) / 1_000_000.0)
+        occlusion_position_slack_m = min(
+            0.90,
+            0.035 * float(self.lost_frames) + 0.12 * dt_s,
         )
+        occlusion_rotation_slack_deg = min(
+            60.0,
+            4.0 * float(self.lost_frames) + 12.0 * dt_s,
+        )
+        position_gate_m = (
+            self.mode_config.continue_position_gate_m + occlusion_position_slack_m
+        )
+        rotation_gate_deg = min(
+            180.0,
+            self.mode_config.continue_rotation_gate_deg + occlusion_rotation_slack_deg,
+        )
+        return (
+            self._last_position_innovation_m <= position_gate_m
+            and self._last_rotation_innovation_deg <= rotation_gate_deg
+        )
+
+
+@dataclass
+class _PoseCandidate:
+    rigid_name: str
+    pattern: MarkerPattern
+    tracker: RigidBodyTracker
+    pose: RigidBodyPose
+    score: Dict[str, Any]
+    source: str
+    hint_diagnostic: Dict[str, Any]
+    subset_diagnostic: Dict[str, Any]
+    position_guard: Dict[str, Any]
+    continuity_guard: Dict[str, Any]
+    reacquire_guard: Dict[str, Any]
+    rank_score: float
+    best_cluster_idx: int = -1
+    reject_reasons: List[str] = field(default_factory=list)
+    invalid_reason: str = ""
 
 
 class RigidBodyEstimator:
@@ -2371,6 +2523,183 @@ class RigidBodyEstimator:
             coordinate_space=coordinate_space,
         )
 
+    @staticmethod
+    def _matched_blob_views(score: Dict[str, Any]) -> set[Tuple[str, int]]:
+        matched = score.get("matched_observations", []) if isinstance(score, dict) else []
+        views: set[Tuple[str, int]] = set()
+        if not isinstance(matched, list):
+            return views
+        for item in matched:
+            if not isinstance(item, dict):
+                continue
+            try:
+                blob_index = int(item.get("blob_index", -1))
+            except (TypeError, ValueError):
+                continue
+            if blob_index >= 0:
+                views.add((str(item.get("camera_id", "")), blob_index))
+        return views
+
+    def _candidate_rank_score(
+        self,
+        *,
+        pose: RigidBodyPose,
+        score: Dict[str, Any],
+        source: str,
+        tracker: RigidBodyTracker,
+    ) -> float:
+        if not pose.valid:
+            return -1.0
+        score_value = float(score.get("score", 0.0) or 0.0) if isinstance(score, dict) else 0.0
+        matched = int(score.get("matched_marker_views", 0) or 0) if isinstance(score, dict) else 0
+        p95 = float(score.get("p95_error_px", 0.0) or 0.0) if isinstance(score, dict) else 0.0
+        source_bonus = {
+            "rigid_hint": 0.06,
+            "generic": 0.0,
+            "position_continuity_guard": -0.02,
+            "pose_continuity_guard": -0.08,
+        }.get(str(source), 0.0)
+        if len(self.patterns) <= 1:
+            return float(score_value + 0.01 * matched + source_bonus - 0.01 * p95)
+        prediction = tracker.peek_prediction(pose.timestamp)
+        temporal_penalty = 0.0
+        if prediction.valid:
+            position_delta = float(np.linalg.norm(pose.position - prediction.position))
+            rotation_delta = _quaternion_angle_deg(prediction.quaternion, pose.quaternion)
+            temporal_penalty = min(0.25, position_delta / 1.0 + rotation_delta / 720.0)
+        return float(score_value + 0.01 * matched + source_bonus - 0.01 * p95 - temporal_penalty)
+
+    def _resolve_frame_local_candidate_ownership(self, candidates: List[_PoseCandidate]) -> None:
+        if len(self.patterns) <= 1:
+            return
+        ownership: Dict[Tuple[str, int], List[_PoseCandidate]] = {}
+        for candidate in candidates:
+            if candidate.invalid_reason or not candidate.pose.valid:
+                continue
+            for view in self._matched_blob_views(candidate.score):
+                ownership.setdefault(view, []).append(candidate)
+
+        contested: Dict[str, List[str]] = {}
+        for view, owners in ownership.items():
+            rigid_names = {owner.rigid_name for owner in owners}
+            if len(rigid_names) <= 1:
+                continue
+            ranked = sorted(
+                owners,
+                key=lambda item: (
+                    float(item.rank_score),
+                    int(item.pose.observed_markers),
+                    int(item.score.get("matched_marker_views", 0) or 0),
+                    -float(item.score.get("p95_error_px", 0.0) or 0.0),
+                    item.rigid_name,
+                ),
+                reverse=True,
+            )
+            winner = ranked[0]
+            for loser in ranked[1:]:
+                if loser.rigid_name == winner.rigid_name:
+                    continue
+                contested.setdefault(loser.rigid_name, []).append(
+                    f"{view[0]}:{view[1]}->{winner.rigid_name}"
+                )
+
+        for candidate in candidates:
+            conflicts = contested.get(candidate.rigid_name, [])
+            if conflicts:
+                candidate.reject_reasons.append("frame_blob_ownership_conflict")
+                candidate.invalid_reason = (
+                    "frame_local_blob_ownership_conflict:" + ",".join(sorted(set(conflicts))[:4])
+                )
+
+    def _resolve_frame_candidate_ownership(self, candidates: List[_PoseCandidate]) -> None:
+        self._resolve_frame_local_candidate_ownership(candidates)
+
+    def _strict_reacquire_reject_reasons(
+        self,
+        candidate: _PoseCandidate,
+    ) -> List[str]:
+        tracker = candidate.tracker
+        guarded_recovery = (
+            tracker.mode == TrackMode.REACQUIRE
+            or (
+                tracker.mode in {TrackMode.LOST, TrackMode.BOOT}
+                and int(tracker.track_count) > 0
+                and int(tracker.lost_frames) > 0
+            )
+        )
+        if not guarded_recovery or not candidate.pose.valid:
+            return []
+        score = candidate.score if isinstance(candidate.score, dict) else {}
+        min_markers = max(3, int(candidate.pattern.num_markers) - 1)
+        min_views = max(
+            int(self.reacquire_guard_config.min_matched_marker_views),
+            min_markers * 2,
+        )
+        reasons: List[str] = []
+        if candidate.pose.observed_markers < min_markers:
+            reasons.append("insufficient_reacquire_markers")
+        if not score.get("scored", False):
+            reasons.append(f"score_not_available:{score.get('reason', 'unknown')}")
+        if int(score.get("matched_marker_views", 0) or 0) < min_views:
+            reasons.append("insufficient_reacquire_matched_views")
+        if int(score.get("missing_marker_views", 0) or 0) > self.reacquire_guard_config.max_missing_marker_views:
+            reasons.append("too_many_missing_marker_views")
+        if float(score.get("mean_error_px", 0.0) or 0.0) > self.reacquire_guard_config.max_mean_reprojection_error_px:
+            reasons.append("mean_reprojection_error_too_high")
+        if float(score.get("p95_error_px", 0.0) or 0.0) > self.reacquire_guard_config.max_p95_reprojection_error_px:
+            reasons.append("p95_reprojection_error_too_high")
+        if int(score.get("duplicate_assignment_count", 0) or 0) > 0:
+            reasons.append("duplicate_assignment")
+        if candidate.source == "pose_continuity_guard":
+            reasons.append("held_pose_cannot_reacquire")
+        return reasons
+
+    def _apply_candidate_update(
+        self,
+        candidate: _PoseCandidate,
+        timestamp: int,
+    ) -> RigidBodyPose:
+        tracker = candidate.tracker
+        tracker.record_reprojection_score(candidate.score)
+        tracker.record_rigid_hint_pose(candidate.hint_diagnostic)
+        tracker.record_subset_hypothesis(candidate.subset_diagnostic)
+        tracker.record_position_continuity_guard(candidate.position_guard)
+        tracker.record_pose_continuity_guard(candidate.continuity_guard)
+        tracker.record_reacquire_guard(candidate.reacquire_guard)
+
+        if candidate.invalid_reason:
+            rejected_pose = self._invalid_pose(timestamp)
+            tracker.update(rejected_pose, invalid_reason=candidate.invalid_reason)
+            return rejected_pose
+        if not candidate.pose.valid:
+            tracker.update(candidate.pose)
+            return candidate.pose
+
+        strict_reacquire_reasons = self._strict_reacquire_reject_reasons(candidate)
+        if strict_reacquire_reasons:
+            rejected_pose = self._invalid_pose(timestamp)
+            tracker.update(
+                rejected_pose,
+                invalid_reason="strict_reacquire_rejected:" + ",".join(strict_reacquire_reasons),
+            )
+            return rejected_pose
+
+        if tracker.mode == TrackMode.REACQUIRE:
+            brief_reacquire_gap = int(tracker.lost_frames) <= 1
+            ready, reason = tracker.prepare_reacquire_candidate(candidate.pose)
+            if not ready and not (
+                brief_reacquire_gap and reason == "reacquire_candidate_consistent"
+            ):
+                rejected_pose = self._invalid_pose(timestamp)
+                tracker.record_non_committed_frame(
+                    rejected_pose,
+                    invalid_reason="reacquire_pending_confirmation:" + reason,
+                )
+                return rejected_pose
+
+        tracker.update(candidate.pose, stage_reacquire=False)
+        return candidate.pose
+
     def _process_points(
         self,
         points_3d: np.ndarray,
@@ -2396,7 +2725,6 @@ class RigidBodyEstimator:
             self.object_gating_config.enabled and self.object_gating_config.enforce
         )
         if len(points_3d) == 0 and not has_rigid_hints:
-            # Return predictions for all bodies
             for tracker in self.trackers.values():
                 tracker.record_reprojection_score(_empty_reprojection_score("no_3d_points"))
                 tracker.record_rigid_hint_pose(_empty_rigid_hint_pose("no_rigid_hint_points"))
@@ -2410,23 +2738,29 @@ class RigidBodyEstimator:
                 name: tracker.predict()
                 for name, tracker in self.trackers.items()
             }
-        
-        # Cluster points
-        clusters = self.clusterer.cluster(points_3d)
-        if len(self.patterns) == 1 and len(points_3d) >= 3:
-            min_points = max(3, self.patterns[0].num_markers - 1)
-            if not any(len(cluster) >= min_points for cluster in clusters):
-                clusters.append(points_3d)
-        
-        # Estimate pose for each pattern
-        poses = {}
-        used_clusters = set()
-        
+
+        clusters: Optional[List[np.ndarray]] = None
+
+        def get_clusters() -> List[np.ndarray]:
+            nonlocal clusters
+            if clusters is None:
+                clusters = self.clusterer.cluster(points_3d)
+                if len(self.patterns) == 1 and len(points_3d) >= 3:
+                    min_points = max(3, self.patterns[0].num_markers - 1)
+                    if not any(len(cluster) >= min_points for cluster in clusters):
+                        clusters.append(points_3d)
+            return clusters
+
+        candidates: List[_PoseCandidate] = []
+        used_clusters: set[int] = set()
+
         for pattern in self.patterns:
             best_pose = None
             best_error = float('inf')
             best_cluster_idx = -1
             best_score_from_separated: Optional[Dict[str, Any]] = None
+            tracker = self.trackers[pattern.name]
+            skip_unowned_boot_generic = False
 
             if self.rigid_candidate_separation_enabled and has_rigid_hints:
                 separated = self._try_rigid_separated_candidate(
@@ -2441,9 +2775,26 @@ class RigidBodyEstimator:
                     best_pose, best_score_from_separated = separated
                     best_error = float(best_pose.rms_error)
                     best_cluster_idx = -1
-            
-            if best_pose is None:
-                for idx, cluster in enumerate(clusters):
+                elif (
+                    object_gating_enforced
+                    and tracker.mode == TrackMode.BOOT
+                    and int(tracker.track_count) == 0
+                    and any(
+                        other is not tracker and int(other.track_count) > 0
+                        for other in self.trackers.values()
+                    )
+                    and len(
+                        self._rigid_hint_markers_by_index(
+                            pattern,
+                            rigid_hint_triangulated_points,
+                        )
+                    )
+                    < max(3, pattern.num_markers - 1)
+                ):
+                    skip_unowned_boot_generic = True
+
+            if best_pose is None and not skip_unowned_boot_generic:
+                for idx, cluster in enumerate(get_clusters()):
                     if idx in used_clusters:
                         continue
 
@@ -2465,7 +2816,7 @@ class RigidBodyEstimator:
                         best_error = pose.rms_error
                         best_cluster_idx = idx
 
-            if best_pose is None:
+            if best_pose is None and not skip_unowned_boot_generic:
                 boot_pose = self._try_multi_pattern_boot_candidate(
                     pattern,
                     points_3d,
@@ -2475,8 +2826,7 @@ class RigidBodyEstimator:
                     best_pose = boot_pose
                     best_error = float(boot_pose.rms_error)
                     best_cluster_idx = -1
-            
-            tracker = self.trackers[pattern.name]
+
             if best_pose is not None:
                 score = (
                     dict(best_score_from_separated)
@@ -2498,6 +2848,7 @@ class RigidBodyEstimator:
                     coordinate_space=coordinate_space,
                     generic_pose=best_pose,
                     generic_score=score,
+                    generic_is_rigid_hint=best_score_from_separated is not None,
                 )
                 selected_pose = best_pose
                 selected_score = score
@@ -2529,6 +2880,7 @@ class RigidBodyEstimator:
                             hint_diagnostic["selection_reason"] = "not_enforceable"
                     else:
                         hint_diagnostic["selection_reason"] = "diagnostics_only"
+
                 subset_diagnostic = self._subset_diagnostics_for_frame(
                     pattern,
                     tracker,
@@ -2559,6 +2911,7 @@ class RigidBodyEstimator:
                         selected_pose = clamped_pose
                         selected_source = "position_continuity_guard"
                         position_guard["clamped_position"] = True
+
                 continuity_guard = self._evaluate_pose_continuity_guard(
                     tracker,
                     pattern,
@@ -2579,13 +2932,10 @@ class RigidBodyEstimator:
                         selected_source = "pose_continuity_guard"
                         continuity_guard["held_prediction"] = True
                         continuity_guard["held_rotation"] = True
+
                 guard = self._evaluate_reacquire_guard(tracker, selected_pose, selected_score)
-                tracker.record_reprojection_score(selected_score)
-                tracker.record_rigid_hint_pose(hint_diagnostic)
-                tracker.record_subset_hypothesis(subset_diagnostic)
-                tracker.record_position_continuity_guard(position_guard)
-                tracker.record_pose_continuity_guard(continuity_guard)
-                tracker.record_reacquire_guard(guard)
+
+                invalid_reason = ""
                 generic_guard_reasons = self._generic_continue_reject_reasons(
                     tracker,
                     selected_source=selected_source,
@@ -2593,56 +2943,53 @@ class RigidBodyEstimator:
                     hint_diagnostic=hint_diagnostic,
                 )
                 if generic_guard_reasons:
-                    rejected_pose = self._invalid_pose(timestamp)
-                    poses[pattern.name] = rejected_pose
-                    tracker.update(
-                        rejected_pose,
-                        invalid_reason="generic_continue_reprojection_guard_rejected:"
-                        + ",".join(generic_guard_reasons),
+                    invalid_reason = (
+                        "generic_continue_reprojection_guard_rejected:"
+                        + ",".join(generic_guard_reasons)
                     )
-                    continue
-                if (
+                elif (
                     position_guard.get("enforced")
                     and position_guard.get("would_reject")
                     and not position_guard.get("clamped_position")
                 ):
-                    rejected_pose = self._invalid_pose(timestamp)
-                    poses[pattern.name] = rejected_pose
-                    tracker.update(
-                        rejected_pose,
-                        invalid_reason="position_continuity_guard_rejected",
-                    )
-                    continue
-                if (
+                    invalid_reason = "position_continuity_guard_rejected"
+                elif (
                     continuity_guard.get("enforced")
                     and continuity_guard.get("would_reject")
                     and not continuity_guard.get("held_prediction")
                 ):
-                    rejected_pose = self._invalid_pose(timestamp)
-                    poses[pattern.name] = rejected_pose
-                    tracker.update(
-                        rejected_pose,
-                        invalid_reason="pose_continuity_guard_rejected",
-                    )
-                    continue
-                if guard.get("enforced") and guard.get("would_reject"):
-                    rejected_pose = self._invalid_pose(timestamp)
-                    poses[pattern.name] = rejected_pose
-                    tracker.update(
-                        rejected_pose,
-                        invalid_reason="reprojection_guard_rejected",
-                    )
-                else:
-                    poses[pattern.name] = selected_pose
-                    if selected_source == "generic" and best_cluster_idx >= 0:
-                        used_clusters.add(best_cluster_idx)
-                    tracker.update(selected_pose)
+                    invalid_reason = "pose_continuity_guard_rejected"
+                elif guard.get("enforced") and guard.get("would_reject"):
+                    invalid_reason = "reprojection_guard_rejected"
+
+                candidate = _PoseCandidate(
+                    rigid_name=pattern.name,
+                    pattern=pattern,
+                    tracker=tracker,
+                    pose=selected_pose,
+                    score=selected_score,
+                    source=selected_source,
+                    hint_diagnostic=hint_diagnostic,
+                    subset_diagnostic=subset_diagnostic,
+                    position_guard=position_guard,
+                    continuity_guard=continuity_guard,
+                    reacquire_guard=guard,
+                    rank_score=self._candidate_rank_score(
+                        pose=selected_pose,
+                        score=selected_score,
+                        source=selected_source,
+                        tracker=tracker,
+                    ),
+                    best_cluster_idx=best_cluster_idx,
+                    invalid_reason=invalid_reason,
+                )
+                candidates.append(candidate)
+                if selected_source == "generic" and best_cluster_idx >= 0:
+                    used_clusters.add(best_cluster_idx)
             else:
-                # Use prediction
-                predicted = self.trackers[pattern.name].predict()
+                predicted = tracker.predict()
                 predicted.timestamp = timestamp
                 score = _empty_reprojection_score("no_valid_pose")
-                tracker.record_reprojection_score(score)
                 hint_diagnostic = self._evaluate_rigid_hint_pose(
                     pattern,
                     timestamp,
@@ -2652,8 +2999,10 @@ class RigidBodyEstimator:
                     coordinate_space=coordinate_space,
                     generic_pose=None,
                     generic_score=score,
+                    generic_is_rigid_hint=False,
                 )
                 selected_pose = predicted
+                selected_source = "prediction"
                 if self._should_select_rigid_hint_pose(tracker, hint_diagnostic):
                     hint_pose = self._pose_from_payload(
                         hint_diagnostic.get("pose"),
@@ -2662,9 +3011,9 @@ class RigidBodyEstimator:
                     if hint_pose is not None and hint_pose.valid:
                         selected_pose = hint_pose
                         score = dict(hint_diagnostic.get("score") or _empty_reprojection_score())
+                        selected_source = "rigid_hint"
                         hint_diagnostic["selected_for_pose"] = True
                         hint_diagnostic["selection_reason"] = "object_gating_enforced"
-                        tracker.record_reprojection_score(score)
                     else:
                         hint_diagnostic["selected_for_pose"] = False
                         hint_diagnostic["selection_reason"] = "invalid_pose_payload"
@@ -2674,21 +3023,17 @@ class RigidBodyEstimator:
                 else:
                     hint_diagnostic["selection_reason"] = "diagnostics_only"
 
-                poses[pattern.name] = selected_pose
-                tracker.record_rigid_hint_pose(hint_diagnostic)
-                tracker.record_subset_hypothesis(
-                    self._subset_diagnostics_for_frame(
-                        pattern,
-                        tracker,
-                        timestamp,
-                        points_3d,
-                        rigid_hint_triangulated_points,
-                        camera_params,
-                        observations_by_camera,
-                        coordinate_space=coordinate_space,
-                        generic_pose=selected_pose if selected_pose.valid else None,
-                        generic_score=score,
-                    )
+                subset_diagnostic = self._subset_diagnostics_for_frame(
+                    pattern,
+                    tracker,
+                    timestamp,
+                    points_3d,
+                    rigid_hint_triangulated_points,
+                    camera_params,
+                    observations_by_camera,
+                    coordinate_space=coordinate_space,
+                    generic_pose=selected_pose if selected_pose.valid else None,
+                    generic_score=score,
                 )
                 if selected_pose.valid:
                     position_guard = self._evaluate_position_continuity_guard(
@@ -2707,8 +3052,9 @@ class RigidBodyEstimator:
                         )
                         if clamped_pose is not None:
                             selected_pose = clamped_pose
-                            poses[pattern.name] = selected_pose
+                            selected_source = "position_continuity_guard"
                             position_guard["clamped_position"] = True
+
                     continuity_guard = self._evaluate_pose_continuity_guard(
                         tracker,
                         pattern,
@@ -2726,9 +3072,10 @@ class RigidBodyEstimator:
                         )
                         if held_pose is not None:
                             selected_pose = held_pose
-                            poses[pattern.name] = selected_pose
+                            selected_source = "pose_continuity_guard"
                             continuity_guard["held_prediction"] = True
                             continuity_guard["held_rotation"] = True
+
                     guard = self._evaluate_reacquire_guard(tracker, selected_pose, score)
                 else:
                     continuity_guard = _empty_pose_continuity_guard(
@@ -2749,43 +3096,52 @@ class RigidBodyEstimator:
                         reason="no_valid_pose",
                         thresholds=self.reacquire_guard_config.thresholds_dict(),
                     )
-                tracker.record_position_continuity_guard(position_guard)
-                tracker.record_pose_continuity_guard(continuity_guard)
-                tracker.record_reacquire_guard(guard)
+
+                invalid_reason = ""
                 if (
                     position_guard.get("enforced")
                     and position_guard.get("would_reject")
                     and not position_guard.get("clamped_position")
                 ):
-                    rejected_pose = self._invalid_pose(timestamp)
-                    poses[pattern.name] = rejected_pose
-                    tracker.update(
-                        rejected_pose,
-                        invalid_reason="position_continuity_guard_rejected",
-                    )
-                    continue
-                if (
+                    invalid_reason = "position_continuity_guard_rejected"
+                elif (
                     continuity_guard.get("enforced")
                     and continuity_guard.get("would_reject")
                     and not continuity_guard.get("held_prediction")
                 ):
-                    rejected_pose = self._invalid_pose(timestamp)
-                    poses[pattern.name] = rejected_pose
-                    tracker.update(
-                        rejected_pose,
-                        invalid_reason="pose_continuity_guard_rejected",
+                    invalid_reason = "pose_continuity_guard_rejected"
+                elif guard.get("enforced") and guard.get("would_reject"):
+                    invalid_reason = "reprojection_guard_rejected"
+
+                candidates.append(
+                    _PoseCandidate(
+                        rigid_name=pattern.name,
+                        pattern=pattern,
+                        tracker=tracker,
+                        pose=selected_pose,
+                        score=score,
+                        source=selected_source,
+                        hint_diagnostic=hint_diagnostic,
+                        subset_diagnostic=subset_diagnostic,
+                        position_guard=position_guard,
+                        continuity_guard=continuity_guard,
+                        reacquire_guard=guard,
+                        rank_score=self._candidate_rank_score(
+                            pose=selected_pose,
+                            score=score,
+                            source=selected_source,
+                            tracker=tracker,
+                        ),
+                        invalid_reason=invalid_reason,
                     )
-                    continue
-                if guard.get("enforced") and guard.get("would_reject"):
-                    rejected_pose = self._invalid_pose(timestamp)
-                    poses[pattern.name] = rejected_pose
-                    tracker.update(
-                        rejected_pose,
-                        invalid_reason="reprojection_guard_rejected",
-                    )
-                    continue
-                self.trackers[pattern.name].update(selected_pose)
-        
+                )
+
+        self._resolve_frame_local_candidate_ownership(candidates)
+
+        poses: Dict[str, RigidBodyPose] = {}
+        for candidate in candidates:
+            poses[candidate.rigid_name] = self._apply_candidate_update(candidate, timestamp)
+
         return poses
 
     def _generic_continue_reject_reasons(
@@ -3205,6 +3561,7 @@ class RigidBodyEstimator:
         coordinate_space: str,
         generic_pose: Optional[RigidBodyPose],
         generic_score: Dict[str, Any],
+        generic_is_rigid_hint: bool = False,
     ) -> Dict[str, Any]:
         if not rigid_hint_triangulated_points:
             diagnostic = _empty_rigid_hint_pose("no_rigid_hint_points")
@@ -3275,50 +3632,54 @@ class RigidBodyEstimator:
             )
             return diagnostic
 
-        observed = np.asarray([by_marker[index]["point"] for index in marker_indices], dtype=np.float64)
-        reference = np.asarray(
-            [pattern.marker_positions[index] for index in marker_indices],
-            dtype=np.float64,
-        )
-        try:
-            rotation, position, rms_error = KabschEstimator.estimate(reference, observed)
-            quat_xyzw = Rotation.from_matrix(rotation).as_quat()
-            quaternion = np.array(
-                [quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]],
+        if generic_is_rigid_hint and generic_pose is not None and generic_pose.valid:
+            pose = generic_pose
+            score = dict(generic_score or _empty_reprojection_score())
+        else:
+            observed = np.asarray([by_marker[index]["point"] for index in marker_indices], dtype=np.float64)
+            reference = np.asarray(
+                [pattern.marker_positions[index] for index in marker_indices],
                 dtype=np.float64,
             )
-            pose = RigidBodyPose(
-                timestamp=timestamp,
-                position=position,
-                rotation=rotation,
-                quaternion=quaternion,
-                rms_error=float(rms_error),
-                observed_markers=int(candidate_points),
-                valid=bool(float(rms_error) <= self.max_rms_error_m),
-            )
-        except Exception:
-            diagnostic = _empty_rigid_hint_pose("rigid_hint_solve_failed")
-            diagnostic.update(
-                {
-                    "evaluated": True,
-                    "enforced": bool(self.object_gating_config.enforce),
-                    "candidate_points": int(candidate_points),
-                    "generic_valid": generic_valid,
-                    "generic_rms_error_m": generic_rms,
-                    "generic_score": dict(generic_score or _empty_reprojection_score()),
-                    "marker_indices": [int(index) for index in marker_indices],
-                    "invalid_points": int(invalid_points),
-                }
-            )
-            return diagnostic
+            try:
+                rotation, position, rms_error = KabschEstimator.estimate(reference, observed)
+                quat_xyzw = Rotation.from_matrix(rotation).as_quat()
+                quaternion = np.array(
+                    [quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]],
+                    dtype=np.float64,
+                )
+                pose = RigidBodyPose(
+                    timestamp=timestamp,
+                    position=position,
+                    rotation=rotation,
+                    quaternion=quaternion,
+                    rms_error=float(rms_error),
+                    observed_markers=int(candidate_points),
+                    valid=bool(float(rms_error) <= self.max_rms_error_m),
+                )
+            except Exception:
+                diagnostic = _empty_rigid_hint_pose("rigid_hint_solve_failed")
+                diagnostic.update(
+                    {
+                        "evaluated": True,
+                        "enforced": bool(self.object_gating_config.enforce),
+                        "candidate_points": int(candidate_points),
+                        "generic_valid": generic_valid,
+                        "generic_rms_error_m": generic_rms,
+                        "generic_score": dict(generic_score or _empty_reprojection_score()),
+                        "marker_indices": [int(index) for index in marker_indices],
+                        "invalid_points": int(invalid_points),
+                    }
+                )
+                return diagnostic
 
-        score = self._score_pose_reprojection(
-            pose,
-            pattern,
-            camera_params,
-            observations_by_camera,
-            coordinate_space=coordinate_space,
-        )
+            score = self._score_pose_reprojection(
+                pose,
+                pattern,
+                camera_params,
+                observations_by_camera,
+                coordinate_space=coordinate_space,
+            )
         generic_score_value = float((generic_score or {}).get("score", 0.0))
         hint_score_value = float(score.get("score", 0.0))
         position_delta_m = (

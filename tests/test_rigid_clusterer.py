@@ -17,6 +17,8 @@ from host.rigid import (
     PoseContinuityGuardConfig,
     RigidBodyEstimator,
     RigidBodyPose,
+    RigidBodyTracker,
+    TrackMode,
     TrackModeConfig,
     WAIST_PATTERN,
 )
@@ -468,3 +470,201 @@ def test_position_continuity_guard_clamps_low_marker_acceleration(
     assert guard["clamped_count"] == 1
     assert np.allclose(second.position, np.array([0.001, 0.0, 0.0], dtype=np.float64))
     assert np.allclose(second.quaternion, quat)
+
+
+def test_simultaneous_reacquire_shared_blob_observations_commit_one_loser_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wand_pattern = MarkerPattern(
+        name="wand",
+        marker_positions=WAIST_PATTERN.marker_positions + np.array([0.25, 0.0, 0.0]),
+    )
+    estimator = RigidBodyEstimator(
+        patterns=[WAIST_PATTERN, wand_pattern],
+        object_gating_config=ObjectGatingConfig(enabled=True, enforce=True),
+        rigid_candidate_separation_enabled=True,
+        subset_diagnostics_mode="off",
+    )
+    if not hasattr(estimator, "_resolve_frame_local_candidate_ownership"):
+        pytest.xfail("pending frame-local rigid candidate ownership resolver")
+
+    for tracker in estimator.trackers.values():
+        tracker.mode_config = TrackModeConfig(
+            boot_consecutive_accepts=1,
+            reacquire_consecutive_accepts=1,
+        )
+        tracker.update(_test_pose(1_000_000, [0.0, 0.0, 2.5]))
+        tracker.update(_test_pose(1_016_000, [0.0, 0.0, 2.5], valid=False))
+
+    shared_score = {
+        "scored": True,
+        "reason": "ok",
+        "score": 0.95,
+        "matched_marker_views": 8,
+        "expected_marker_views": 8,
+        "missing_marker_views": 0,
+        "mean_error_px": 1.0,
+        "p95_error_px": 2.0,
+        "duplicate_assignment_count": 0,
+        "matched_observations": [
+            {"camera_id": "pi-cam-01", "blob_index": 4},
+            {"camera_id": "pi-cam-02", "blob_index": 6},
+            {"camera_id": "pi-cam-01", "blob_index": 5},
+            {"camera_id": "pi-cam-02", "blob_index": 7},
+        ],
+    }
+    monkeypatch.setattr(
+        estimator,
+        "_score_pose_reprojection",
+        lambda *_args, **_kwargs: dict(shared_score),
+    )
+    points = WAIST_PATTERN.marker_positions + np.array([0.02, 0.0, 2.5], dtype=np.float64)
+    rigid_hints = [
+        {
+            "rigid_name": rigid_name,
+            "marker_idx": marker_idx,
+            "point": point.copy(),
+            "contributing_rays": 2,
+        }
+        for rigid_name in ("waist", "wand")
+        for marker_idx, point in enumerate(points)
+    ]
+
+    poses = estimator.process_context(
+        np.empty((0, 3), dtype=np.float64),
+        1_032_000,
+        camera_params={"pi-cam-01": object(), "pi-cam-02": object()},
+        observations_by_camera={"pi-cam-01": [object()], "pi-cam-02": [object()]},
+        rigid_hint_triangulated_points=rigid_hints,
+    )
+
+    committed = [name for name, pose in poses.items() if pose.valid]
+    rejected = [name for name, pose in poses.items() if not pose.valid]
+    assert len(committed) == 1
+    assert len(rejected) == 1
+    assert estimator.get_tracking_status()[rejected[0]]["invalid_reason"].startswith(
+        "frame_local_blob_ownership_conflict"
+    )
+
+
+def test_reacquire_large_innovation_candidate_does_not_mutate_tracker_state() -> None:
+    tracker = RigidBodyTracker(WAIST_PATTERN)
+    if not hasattr(tracker, "_stage_reacquire_candidate"):
+        pytest.xfail("pending side-effect-free reacquire candidate staging helper")
+
+    tracker.mode_config = TrackModeConfig(
+        boot_consecutive_accepts=1,
+        reacquire_consecutive_accepts=2,
+    )
+    tracker.update(_test_pose(1_000_000, [0.0, 0.0, 2.5]))
+    tracker.update(_test_pose(1_016_000, [0.0, 0.0, 2.5], valid=False))
+    before_prediction = tracker.peek_prediction(1_032_000)
+    before_latest = tracker.get_latest_pose()
+
+    tracker.update(_test_pose(1_032_000, [1.0, 0.0, 2.5]))
+
+    diagnostics = tracker.get_diagnostics()
+    after_prediction = tracker.peek_prediction(1_048_000)
+    after_latest = tracker.get_latest_pose()
+    assert diagnostics["mode"] == "reacquire"
+    assert diagnostics["last_mode_reason"] == "reacquire_candidate_large_innovation"
+    assert before_latest is not None
+    assert after_latest is not None
+    assert np.allclose(after_latest.position, before_latest.position)
+    assert np.allclose(after_prediction.position, before_prediction.position)
+
+
+def test_unowned_boot_rigid_does_not_generic_boot_from_another_rigids_hints() -> None:
+    wand_pattern = MarkerPattern(
+        name="wand",
+        marker_positions=WAIST_PATTERN.marker_positions + np.array([0.25, 0.0, 0.0]),
+    )
+    estimator = RigidBodyEstimator(
+        patterns=[WAIST_PATTERN, wand_pattern],
+        object_gating_config=ObjectGatingConfig(enabled=True, enforce=True),
+        rigid_candidate_separation_enabled=True,
+        subset_diagnostics_mode="off",
+    )
+    waist_tracker = estimator.trackers["waist"]
+    waist_tracker.mode_config = TrackModeConfig(boot_consecutive_accepts=1)
+    waist_tracker.update(_test_pose(1_000_000, [0.0, 0.0, 2.5]))
+
+    points = WAIST_PATTERN.marker_positions + np.array([0.02, 0.0, 2.5], dtype=np.float64)
+    rigid_hints = [
+        {
+            "rigid_name": "waist",
+            "marker_idx": marker_idx,
+            "point": point.copy(),
+            "contributing_rays": 2,
+        }
+        for marker_idx, point in enumerate(points)
+    ]
+
+    poses = estimator.process_context(
+        points,
+        1_016_000,
+        camera_params=None,
+        observations_by_camera=None,
+        rigid_hint_triangulated_points=rigid_hints,
+    )
+
+    assert estimator.estimate_pose(points, wand_pattern, 1_016_000).valid is True
+    assert poses["wand"].valid is False
+    assert estimator.trackers["wand"].track_count == 0
+
+
+def test_lost_previously_tracked_rigid_rejects_unscored_generic_recovery() -> None:
+    estimator = RigidBodyEstimator(
+        patterns=[WAIST_PATTERN],
+        object_gating_config=ObjectGatingConfig(enabled=True, enforce=True),
+        subset_diagnostics_mode="off",
+    )
+    tracker = estimator.trackers["waist"]
+    tracker.mode_config = TrackModeConfig(
+        boot_consecutive_accepts=1,
+        reacquire_lost_frames=1,
+    )
+    tracker.update(_test_pose(1_000_000, [0.0, 0.0, 2.5]))
+    tracker.update(_test_pose(1_016_000, [0.0, 0.0, 2.5], valid=False))
+    tracker.update(_test_pose(1_032_000, [0.0, 0.0, 2.5], valid=False))
+    assert tracker.mode == TrackMode.LOST
+
+    wrong_cluster = WAIST_PATTERN.marker_positions[:3] + np.array(
+        [1.0, 0.0, 2.5],
+        dtype=np.float64,
+    )
+    before_latest = tracker.get_latest_pose()
+
+    pose = estimator.process_context(
+        wrong_cluster,
+        1_048_000,
+        camera_params=None,
+        observations_by_camera=None,
+    )["waist"]
+
+    after_latest = tracker.get_latest_pose()
+    assert pose.valid is False
+    assert before_latest is not None
+    assert after_latest is not None
+    assert np.allclose(after_latest.position, before_latest.position)
+    assert estimator.get_tracking_status()["waist"]["invalid_reason"].startswith(
+        "strict_reacquire_rejected"
+    )
+    assert "score_not_available" in estimator.get_tracking_status()["waist"]["invalid_reason"]
+
+
+def _test_pose(
+    timestamp: int,
+    position: list[float],
+    *,
+    valid: bool = True,
+) -> RigidBodyPose:
+    return RigidBodyPose(
+        timestamp=timestamp,
+        position=np.asarray(position, dtype=np.float64),
+        rotation=np.eye(3, dtype=np.float64),
+        quaternion=np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64),
+        rms_error=0.001 if valid else 0.0,
+        observed_markers=WAIST_PATTERN.num_markers if valid else 0,
+        valid=valid,
+    )

@@ -1769,11 +1769,11 @@ def test_tracking_page_surfaces_start_stop_status_messages() -> None:
     assert "trackingEpipolarThresholdValue" in HTML_PAGE
     assert "epipolar_threshold_px: Number(elements.trackingEpipolarThreshold?.value || 3.5)" in HTML_PAGE
     assert "rigid_stabilization: {" in HTML_PAGE
-    assert "object_conditioned_gating: false" in HTML_PAGE
+    assert "object_conditioned_gating: true" in HTML_PAGE
     assert "subset_ransac: false" in HTML_PAGE
     assert "reacquire_guard_shadow_enabled: false" in HTML_PAGE
     assert "reacquire_guard_event_logging: false" in HTML_PAGE
-    assert "reacquire_guard_enforced: false" in HTML_PAGE
+    assert "reacquire_guard_enforced: true" in HTML_PAGE
     assert "object_gating_enforced: true" in HTML_PAGE
     assert "pose_continuity_guard_enabled: true" in HTML_PAGE
     assert "pose_continuity_guard_enforced: true" in HTML_PAGE
