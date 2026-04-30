@@ -40,6 +40,7 @@ GUI_DEFAULT_RIGID_STABILIZATION: Dict[str, Any] = {
     "reacquire_guard_event_logging": False,
     "reacquire_guard_enforced": True,
     "object_gating_enforced": True,
+    "object_gating_pixel_max_px": 6,
     "pose_continuity_guard_enabled": True,
     "pose_continuity_guard_enforced": True,
     "pose_continuity_max_rotation_deg": 90,

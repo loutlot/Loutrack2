@@ -186,6 +186,8 @@ def _rigid_stabilization_configs(settings: Optional[Dict[str, Any]]) -> Dict[str
             enabled=bool(payload.get("object_conditioned_gating", True)),
             enforce=bool(payload.get("object_gating_enforced", False)),
             activation_mode=str(payload.get("object_gating_activation_mode", "always")),
+            pixel_min=float(payload.get("object_gating_pixel_min_px", 4.0) or 4.0),
+            pixel_max=float(payload.get("object_gating_pixel_max_px", 16.0) or 16.0),
         ),
         "pose_continuity_guard_config": PoseContinuityGuardConfig(
             enabled=bool(payload.get("pose_continuity_guard_enabled", False)),

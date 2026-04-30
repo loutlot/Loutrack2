@@ -1,3 +1,16 @@
+- `tools/cad/README.md` now documents the CadQuery fixture generator behavior, hole auto-placement, presets, custom JSON input, and key geometry options.
+- `tools/cad` base-hole auto-rotation now accounts for stem radius and hex-hole outer radius to avoid hole/stem overlap.
+- `tools/cad` now lifts generated marker centers by 7 mm so marker spheres stay above the base bottom for FDM printing.
+- `tools/sim` now makes `five_rigid_dance_swap_red_v1` stress cross-rigid mixing plus occlusion and motion without injecting false blobs, while GUI/live object gating keeps a 6 px spatial cap without rigid-side area filtering.
+- `tools/cad` now includes all five exploratory rigid-body presets and can export them as STL files in one command.
+- `tools/cad` now auto-rotates the paired base holes toward the clearest direction away from generated stems.
+- `tools/cad` now cuts a hexagonal base hole and an opposite round through-hole into the rigid fixture base.
+- `tools/cad` now adds a 1 mm top chamfer to the central base disk during rigid fixture generation.
+- `tools/cad` now extends hub-side stems by 1 mm and removes the extra hub blend collars while keeping stem endpoint balls.
+- `tools/cad` now applies 1 mm fillets to rigid fixture joint edges for smoother stem connections.
+- `tools/cad` now blends stem-to-hub joints with 5 mm spheres on the hub-side stem endpoints.
+- `tools/cad` rigid fixture generation now uses a cylindrical hub, marker spheres, and radial stems matching the current print prototype design.
+- `tools/cad` now provides a CadQuery setup note and first-pass rigid-body marker fixture generator for STL/STEP output from marker coordinates.
 - `docs/10_in_progress/sim_performance_upgrade_log.md` now documents sim performance scoring, PDCA log format, and moved cycle 1-50 performance history out of the rigid body design notes.
 - Removed unused rigid tracking dead code from `src/host/rigid.py`, including the stale PnP fallback and unused helper wrappers.
 - `static/index.html` now uses the V2 GUI as the standard interface without the temporary V2 title pill, with `static/index_v2.html` and `/v2` kept as matching compatibility entry points.

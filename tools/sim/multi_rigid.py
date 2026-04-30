@@ -300,6 +300,7 @@ def _gui_live_rigid_stabilization() -> dict[str, Any]:
         "reacquire_guard_event_logging": False,
         "reacquire_guard_enforced": True,
         "object_gating_enforced": True,
+        "object_gating_pixel_max_px": 6.0,
         "pose_continuity_guard_enabled": True,
         "pose_continuity_guard_enforced": True,
         "pose_continuity_max_rotation_deg": 90.0,
@@ -823,7 +824,28 @@ class MultiRigidFrameGenerator:
         cycle_pos = t_sec - 0.25
         return int(cycle_pos // cycle_len_sec), float(cycle_pos % cycle_len_sec)
 
-    def _hard_scenario_false_blobs_per_camera(self, frame_index: int) -> int:
+    def _camera_rank(self, camera_id: str) -> int:
+        camera_rank = {
+            camera_id_value: index
+            for index, camera_id_value in enumerate(self.config.camera_ids)
+        }
+        return int(camera_rank.get(camera_id, 0))
+
+    def _swap_red_blob_area(self, camera_id: str, *, alias: bool = False) -> float:
+        rank = self._camera_rank(camera_id)
+        if rank % 2 == 0:
+            area = float(self._rng.normal(66.0, 16.0))
+            return float(np.clip(area, 10.0, 115.0))
+        area = float(self._rng.normal(11.0, 3.0))
+        if alias:
+            area += 2.0
+        return float(np.clip(area, 4.5, 26.0))
+
+    def _hard_scenario_false_blobs_per_camera(
+        self,
+        frame_index: int,
+        camera_id: str | None = None,
+    ) -> int:
         if self.config.scenario not in {
             "five_rigid_dance_hard_occlusion_v1",
             "five_rigid_dance_swap_red_v1",
@@ -831,7 +853,7 @@ class MultiRigidFrameGenerator:
             return int(self.config.false_blobs_per_camera)
         _, cycle_t = self._hard_occlusion_cycle_time(frame_index)
         if self.config.scenario == "five_rigid_dance_swap_red_v1":
-            extra = 10 if 0.34 <= cycle_t < 1.34 else 4 if 1.34 <= cycle_t < 1.78 else 0
+            return 0
         else:
             extra = 6 if 0.70 <= cycle_t < 1.18 else 0
         return int(self.config.false_blobs_per_camera) + extra
@@ -847,11 +869,7 @@ class MultiRigidFrameGenerator:
             cycle_index, cycle_t = self._hard_occlusion_cycle_time(frame_index)
             if cycle_t < 0.0:
                 return False
-            camera_rank = {
-                camera_id_value: index
-                for index, camera_id_value in enumerate(self.config.camera_ids)
-            }
-            rank = int(camera_rank.get(camera_id, 0))
+            rank = self._camera_rank(camera_id)
             even_cycle = cycle_index % 2 == 0
 
             if rigid_name in {"waist", "chest"} and 0.24 <= cycle_t < 0.76:
@@ -881,11 +899,7 @@ class MultiRigidFrameGenerator:
             cycle_index, cycle_t = self._hard_occlusion_cycle_time(frame_index)
             if cycle_t < 0.0:
                 return False
-            camera_rank = {
-                camera_id_value: index
-                for index, camera_id_value in enumerate(self.config.camera_ids)
-            }
-            rank = int(camera_rank.get(camera_id, 0))
+            rank = self._camera_rank(camera_id)
             even_cycle = cycle_index % 2 == 0
 
             if rigid_name in {"waist", "chest"} and 0.00 <= cycle_t < 0.28:
@@ -925,11 +939,7 @@ class MultiRigidFrameGenerator:
 
         if self.config.scenario == "five_rigid_dance_occlusion":
             ratio = float(frame_index) / float(max(1, self.config.frames))
-            camera_rank = {
-                camera_id_value: index
-                for index, camera_id_value in enumerate(self.config.camera_ids)
-            }
-            rank = int(camera_rank.get(camera_id, 0))
+            rank = self._camera_rank(camera_id)
 
             # Torso self-occlusion while rotating: cameras see different
             # marker subsets, which stresses object-conditioned gating.
@@ -966,8 +976,7 @@ class MultiRigidFrameGenerator:
             return False
 
         ratio = float(frame_index) / float(max(1, self.config.frames))
-        camera_rank = {camera_id: index for index, camera_id in enumerate(self.config.camera_ids)}
-        rank = int(camera_rank.get(camera_id, 0))
+        rank = self._camera_rank(camera_id)
 
         if 0.20 <= ratio < 0.34:
             return marker_index == (rank % 2)
@@ -996,11 +1005,7 @@ class MultiRigidFrameGenerator:
         if cycle_t < 0.0:
             return []
 
-        camera_rank = {
-            camera_id_value: index
-            for index, camera_id_value in enumerate(self.config.camera_ids)
-        }
-        rank = int(camera_rank.get(camera_id, 0))
+        rank = self._camera_rank(camera_id)
         aliases: list[tuple[float, float, str, int, str]] = []
 
         def add_alias(
@@ -1017,6 +1022,13 @@ class MultiRigidFrameGenerator:
                 return
             projection = target_projection[target_marker]
             if projection is None:
+                return
+            source_projection = projections.get(camera_id, {}).get(source_rigid, [])
+            if source_marker < 0 or source_marker >= len(source_projection):
+                return
+            if source_projection[source_marker] is None:
+                return
+            if self._is_marker_occluded(source_rigid, source_marker, frame_index, camera_id):
                 return
             dx, dy = _sample_gaussian_pixel_noise(self._rng, jitter_px)
             aliases.append(
@@ -1116,7 +1128,11 @@ class MultiRigidFrameGenerator:
                         {
                             "x": float(projection[0] + dx),
                             "y": float(projection[1] + dy),
-                            "area": float(max(4.0, pattern.marker_diameter * 3600.0)),
+                            "area": (
+                                self._swap_red_blob_area(camera_id)
+                                if self.config.scenario == "five_rigid_dance_swap_red_v1"
+                                else float(max(4.0, pattern.marker_diameter * 3600.0))
+                            ),
                         }
                     )
                     ledger[(timestamp_us, camera_id, blob_index)] = SyntheticBlobOwner(
@@ -1144,7 +1160,7 @@ class MultiRigidFrameGenerator:
                     {
                         "x": float(x),
                         "y": float(y),
-                        "area": 4.0,
+                        "area": float(self._swap_red_blob_area(camera_id, alias=True)),
                     }
                 )
                 ledger[(timestamp_us, camera_id, blob_index)] = SyntheticBlobOwner(
@@ -1158,13 +1174,19 @@ class MultiRigidFrameGenerator:
                         f"{source_rigid}:{source_marker}"
                     ),
                 )
-            for false_index in range(self._hard_scenario_false_blobs_per_camera(frame_index)):
+            for false_index in range(
+                self._hard_scenario_false_blobs_per_camera(frame_index, camera_id)
+            ):
                 blob_index = len(blobs)
                 blobs.append(
                     {
                         "x": float(self._rng.uniform(20.0, max(21.0, width - 20.0))),
                         "y": float(self._rng.uniform(20.0, max(21.0, height - 20.0))),
-                        "area": 4.0,
+                        "area": (
+                            float(self._rng.uniform(0.5, 8.0))
+                            if self.config.scenario == "five_rigid_dance_swap_red_v1"
+                            else 4.0
+                        ),
                     }
                 )
                 ledger[(timestamp_us, camera_id, blob_index)] = SyntheticBlobOwner(

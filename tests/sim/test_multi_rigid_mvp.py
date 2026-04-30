@@ -259,7 +259,7 @@ def test_five_rigid_swap_red_adds_cross_rigid_alias_blobs():
         camera_rig_source="generated_4cam_from_1_2_intrinsics",
         marker_layout=DESIGN_5MARKER_LAYOUT,
         rigids_path="missing-test-rigids.json",
-        false_blobs_per_camera=1,
+        false_blobs_per_camera=4,
     )
     generator = MultiRigidFrameGenerator(
         config,
@@ -278,10 +278,16 @@ def test_five_rigid_swap_red_adds_cross_rigid_alias_blobs():
         for entry in sample.ownership_ledger.values()
         if ":alias:" in entry.synthetic_blob_id
     ]
+    false_entries = [
+        entry
+        for entry in sample.ownership_ledger.values()
+        if entry.rigid_name == "__false__"
+    ]
     assert alias_entries
+    assert not false_entries
     assert {entry.rigid_name for entry in alias_entries} >= {"left_foot", "right_foot"}
     per_camera_alias_count = {
         camera_id: sum(1 for entry in alias_entries if entry.camera_id == camera_id)
         for camera_id in DEFAULT_GENERATED_CAMERA_IDS
     }
-    assert per_camera_alias_count == {camera_id: 3 for camera_id in DEFAULT_GENERATED_CAMERA_IDS}
+    assert all(count >= 1 for count in per_camera_alias_count.values())
