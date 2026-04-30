@@ -54,6 +54,8 @@ def test_multi_rigid_summary_includes_mvp_metadata(tmp_path):
     assert tuple(metadata["rigid_names"]) == ("waist", "wand")
     assert "performance_budget" in summary
     assert "variant_metrics" in summary
+    assert "position_delta_error_m" in summary
+    assert "scenario_go_no_go" in summary
     assert "pipeline_pair_no_sustained_over_8_475ms" in summary["production_go_no_go"]
 
 
@@ -178,3 +180,55 @@ def test_cli_generated_4cam_summary_uses_intrinsics_copy_source(tmp_path):
     assert proc.returncode == 0, proc.stderr
     metadata = _summary_metadata({"eval_json": str(tmp_path / "future_4cam" / "eval.json")})
     assert metadata["camera_rig_source"] == "generated_4cam_from_1_2_intrinsics"
+
+
+def test_waist_rotation_partial_occlusion_gui_profile_go_no_go(tmp_path):
+    summary = run_multi_rigid_scenario(
+        MultiRigidScenarioConfig(
+            frames=120,
+            fps=118,
+            seed=13,
+            camera_ids=("pi-cam-01", "pi-cam-02", "pi-cam-03", "pi-cam-04"),
+            camera_rig_source="generated_4cam_from_1_2_intrinsics",
+            scenario="waist_rotate_partial_occlusion",
+            rigid_stabilization_profile="gui_live",
+        ),
+        out_dir=str(tmp_path / "partial_occlusion"),
+    )
+
+    assert summary["rigid_stabilization_profile"] == "gui_live"
+    assert summary["wrong_ownership_count"] == 0
+    assert summary["marker_source_confusion_count"] == 0
+    go_no_go = summary["scenario_go_no_go"]
+    assert go_no_go["wrong_ownership_zero"] is True
+    assert go_no_go["marker_source_confusion_zero"] is True
+    assert go_no_go["valid_frame_ratio_ge_0_95"] is True
+    assert go_no_go["position_delta_error_max_le_2cm"] is True
+    assert go_no_go["rotation_delta_error_max_le_5deg"] is True
+    assert summary["valid_frame_ratio"]["waist"] >= 0.95
+
+
+def test_waist_rotation_partial_occlusion_two_camera_shared_blob_loss_no_jump(tmp_path):
+    summary = run_multi_rigid_scenario(
+        MultiRigidScenarioConfig(
+            frames=120,
+            fps=118,
+            seed=13,
+            camera_ids=("pi-cam-01", "pi-cam-02"),
+            camera_rig_source="dummy",
+            scenario="waist_rotate_partial_occlusion",
+            rigid_stabilization_profile="gui_live",
+        ),
+        out_dir=str(tmp_path / "partial_occlusion_2cam"),
+    )
+
+    waist = summary["tracking"]["waist"]
+    assert summary["wrong_ownership_count"] == 0
+    assert summary["marker_source_confusion_count"] == 0
+    assert summary["scenario_go_no_go"]["passed"] is True
+    assert summary["valid_frame_ratio"]["waist"] >= 0.99
+    assert waist["reacquire_count"] == 0
+    assert waist["max_pose_jump_m"] <= 0.005
+    assert waist["max_pose_flip_deg"] <= 1.0
+    assert summary["position_error_m"]["waist"]["max"] <= 0.01
+    assert summary["rotation_error_deg"]["waist"]["max"] <= 1.0

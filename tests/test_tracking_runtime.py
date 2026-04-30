@@ -123,6 +123,12 @@ def test_tracking_runtime_start_stop_state_transition(monkeypatch) -> None:
     assert _FakePipeline.last_instance.kwargs["epipolar_threshold_px"] == 3.5
     assert _FakePipeline.last_instance.kwargs["pipeline_variant"] == "fast_ABCDHRF"
     assert _FakePipeline.last_instance.kwargs["subset_diagnostics_mode"] == "off"
+    stabilization = _FakePipeline.last_instance.kwargs["rigid_stabilization"]
+    assert stabilization["object_conditioned_gating"] is True
+    assert stabilization["object_gating_enforced"] is True
+    assert stabilization["pose_continuity_guard_enabled"] is True
+    assert stabilization["position_continuity_guard_enabled"] is True
+    assert stabilization["subset_ransac"] is False
 
     stop_result = runtime.stop()
     assert stop_result["frames_processed"] == 12

@@ -467,7 +467,7 @@ def test_tracking_pipeline_breaks_down_object_gating_filter_reasons() -> None:
     assert metrics["object_gating_filter_reason_counts"]["assigned_marker_views_below_min"] == 1
 
 
-def test_tracking_pipeline_falls_back_when_one_rigid_gate_is_missing() -> None:
+def test_tracking_pipeline_filters_visible_rigids_when_one_relaxed_gate_is_partial() -> None:
     pipeline = TrackingPipeline(enable_logging=False, pipeline_variant="fast_ABCDHRF")
 
     generic_filter, reason = pipeline._fast_generic_filter(
@@ -511,10 +511,58 @@ def test_tracking_pipeline_falls_back_when_one_rigid_gate_is_missing() -> None:
         }
     )
 
-    assert generic_filter is None
-    assert reason == "partial_object_gating:assigned_marker_views_below_min"
+    assert generic_filter == {
+        "pi-cam-01": {4, 5, 6, 7},
+        "pi-cam-02": {4, 5, 6, 7},
+    }
+    assert reason == "partial_object_gating_filtered:assigned_marker_views_below_min"
     metrics = pipeline._variant_metrics_snapshot()
     assert metrics["object_gating_filter_reason_counts"]["assigned_marker_views_below_min"] == 1
+
+
+def test_tracking_pipeline_falls_back_when_one_rigid_has_no_prediction() -> None:
+    pipeline = TrackingPipeline(enable_logging=False, pipeline_variant="fast_ABCDHRF")
+
+    generic_filter, reason = pipeline._fast_generic_filter(
+        {
+            "waist": {
+                "evaluated": True,
+                "reason": "no_prediction",
+                "assigned_marker_views": 0,
+                "markers_with_two_or_more_rays": 0,
+                "single_ray_candidates": 0,
+                "per_camera": {},
+            },
+            "wand": {
+                "evaluated": True,
+                "reason": "ok",
+                "assigned_marker_views": 8,
+                "markers_with_two_or_more_rays": 4,
+                "single_ray_candidates": 0,
+                "per_camera": {
+                    "pi-cam-01": {
+                        "assignments": [
+                            {"marker_idx": 0, "blob_index": 4},
+                            {"marker_idx": 1, "blob_index": 7},
+                            {"marker_idx": 2, "blob_index": 6},
+                            {"marker_idx": 3, "blob_index": 5},
+                        ]
+                    },
+                    "pi-cam-02": {
+                        "assignments": [
+                            {"marker_idx": 0, "blob_index": 6},
+                            {"marker_idx": 1, "blob_index": 7},
+                            {"marker_idx": 2, "blob_index": 5},
+                            {"marker_idx": 3, "blob_index": 4},
+                        ]
+                    },
+                },
+            },
+        }
+    )
+
+    assert generic_filter is None
+    assert reason == "partial_object_gating:gating_reason_no_prediction"
 
 
 def test_tracking_pipeline_maps_rigid_stabilization_flags_to_configs() -> None:

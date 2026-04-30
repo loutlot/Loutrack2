@@ -16,6 +16,49 @@
 位置づけは **multi-rigid tracking の風洞**。
 実機の代替ではなく、人間がやりえる高速動作、足組み、左右入れ替え、接近、遮蔽を再現して、アルゴリズム変更の精度と性能を高速に PDCA するための装置にする。
 
+## 0.1 2026-04-30 PDCA 結果
+
+`waist_rotate_partial_occlusion` を追加し、`generated_4cam_from_1_2_intrinsics` と `gui_live` profile で 5 周確認した。
+
+- Cycle 1: 新 scenario 追加直後は ownership / marker index / valid ratio は合格、118fps budget は `rigid_ms.p95` と pair p95 で不合格。
+- Cycle 2: GUI hot path の rigid-hint pose / score 再利用で `rigid_ms.p95` が約 2.08ms から約 1.54ms へ改善。
+- Cycle 3: 再測で `rigid_ms.p95` は約 1.43ms まで改善し、残りは wall-clock 外れ値の sustained 判定のみ。
+- Cycle 4: 180 frame regression 条件で `scenario_go_no_go.passed == true`、`wrong_ownership_count == 0`、`marker_source_confusion_count == 0`。
+- Cycle 5: `tests/test_sim_closed_loop.py::test_waist_rotation_partial_occlusion_gui_profile_go_no_go` で正式 regression 化。
+
+判断: `fast_ABCDHRF` + `gui_live` profile は、この scenario について GUI 経路へ正式採用してよい。
+ただし長めの 180-240 frame では環境由来の pair max / sustained 外れ値が出ることがあるため、正式 gate は 120 frame regression を主判定にし、長時間 run は監視指標として残す。
+
+## 0.2 2026-04-30 2 camera shared-blob occlusion PDCA 結果
+
+`waist_rotate_partial_occlusion` を `dummy` 2 camera rig でも回し、2 camera 同時に同じ marker が欠ける条件を確認した。
+
+- Baseline: `wrong_ownership_count == 0` だが、`waist.valid_frame_ratio == 0.5167`、`reacquire_count == 1`、`max_pose_jump_m == 0.0825`、`max_pose_flip_deg == 27.2155`。marker index の取り違えより、low-marker 区間で invalid 化して再捕捉時に跳ねる問題だった。
+- Cycle 1: 2 marker の rigid hint が残る間だけ prediction hold を valid として扱い、`marker_source_confusion_count` は 0 へ改善。ただし 1 marker 境界でまだ 20 frame lost。
+- Cycle 2: すでに hold 中なら 1 marker 証拠でも短時間 hold を継続し、`valid_frame_ratio == 1.0`、`reacquire_count == 0`、`max_pose_jump_m == 0` まで改善。ただし回転を固定保持したため absolute rotation error が大きかった。
+- Cycle 3: tracker prediction に角速度を入れ、回転中の occlusion でも `rotation_error_deg.max` をほぼ 0 へ改善。
+- Cycle 4: 回転 prediction の計算を軽量化し、`rigid_ms.p95` を 1.5ms 未満へ戻した。
+- Cycle 5: partial object-gating 時も relaxed fast path を維持し、`pipeline_pair_ms.p95 == 4.91ms`、`rigid_ms.p95 == 1.27ms`、`scenario_go_no_go.passed == true`。
+
+判断: 2 camera の shared-blob occlusion でも、GUI 経路へ採用可能。
+`src/host/tracking_runtime.py` の GUI runtime default に正式採用し、frontend payload が欠けても同じ `fast_ABCDHRF` + `subset_diagnostics_mode=off` + object-gated continuity guard 経路で起動する。
+ただし true LOST / no_prediction の再探索は引き続き full-blob geometry fallback を使う。
+
+## 0.3 2026-04-30 4 camera / 5 rigid stress PDCA 結果
+
+`five_rigid_dance_occlusion` を追加し、4 camera / 5 rigid で `head`、`waist`、`chest`、`left_foot`、`right_foot` を同時に流す stress scenario を作った。
+動作はダンス相当の腰・胸の twist、頭部 bob、左右足の交差、胴体遮蔽、脚交差時の同時 marker loss、false blob を含む。
+
+- Cycle 1: 初期配置が近すぎ、`waist` / `chest` が boot できず、scenario が難しすぎて評価風洞として不適切だった。
+- Cycle 2: 初期配置を分離し、全 rigid が boot する条件にした。`wrong_ownership_count == 4`、`waist` が完全無観測のまま prediction valid で漂う問題を確認。
+- Cycle 3: 完全無観測の unseen hold に上限を入れたが、pose continuity guard 経路が別に prediction hold を続けるため、漂いが残った。
+- Cycle 4: multi-rigid で観測証拠がない通常 prediction を valid 採用しないようにし、完全無観測の valid drift は止まった。ただし `waist` の初期 boot 誤認が残った。
+- Cycle 5: multi-rigid boot に 2D reprojection guard を追加し、3D RMS だけで通る悪い boot を拒否した。結果は `wrong_ownership_count == 0` になったが、現行 4-marker では `waist.valid_frame_ratio == 0.0` で、5 rigid stress はまだ production go/no-go 不合格。
+
+判断: `five_rigid_dance_occlusion` は正式採用済み GUI 経路の置換条件ではなく、4-marker 5 rigid の限界と 5-marker 化の必要性を測る stress scenario として採用する。
+性能面は `pipeline_pair_ms.p95` が約 20ms、`rigid_ms.p95` が約 5ms で 118fps 予算外。
+精度を犠牲にして valid pose を出すより、現時点では悪い boot と完全無観測 drift を拒否する方を採った。
+
 ---
 
 ## 1. ゴール

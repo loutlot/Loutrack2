@@ -779,6 +779,18 @@ class TrackingPipeline:
         self._record_object_gating_filter_reasons(reject_reasons)
         if usable_rigids > 0 and partial_filter_rejected:
             reason = reject_reasons.most_common(1)[0][0] if reject_reasons else "unknown"
+            full_recovery_reasons = {
+                "gating_not_evaluated",
+                "invalid_gating_payload",
+                "missing_per_camera_assignments",
+                "no_filter_indices",
+            }
+            needs_full_recovery = any(
+                item in full_recovery_reasons or item.startswith("gating_reason_")
+                for item in reject_reasons
+            )
+            if relaxed and not needs_full_recovery:
+                return filtered, f"partial_object_gating_filtered:{reason}"
             return None, f"partial_object_gating:{reason}"
         if usable_rigids <= 0 or not any(filtered.values()):
             if reject_reasons:
@@ -1003,11 +1015,15 @@ class TrackingPipeline:
                 poses = self.rigid_estimator.process_points(points_array, timestamp)
             self._record_stage("rigid_ms", self._elapsed_ms(stage_started_ns))
             self._record_stage("rigid_pose_ms", self._elapsed_ms(stage_started_ns))
-            self._record_reacquire_guard_events(timestamp)
-            self._record_position_continuity_guard_events(timestamp)
-            self._record_pose_continuity_guard_events(timestamp)
-            self._record_rigid_hint_pose_events(timestamp)
-            self._record_subset_hypothesis_events(timestamp)
+            if hasattr(self.rigid_estimator, "get_tracking_event_status"):
+                tracking_status = self.rigid_estimator.get_tracking_event_status()
+            else:
+                tracking_status = self.rigid_estimator.get_tracking_status()
+            self._record_reacquire_guard_events(timestamp, tracking_status)
+            self._record_position_continuity_guard_events(timestamp, tracking_status)
+            self._record_pose_continuity_guard_events(timestamp, tracking_status)
+            self._record_rigid_hint_pose_events(timestamp, tracking_status)
+            self._record_subset_hypothesis_events(timestamp, tracking_status)
             
             # Update metrics
             stage_started_ns = time.perf_counter_ns()
@@ -1125,8 +1141,13 @@ class TrackingPipeline:
             "poses_estimated": self.poses_estimated,
         }
 
-    def _record_reacquire_guard_events(self, timestamp: int) -> None:
-        tracking = self.rigid_estimator.get_tracking_status()
+    def _record_reacquire_guard_events(
+        self,
+        timestamp: int,
+        tracking: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if tracking is None:
+            tracking = self.rigid_estimator.get_tracking_status()
         for rigid_name, status in tracking.items():
             if not isinstance(status, dict):
                 continue
@@ -1182,8 +1203,13 @@ class TrackingPipeline:
             }
             self._object_gating_events.append(event)
 
-    def _record_position_continuity_guard_events(self, timestamp: int) -> None:
-        tracking = self.rigid_estimator.get_tracking_status()
+    def _record_position_continuity_guard_events(
+        self,
+        timestamp: int,
+        tracking: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if tracking is None:
+            tracking = self.rigid_estimator.get_tracking_status()
         for rigid_name, status in tracking.items():
             if not isinstance(status, dict):
                 continue
@@ -1220,8 +1246,13 @@ class TrackingPipeline:
                 }
             )
 
-    def _record_pose_continuity_guard_events(self, timestamp: int) -> None:
-        tracking = self.rigid_estimator.get_tracking_status()
+    def _record_pose_continuity_guard_events(
+        self,
+        timestamp: int,
+        tracking: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if tracking is None:
+            tracking = self.rigid_estimator.get_tracking_status()
         for rigid_name, status in tracking.items():
             if not isinstance(status, dict):
                 continue
@@ -1292,8 +1323,13 @@ class TrackingPipeline:
                 }
             )
 
-    def _record_rigid_hint_pose_events(self, timestamp: int) -> None:
-        tracking = self.rigid_estimator.get_tracking_status()
+    def _record_rigid_hint_pose_events(
+        self,
+        timestamp: int,
+        tracking: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if tracking is None:
+            tracking = self.rigid_estimator.get_tracking_status()
         for rigid_name, status in tracking.items():
             if not isinstance(status, dict):
                 continue
@@ -1335,8 +1371,13 @@ class TrackingPipeline:
                 }
             )
 
-    def _record_subset_hypothesis_events(self, timestamp: int) -> None:
-        tracking = self.rigid_estimator.get_tracking_status()
+    def _record_subset_hypothesis_events(
+        self,
+        timestamp: int,
+        tracking: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if tracking is None:
+            tracking = self.rigid_estimator.get_tracking_status()
         for rigid_name, status in tracking.items():
             if not isinstance(status, dict):
                 continue

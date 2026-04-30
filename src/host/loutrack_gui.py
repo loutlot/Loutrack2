@@ -1232,6 +1232,9 @@ class LoutrackGuiHandler(BaseHTTPRequestHandler):
             else:
                 self._send_html(HTML_PAGE)
             return
+        if path in ("/v2", "/index_v2.html"):
+            self._serve_static("index_v2.html")
+            return
         if path == "/api/state":
             self._send_json(self.state.get_state())
             return

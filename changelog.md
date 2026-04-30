@@ -1,3 +1,14 @@
+- `docs/10_in_progress/sim_performance_upgrade_log.md` now documents sim performance scoring, PDCA log format, and moved cycle 1-50 performance history out of the rigid body design notes.
+- Removed unused rigid tracking dead code from `src/host/rigid.py`, including the stale PnP fallback and unused helper wrappers.
+- `static/index.html` now uses the V2 GUI as the standard interface without the temporary V2 title pill, with `static/index_v2.html` and `/v2` kept as matching compatibility entry points.
+- `tools/sim` now includes `five_rigid_dance_swap_red_v1`, a 4-camera 5-rigid red stress scenario with cross-rigid alias blobs for ownership/confusion PDCA.
+- GUI/live rigid prediction holds now use the cycle45 5-marker route with a 24-frame unseen hold and damped velocity during sustained occlusion, improving `five_rigid_dance_hard_occlusion_v1` head validity and rotation stability while keeping ownership and jump checks clean.
+- `tools/sim` now includes `five_rigid_dance_hard_occlusion_v1`, a deterministic 4-camera 5-rigid stress scenario with repeated same-marker two-camera blackouts, foot-cross false blob bursts, and weak reacquire phases.
+- `tools/sim` and GUI tracking now adopt the 5-marker `design_5marker_seed` subset-policy route for the 5-rigid dance/occlusion stress scenario, with object-gating coverage reuse, lightweight per-frame event diagnostics, and per-frame blob lookup reuse.
+- `docs/10_in_progress/rigid_body_design.md` now includes current 5-rigid design status, best-known metrics, subset-whitelist policy, and handoff notes for the next implementer.
+- `tools/sim` now includes a 4-camera 5-rigid dance/occlusion stress scenario, and multi-rigid boot rejects 3D-only candidates that fail 2D reprojection checks.
+- GUI tracking runtime now defaults to the adopted `fast_ABCDHRF` live stabilization path, including object-gated low-marker prediction hold for short occlusions.
+- `tools/sim` now covers 4-camera and 2-camera moving rotating waist partial-occlusion scenarios, while GUI tracking holds short low-marker occlusions with angular prediction and keeps partial object-gating on the fast path.
 - `src/host/rigid.py` now holds established but unseen multi-rigid bodies on prediction instead of scanning other visible rigid clusters during occlusion.
 - `tools/sim` summaries now include sustained 118fps budget checks and rigid variant metrics for waist+wand occlusion PDCA.
 - `AGENTS.md` now points simulator work to `tools/sim/` and `docs/40_tools/multi_rigid_simulator.md`.

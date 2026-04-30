@@ -33,6 +33,27 @@ AVAILABLE_PATTERNS: Dict[str, MarkerPattern] = {
 
 GUI_DEFAULT_PIPELINE_VARIANT = "fast_ABCDHRF"
 GUI_DEFAULT_SUBSET_DIAGNOSTICS_MODE = "off"
+GUI_DEFAULT_RIGID_STABILIZATION: Dict[str, Any] = {
+    "object_conditioned_gating": True,
+    "subset_ransac": False,
+    "reacquire_guard_shadow_enabled": False,
+    "reacquire_guard_event_logging": False,
+    "reacquire_guard_enforced": True,
+    "object_gating_enforced": True,
+    "pose_continuity_guard_enabled": True,
+    "pose_continuity_guard_enforced": True,
+    "pose_continuity_max_rotation_deg": 90,
+    "pose_continuity_max_angular_velocity_deg_s": 2500,
+    "pose_continuity_max_angular_accel_deg_s2": 200000,
+    "position_continuity_guard_enabled": True,
+    "position_continuity_guard_enforced": True,
+    "position_continuity_max_accel_m_s2": 60,
+    "position_continuity_max_velocity_m_s": 8,
+}
+
+
+def gui_default_rigid_stabilization() -> Dict[str, Any]:
+    return dict(GUI_DEFAULT_RIGID_STABILIZATION)
 
 
 def _pattern_catalog_entry(pattern: MarkerPattern, *, is_custom: bool) -> Dict[str, Any]:
@@ -153,7 +174,11 @@ class TrackingRuntime:
             calibration_path=calibration_path,
             patterns=selected_patterns,
             epipolar_threshold_px=epipolar_threshold_px,
-            rigid_stabilization=rigid_stabilization,
+            rigid_stabilization=(
+                dict(rigid_stabilization)
+                if isinstance(rigid_stabilization, dict)
+                else gui_default_rigid_stabilization()
+            ),
             pipeline_variant=GUI_DEFAULT_PIPELINE_VARIANT,
             subset_diagnostics_mode=GUI_DEFAULT_SUBSET_DIAGNOSTICS_MODE,
         )

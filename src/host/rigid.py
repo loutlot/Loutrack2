@@ -4,7 +4,6 @@ Rigid body tracking module for pose estimation from 3D point clouds.
 Provides functionality to:
 - Cluster 3D points using DBSCAN
 - Estimate rigid body pose using Kabsch algorithm
-- Fallback to PnP for limited observations
 - Track rigid bodies over time with Kalman filtering
 """
 
@@ -979,67 +978,6 @@ class KabschEstimator:
             return matched_obs, reference_points, error
 
 
-class PnPEstimator:
-    """
-    Estimate pose using PnP (Perspective-n-Point) algorithm.
-    
-    Fallback when insufficient 3D points for Kabsch.
-    """
-    
-    @staticmethod
-    def estimate(
-        image_points: List[Tuple[float, float]],
-        object_points: np.ndarray,
-        camera_params
-    ) -> Tuple[np.ndarray, np.ndarray, float]:
-        """
-        Estimate pose from 2D-3D correspondences using PnP.
-        
-        Args:
-            image_points: List of 2D image coordinates
-            object_points: Nx3 array of 3D object points
-            camera_params: CameraParams with intrinsics
-            
-        Returns:
-            Tuple of (rotation_matrix, translation_vector, reprojection_error)
-        """
-        import cv2 as cv
-        
-        if len(image_points) < 4:
-            raise ValueError("Need at least 4 points for PnP")
-        
-        image_points = np.array(image_points, dtype=np.float64).reshape(-1, 1, 2)
-        object_points = object_points.reshape(-1, 1, 3).astype(np.float32)
-        
-        success, rvec, tvec = cv.solvePnP(
-            object_points,
-            image_points,
-            camera_params.intrinsic_matrix,
-            camera_params.distortion_coeffs
-        )
-        
-        if not success:
-            raise RuntimeError("PnP failed")
-        
-        # Convert rotation vector to matrix
-        R, _ = cv.Rodrigues(rvec)
-        t = tvec.flatten()
-        
-        # Compute reprojection error
-        projected, _ = cv.projectPoints(
-            object_points,
-            rvec,
-            tvec,
-            camera_params.intrinsic_matrix,
-            camera_params.distortion_coeffs
-        )
-        
-        errors = np.linalg.norm(image_points.squeeze() - projected.squeeze(), axis=1)
-        rms_error = np.sqrt(np.mean(errors ** 2))
-        
-        return R, t, rms_error
-
-
 class RigidBodyTracker:
     """
     Track a single rigid body over time.
@@ -1071,6 +1009,7 @@ class RigidBodyTracker:
         self._position = np.zeros(3)
         self._velocity = np.zeros(3)
         self._quaternion = np.array([1.0, 0.0, 0.0, 0.0])  # [w, x, y, z]
+        self._angular_velocity = np.zeros(3)
         self._last_valid_timestamp: int = 0  # microseconds
 
         # Tracking statistics
@@ -1111,6 +1050,13 @@ class RigidBodyTracker:
         self._last_position_continuity_guard: Dict[str, Any] = (
             _empty_position_continuity_guard()
         )
+        self._prediction_hold_frames = 0
+        self._prediction_cache_timestamp: Optional[int] = None
+        self._prediction_cache: Optional[PredictedPose] = None
+
+    def _invalidate_prediction_cache_locked(self) -> None:
+        self._prediction_cache_timestamp = None
+        self._prediction_cache = None
     
     def update(
         self,
@@ -1118,9 +1064,11 @@ class RigidBodyTracker:
         *,
         invalid_reason: Optional[str] = None,
         stage_reacquire: bool = True,
+        prediction_hold: bool = False,
     ) -> None:
         """Update tracker with new pose estimate, including velocity estimation."""
         with self._lock:
+            self._invalidate_prediction_cache_locked()
             if stage_reacquire and self._mode == TrackMode.REACQUIRE and pose.valid:
                 self._record_innovation_locked(pose)
                 if self._measurement_matches_prediction_locked(pose):
@@ -1183,20 +1131,38 @@ class RigidBodyTracker:
             )
 
             if pose.valid:
+                if prediction_hold:
+                    self._prediction_hold_frames += 1
+                else:
+                    self._prediction_hold_frames = 0
                 if self.track_count > 0 and self._last_valid_timestamp > 0:
                     dt_s = (pose.timestamp - self._last_valid_timestamp) / 1_000_000.0
                     # Only update velocity if dt is sane (0–500 ms)
-                    if 0.0 < dt_s < 0.5:
+                    if prediction_hold:
+                        pass
+                    elif 0.0 < dt_s < 0.5:
                         self._velocity = (pose.position - self._position) / dt_s
+                        previous_rotation = _rotation_from_wxyz(self._quaternion)
+                        rotation_delta = pose.rotation @ previous_rotation.T
+                        self._angular_velocity = (
+                            Rotation.from_matrix(rotation_delta).as_rotvec() / dt_s
+                        )
                     else:
                         self._velocity = np.zeros(3)
+                        self._angular_velocity = np.zeros(3)
                 self._position = pose.position.copy()
                 self._quaternion = pose.quaternion.copy()
                 self._last_valid_timestamp = pose.timestamp
                 self.track_count += 1
                 self.lost_frames = 0
             else:
+                self._prediction_hold_frames = 0
                 self.lost_frames += 1
+
+    @property
+    def prediction_hold_frames(self) -> int:
+        with self._lock:
+            return int(self._prediction_hold_frames)
 
     def prepare_reacquire_candidate(self, pose: RigidBodyPose) -> Tuple[bool, str]:
         """Evaluate a reacquire candidate without committing it to the pose state."""
@@ -1243,6 +1209,7 @@ class RigidBodyTracker:
     ) -> None:
         """Record a frame without letting its pose update prediction state."""
         with self._lock:
+            self._invalidate_prediction_cache_locked()
             previous_valid = self._pose_history[-1].valid if self._pose_history else False
             self._pose_history.append(pose)
             self.total_frames += 1
@@ -1270,15 +1237,26 @@ class RigidBodyTracker:
         with self._lock:
             # Simple linear prediction
             predicted_position = self._position + self._velocity * dt
+            current_rotation = Rotation.from_quat([
+                self._quaternion[1], self._quaternion[2],
+                self._quaternion[3], self._quaternion[0]
+            ])
+            predicted_rotation_obj = (
+                Rotation.from_rotvec(self._angular_velocity * max(0.0, float(dt)))
+                * current_rotation
+            )
+            predicted_rotation = predicted_rotation_obj.as_matrix()
+            quat_xyzw = predicted_rotation_obj.as_quat()
+            predicted_quaternion = np.array(
+                [quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]],
+                dtype=np.float64,
+            )
             
             return RigidBodyPose(
                 timestamp=0,  # Will be set by caller
                 position=predicted_position,
-                rotation=Rotation.from_quat([
-                    self._quaternion[1], self._quaternion[2],
-                    self._quaternion[3], self._quaternion[0]
-                ]).as_matrix(),
-                quaternion=self._quaternion.copy(),
+                rotation=predicted_rotation,
+                quaternion=_normalize_quaternion(predicted_quaternion),
                 rms_error=0.0,
                 observed_markers=0,
                 valid=False  # Mark as prediction
@@ -1287,10 +1265,16 @@ class RigidBodyTracker:
     def peek_prediction(self, timestamp_us: int) -> PredictedPose:
         """Predict pose at timestamp_us without mutating tracker state."""
         with self._lock:
+            timestamp_us = int(timestamp_us)
+            if (
+                self._prediction_cache_timestamp == timestamp_us
+                and self._prediction_cache is not None
+            ):
+                return self._prediction_cache
             if self.track_count == 0 or self._last_valid_timestamp <= 0:
                 quat = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
-                return PredictedPose(
-                    timestamp=int(timestamp_us),
+                prediction = PredictedPose(
+                    timestamp=timestamp_us,
                     position=np.zeros(3, dtype=np.float64),
                     rotation=np.eye(3, dtype=np.float64),
                     quaternion=quat,
@@ -1301,20 +1285,44 @@ class RigidBodyTracker:
                     rotation_sigma_deg=180.0,
                     lost_frames=int(self.lost_frames),
                 )
+                self._prediction_cache_timestamp = timestamp_us
+                self._prediction_cache = prediction
+                return prediction
 
             dt_s = max(0.0, float(timestamp_us - self._last_valid_timestamp) / 1_000_000.0)
             velocity = self._velocity.copy()
+            angular_velocity = self._angular_velocity.copy()
+            if self._prediction_hold_frames > 0 and self.pattern.num_markers >= 5:
+                # Long occlusion holds should coast, not keep amplifying the
+                # last measured dance turn.
+                hold_frames = float(self._prediction_hold_frames)
+                velocity *= float(max(0.35, 0.97 ** hold_frames))
+                angular_velocity *= float(max(0.10, 0.88 ** hold_frames))
             if dt_s > 0.5:
                 # Long gaps make constant velocity less trustworthy; do not mutate
                 # the stored velocity here because this is a pure peek.
                 velocity = np.zeros(3, dtype=np.float64)
+                angular_velocity = np.zeros(3, dtype=np.float64)
             position = self._position + velocity * min(dt_s, 0.5)
-            quaternion = _normalize_quaternion(self._quaternion)
+            current_rotation = Rotation.from_quat([
+                self._quaternion[1],
+                self._quaternion[2],
+                self._quaternion[3],
+                self._quaternion[0],
+            ])
+            rotation_obj = (
+                Rotation.from_rotvec(angular_velocity * min(dt_s, 0.5))
+                * current_rotation
+            )
+            quat_xyzw = rotation_obj.as_quat()
+            quaternion = _normalize_quaternion(
+                np.array([quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]])
+            )
             confidence = self._rolling_confidence_locked()
-            return PredictedPose(
-                timestamp=int(timestamp_us),
+            prediction = PredictedPose(
+                timestamp=timestamp_us,
                 position=position.copy(),
-                rotation=_rotation_from_wxyz(quaternion),
+                rotation=rotation_obj.as_matrix(),
                 quaternion=quaternion.copy(),
                 velocity=velocity.copy(),
                 dt_s=float(dt_s),
@@ -1324,6 +1332,9 @@ class RigidBodyTracker:
                 rotation_sigma_deg=self._rotation_sigma_deg(dt_s, confidence),
                 lost_frames=int(self.lost_frames),
             )
+            self._prediction_cache_timestamp = timestamp_us
+            self._prediction_cache = prediction
+            return prediction
     
     def get_latest_pose(self) -> Optional[RigidBodyPose]:
         """Get most recent valid pose."""
@@ -1367,6 +1378,22 @@ class RigidBodyTracker:
         """Attach latest object-conditioned gating diagnostics."""
         with self._lock:
             self._last_object_gating = dict(gating or _empty_object_gating())
+
+    def latest_object_gating(self) -> Dict[str, Any]:
+        """Return the latest object-gating payload without building full diagnostics."""
+        with self._lock:
+            return dict(self._last_object_gating)
+
+    def latest_object_gating_counts(self) -> Tuple[bool, int, int, int]:
+        """Return hot-path object-gating counters without copying diagnostics."""
+        with self._lock:
+            gating = self._last_object_gating
+            return (
+                bool(gating.get("evaluated")),
+                int(gating.get("marker_count", 0) or 0),
+                int(gating.get("camera_count", 0) or 0),
+                int(gating.get("assigned_marker_views", 0) or 0),
+            )
 
     def record_rigid_hint_pose(self, diagnostic: Dict[str, Any]) -> None:
         """Attach latest rigid-hint pose comparison diagnostics."""
@@ -1433,8 +1460,24 @@ class RigidBodyTracker:
 
             dt_s = max(0.0, float(pose.timestamp - self._last_valid_timestamp) / 1_000_000.0)
             velocity = self._velocity.copy() if dt_s <= 0.5 else np.zeros(3, dtype=np.float64)
+            angular_velocity = (
+                self._angular_velocity.copy() if dt_s <= 0.5 else np.zeros(3, dtype=np.float64)
+            )
             predicted_position = self._position + velocity * min(dt_s, 0.5)
-            prediction_quaternion = _normalize_quaternion(self._quaternion)
+            current_rotation = Rotation.from_quat([
+                self._quaternion[1],
+                self._quaternion[2],
+                self._quaternion[3],
+                self._quaternion[0],
+            ])
+            predicted_rotation = (
+                Rotation.from_rotvec(angular_velocity * min(dt_s, 0.5))
+                * current_rotation
+            )
+            quat_xyzw = predicted_rotation.as_quat()
+            prediction_quaternion = _normalize_quaternion(
+                np.array([quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]])
+            )
             position_innovation_m = float(np.linalg.norm(pose.position - predicted_position))
             rotation_innovation_deg = _quaternion_angle_deg(prediction_quaternion, pose.quaternion)
 
@@ -1564,6 +1607,21 @@ class RigidBodyTracker:
             **self.stats.snapshot(),
         }
 
+    def get_event_diagnostics(self) -> Dict[str, Any]:
+        """Return the small diagnostic subset used by per-frame event extraction."""
+        latest = self._pose_history[-1] if self._pose_history else None
+        latest_valid = bool(latest.valid) if latest is not None else False
+        return {
+            "is_tracking": self.is_tracking,
+            "valid": latest_valid,
+            "mode": self._mode.value,
+            "reacquire_guard": self._last_reacquire_guard,
+            "pose_continuity_guard": self._last_pose_continuity_guard,
+            "position_continuity_guard": self._last_position_continuity_guard,
+            "rigid_hint_pose": self._last_rigid_hint_pose,
+            "subset_hypothesis": self._last_subset_hypothesis,
+        }
+
     def _rolling_confidence_locked(self) -> float:
         history = list(self._pose_history)
         if not history:
@@ -1684,14 +1742,31 @@ class RigidBodyTracker:
 
         dt_s = max(0.0, float(pose.timestamp - self._last_valid_timestamp) / 1_000_000.0)
         velocity = self._velocity if dt_s <= 0.5 else np.zeros(3, dtype=np.float64)
+        angular_velocity = (
+            self._angular_velocity if dt_s <= 0.5 else np.zeros(3, dtype=np.float64)
+        )
         predicted_position = self._position + velocity * min(dt_s, 0.5)
+        current_rotation = Rotation.from_quat([
+            self._quaternion[1],
+            self._quaternion[2],
+            self._quaternion[3],
+            self._quaternion[0],
+        ])
+        predicted_rotation = (
+            Rotation.from_rotvec(angular_velocity * min(dt_s, 0.5))
+            * current_rotation
+        )
+        quat_xyzw = predicted_rotation.as_quat()
+        predicted_quaternion = _normalize_quaternion(
+            np.array([quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]])
+        )
         self._last_position_innovation_m = float(np.linalg.norm(pose.position - predicted_position))
         self._max_position_innovation_m = max(
             self._max_position_innovation_m,
             self._last_position_innovation_m,
         )
         self._last_rotation_innovation_deg = _quaternion_angle_deg(
-            self._quaternion,
+            predicted_quaternion,
             pose.quaternion,
         )
         self._max_rotation_innovation_deg = max(
@@ -1753,6 +1828,11 @@ class RigidBodyEstimator:
 
     _MULTI_PATTERN_BOOT_FULL_POINT_LIMIT = 40
     _MULTI_PATTERN_BOOT_TOP_CANDIDATES = 8
+    _PARTIAL_OCCLUSION_HOLD_MAX_FRAMES = 90
+    _UNSEEN_OCCLUSION_HOLD_MAX_FRAMES = 24
+    _MULTI_PATTERN_BOOT_MAX_MEAN_REPROJECTION_PX = 3.0
+    _MULTI_PATTERN_BOOT_MAX_P95_REPROJECTION_PX = 4.0
+    _MULTI_PATTERN_BOOT_MAX_MISSING_MARKER_VIEWS = 2
     
     def __init__(
         self,
@@ -1831,9 +1911,6 @@ class RigidBodyEstimator:
         self.trackers: Dict[str, RigidBodyTracker] = {
             p.name: RigidBodyTracker(p) for p in self.patterns
         }
-        
-        # Kabsch estimator
-        self.kabsch = KabschEstimator()
 
     def get_variant_metrics(self) -> Dict[str, Any]:
         with self._variant_metric_lock:
@@ -1884,6 +1961,20 @@ class RigidBodyEstimator:
             return False
         if not tracker.peek_prediction(timestamp).valid:
             return False
+        gating = tracker.latest_object_gating()
+        evidence_markers = int(gating.get("markers_with_two_or_more_rays", 0)) + int(
+            gating.get("single_ray_candidates", 0)
+        )
+        has_current_evidence = (
+            int(gating.get("assigned_marker_views", 0)) > 0 or evidence_markers > 0
+        )
+        max_hold_frames = (
+            self._PARTIAL_OCCLUSION_HOLD_MAX_FRAMES
+            if has_current_evidence
+            else self._UNSEEN_OCCLUSION_HOLD_MAX_FRAMES
+        )
+        if int(tracker.prediction_hold_frames) >= max_hold_frames:
+            return False
 
         for other in self.patterns:
             if other.name == pattern.name:
@@ -1893,26 +1984,38 @@ class RigidBodyEstimator:
                 return True
         return False
 
-    def _rigid_hint_candidate_cluster(
+    def _should_hold_partial_marker_tracked_rigid(
         self,
         pattern: MarkerPattern,
-        rigid_hint_triangulated_points: Optional[List[Dict[str, Any]]],
-    ) -> Optional[np.ndarray]:
-        marker_points = self._rigid_hint_candidate_marker_points(
-            pattern,
-            rigid_hint_triangulated_points,
-        )
-        if marker_points is None:
-            return None
-        _marker_indices, points = marker_points
-        return points
+        tracker: RigidBodyTracker,
+        timestamp: int,
+        hint_markers_by_rigid: Dict[str, Dict[int, Dict[str, Any]]],
+    ) -> bool:
+        """Keep a tracked rigid on prediction when too few of its own markers are visible."""
+        if not self.object_gating_config.enabled or not self.object_gating_config.enforce:
+            return False
+        if int(tracker.track_count) <= 0 or tracker.mode != TrackMode.CONTINUE:
+            return False
+        if int(tracker.prediction_hold_frames) >= self._PARTIAL_OCCLUSION_HOLD_MAX_FRAMES:
+            return False
+        visible_markers = len(hint_markers_by_rigid.get(pattern.name, {}))
+        required_markers = max(3, int(pattern.num_markers) - 1)
+        min_visible_markers = 1 if int(tracker.prediction_hold_frames) > 0 else 2
+        if visible_markers < min_visible_markers or visible_markers >= required_markers:
+            return False
+        return bool(tracker.peek_prediction(timestamp).valid)
 
     def _rigid_hint_candidate_marker_points(
         self,
         pattern: MarkerPattern,
         rigid_hint_triangulated_points: Optional[List[Dict[str, Any]]],
+        hint_markers: Optional[Dict[int, Dict[str, Any]]] = None,
     ) -> Optional[Tuple[List[int], np.ndarray]]:
-        hint_markers = self._rigid_hint_markers_by_index(pattern, rigid_hint_triangulated_points)
+        if hint_markers is None:
+            hint_markers = self._rigid_hint_markers_by_index(
+                pattern,
+                rigid_hint_triangulated_points,
+            )
         if len(hint_markers) < max(3, pattern.num_markers - 1):
             return None
         marker_indices = [int(index) for index in sorted(hint_markers)]
@@ -1925,8 +2028,10 @@ class RigidBodyEstimator:
     def _try_rigid_separated_candidate(
         self,
         pattern: MarkerPattern,
+        tracker: RigidBodyTracker,
         timestamp: int,
         rigid_hint_triangulated_points: Optional[List[Dict[str, Any]]],
+        hint_markers: Optional[Dict[int, Dict[str, Any]]],
         camera_params: Optional[Dict[str, Any]],
         observations_by_camera: Optional[Dict[str, List[Any]]],
         *,
@@ -1935,6 +2040,7 @@ class RigidBodyEstimator:
         marker_points = self._rigid_hint_candidate_marker_points(
             pattern,
             rigid_hint_triangulated_points,
+            hint_markers=hint_markers,
         )
         if marker_points is None:
             self._record_rigid_candidate_fallback("insufficient_rigid_hint_points")
@@ -1966,13 +2072,23 @@ class RigidBodyEstimator:
         if not pose.valid or pose.rms_error > self.max_rms_error_m:
             self._record_rigid_candidate_fallback("invalid_rigid_candidate_pose")
             return None
-        score = self._score_pose_reprojection(
+        score = self._score_full_continue_hint_quality(
             pose,
             pattern,
-            camera_params,
+            tracker,
+            rigid_hint_triangulated_points,
             observations_by_camera,
             coordinate_space=coordinate_space,
         )
+        if not score.get("scored", False):
+            score = self._score_pose_reprojection_from_hint_observations(
+                pose,
+                pattern,
+                rigid_hint_triangulated_points,
+                camera_params,
+                observations_by_camera,
+                coordinate_space=coordinate_space,
+            )
         if score.get("scored", False):
             p95_error = float(score.get("p95_error_px", 0.0))
             min_views = max(3, int(self.object_gating_config.min_enforced_markers)) * 2
@@ -1980,6 +2096,18 @@ class RigidBodyEstimator:
             if p95_error > self.reprojection_match_gate_px or matched_views < min_views:
                 self._record_rigid_candidate_fallback("rigid_candidate_2d_score_gate")
                 return None
+        score = dict(score)
+        score["rigid_hint_marker_indices"] = [int(index) for index in marker_indices]
+        score["rigid_hint_real_ray_count"] = int(score.get("matched_marker_views", 0))
+        allowed, subset_reason = self._mode_subset_allowed(
+            pattern,
+            tracker.mode,
+            score,
+            prediction_valid=tracker.peek_prediction(timestamp).valid,
+        )
+        if not allowed:
+            self._record_rigid_candidate_fallback(f"rigid_candidate_subset_gate:{subset_reason}")
+            return None
         self._record_rigid_candidate_separated()
         return pose, score
 
@@ -2247,6 +2375,18 @@ class RigidBodyEstimator:
     ) -> Dict[str, Dict[str, Any]]:
         """Evaluate predicted marker-to-blob 2D gates without changing triangulation."""
         results: Dict[str, Dict[str, Any]] = {}
+        blob_uvs_by_camera: Dict[str, np.ndarray] = {}
+        if camera_params and frames_by_camera:
+            space = "undistorted_pixel" if coordinate_space == "undistorted_pixel" else "raw_pixel"
+            for camera_id, frame in frames_by_camera.items():
+                camera = camera_params.get(camera_id)
+                blobs = list(getattr(frame, "blobs", []) or [])
+                if camera is None or not blobs:
+                    continue
+                blob_uvs_by_camera[str(camera_id)] = np.asarray(
+                    [self._frame_blob_uv(camera, blob, space) for blob in blobs],
+                    dtype=np.float64,
+                ).reshape(-1, 2)
         for pattern in self.patterns:
             tracker = self.trackers.get(pattern.name)
             if tracker is None:
@@ -2257,6 +2397,7 @@ class RigidBodyEstimator:
                 timestamp=timestamp,
                 camera_params=camera_params,
                 frames_by_camera=frames_by_camera,
+                blob_uvs_by_camera=blob_uvs_by_camera,
                 coordinate_space=coordinate_space,
             )
             tracker.record_object_gating(result)
@@ -2272,6 +2413,7 @@ class RigidBodyEstimator:
         camera_params: Optional[Dict[str, Any]],
         frames_by_camera: Optional[Dict[str, Any]],
         coordinate_space: str,
+        blob_uvs_by_camera: Optional[Dict[str, np.ndarray]] = None,
     ) -> Dict[str, Any]:
         config = self.object_gating_config
         thresholds = config.thresholds_dict()
@@ -2329,30 +2471,23 @@ class RigidBodyEstimator:
 
         for camera_id, frame in frames_by_camera.items():
             camera = camera_params.get(camera_id)
-            blobs = list(getattr(frame, "blobs", []) or [])
-            if camera is None or not blobs:
+            blob_uvs = (
+                blob_uvs_by_camera.get(str(camera_id))
+                if isinstance(blob_uvs_by_camera, dict)
+                else None
+            )
+            if camera is None or blob_uvs is None or len(blob_uvs) == 0:
                 continue
-            blob_uvs = [
-                self._frame_blob_uv(camera, blob, space)
-                for blob in blobs
-            ]
             projected = self._project_markers_to_camera(markers_world, camera, space)
             if not projected:
                 continue
+            projected_uvs = np.asarray(projected, dtype=np.float64).reshape(-1, 2)
 
             total_blobs += len(blob_uvs)
             candidate_window_count += len(projected)
-            cost = np.full((len(projected), len(blob_uvs)), 1e9, dtype=np.float64)
-            for marker_idx, uv in enumerate(projected):
-                for blob_idx, blob_uv in enumerate(blob_uvs):
-                    distance = float(
-                        np.linalg.norm(
-                            np.asarray(uv, dtype=np.float64)
-                            - np.asarray(blob_uv, dtype=np.float64)
-                        )
-                    )
-                    if distance <= pixel_gate_px:
-                        cost[marker_idx, blob_idx] = distance
+            delta = projected_uvs[:, None, :] - blob_uvs[None, :, :]
+            distances = np.sqrt(np.sum(delta * delta, axis=2))
+            cost = np.where(distances <= pixel_gate_px, distances, 1e9)
 
             assignments: List[Dict[str, Any]] = []
             used_blobs: set[int] = set()
@@ -2583,6 +2718,7 @@ class RigidBodyEstimator:
         source_bonus = {
             "rigid_hint": 0.06,
             "generic": 0.0,
+            "prediction_hold": -0.01,
             "position_continuity_guard": -0.02,
             "pose_continuity_guard": -0.08,
         }.get(str(source), 0.0)
@@ -2638,9 +2774,6 @@ class RigidBodyEstimator:
                     "frame_local_blob_ownership_conflict:" + ",".join(sorted(set(conflicts))[:4])
                 )
 
-    def _resolve_frame_candidate_ownership(self, candidates: List[_PoseCandidate]) -> None:
-        self._resolve_frame_local_candidate_ownership(candidates)
-
     def _strict_reacquire_reject_reasons(
         self,
         candidate: _PoseCandidate,
@@ -2655,6 +2788,8 @@ class RigidBodyEstimator:
             )
         )
         if not guarded_recovery or not candidate.pose.valid:
+            return []
+        if not bool(self.reacquire_guard_config.enforced):
             return []
         score = candidate.score if isinstance(candidate.score, dict) else {}
         min_markers = max(3, int(candidate.pattern.num_markers) - 1)
@@ -2679,6 +2814,14 @@ class RigidBodyEstimator:
             reasons.append("duplicate_assignment")
         if candidate.source == "pose_continuity_guard":
             reasons.append("held_pose_cannot_reacquire")
+        allowed, subset_reason = self._mode_subset_allowed(
+            candidate.pattern,
+            tracker.mode,
+            score,
+            prediction_valid=tracker.peek_prediction(candidate.pose.timestamp).valid,
+        )
+        if not allowed:
+            reasons.append(f"reacquire_subset_not_allowed:{subset_reason}")
         return reasons
 
     def _apply_candidate_update(
@@ -2724,7 +2867,11 @@ class RigidBodyEstimator:
                 )
                 return rejected_pose
 
-        tracker.update(candidate.pose, stage_reacquire=False)
+        tracker.update(
+            candidate.pose,
+            stage_reacquire=False,
+            prediction_hold=candidate.source in {"prediction_hold", "pose_continuity_guard"},
+        )
         return candidate.pose
 
     def _process_points(
@@ -2782,13 +2929,9 @@ class RigidBodyEstimator:
         used_clusters: set[int] = set()
         hint_markers_by_rigid: Dict[str, Dict[int, Dict[str, Any]]] = {}
         if has_rigid_hints:
-            hint_markers_by_rigid = {
-                pattern.name: self._rigid_hint_markers_by_index(
-                    pattern,
-                    rigid_hint_triangulated_points,
-                )
-                for pattern in self.patterns
-            }
+            hint_markers_by_rigid = self._rigid_hint_markers_by_rigid(
+                rigid_hint_triangulated_points,
+            )
 
         for pattern in self.patterns:
             best_pose = None
@@ -2803,8 +2946,10 @@ class RigidBodyEstimator:
             if self.rigid_candidate_separation_enabled and has_rigid_hints:
                 separated = self._try_rigid_separated_candidate(
                     pattern,
+                    tracker,
                     timestamp,
                     rigid_hint_triangulated_points,
+                    hint_markers_by_rigid.get(pattern.name),
                     camera_params,
                     observations_by_camera,
                     coordinate_space=coordinate_space,
@@ -2834,6 +2979,16 @@ class RigidBodyEstimator:
             ):
                 skip_unseen_tracked_generic = True
                 prediction_reason = "tracked_rigid_unseen_hold_prediction"
+                self._record_rigid_candidate_fallback(prediction_reason)
+
+            if self._should_hold_partial_marker_tracked_rigid(
+                pattern,
+                tracker,
+                timestamp,
+                hint_markers_by_rigid,
+            ):
+                skip_unseen_tracked_generic = True
+                prediction_reason = "tracked_rigid_partial_marker_hold_prediction"
                 self._record_rigid_candidate_fallback(prediction_reason)
 
             if (
@@ -2890,48 +3045,82 @@ class RigidBodyEstimator:
                         coordinate_space=coordinate_space,
                     )
                 )
-                hint_diagnostic = self._evaluate_rigid_hint_pose(
-                    pattern,
-                    timestamp,
-                    rigid_hint_triangulated_points,
-                    camera_params,
-                    observations_by_camera,
-                    coordinate_space=coordinate_space,
-                    generic_pose=best_pose,
-                    generic_score=score,
-                    generic_is_rigid_hint=best_score_from_separated is not None,
-                )
                 selected_pose = best_pose
                 selected_score = score
                 selected_source = "generic"
-                enforce_hint = self._should_select_rigid_hint_pose(
-                    tracker,
-                    hint_diagnostic,
-                )
-                if enforce_hint:
-                    hint_pose = self._pose_from_payload(
-                        hint_diagnostic.get("pose"),
-                        fallback_timestamp=timestamp,
+                if (
+                    best_score_from_separated is not None
+                    and object_gating_enforced
+                    and self.subset_diagnostics_mode == "off"
+                ):
+                    selected_source = "rigid_hint"
+                    hint_diagnostic = {
+                        "evaluated": True,
+                        "reason": "ok",
+                        "valid": bool(best_pose.valid),
+                        "diagnostics_only": False,
+                        "enforced": True,
+                        "selected_for_pose": True,
+                        "selection_reason": "object_gating_enforced",
+                        "candidate_points": int(best_pose.observed_markers),
+                        "observed_markers": int(best_pose.observed_markers),
+                        "marker_indices": [
+                            int(index)
+                            for index in score.get("rigid_hint_marker_indices", [])
+                        ],
+                        "real_ray_count": int(score.get("rigid_hint_real_ray_count", 0)),
+                        "rms_error_m": float(best_pose.rms_error),
+                        "generic_rms_error_m": float(best_pose.rms_error),
+                        "generic_valid": bool(best_pose.valid),
+                        "generic_score": dict(score),
+                        "score": dict(score),
+                        "score_delta": 0.0,
+                        "position_delta_m": 0.0,
+                        "rotation_delta_deg": 0.0,
+                        "virtual_marker_count": 0,
+                        "invalid_points": 0,
+                        "would_improve_score": False,
+                        "pose": best_pose.to_dict(),
+                    }
+                else:
+                    hint_diagnostic = self._evaluate_rigid_hint_pose(
+                        pattern,
+                        timestamp,
+                        rigid_hint_triangulated_points,
+                        camera_params,
+                        observations_by_camera,
+                        coordinate_space=coordinate_space,
+                        generic_pose=best_pose,
+                        generic_score=score,
+                        generic_is_rigid_hint=best_score_from_separated is not None,
                     )
-                    if hint_pose is not None and hint_pose.valid:
-                        selected_pose = hint_pose
-                        selected_score = dict(
-                            hint_diagnostic.get("score") or _empty_reprojection_score()
+                    enforce_hint = self._should_select_rigid_hint_pose(
+                        tracker,
+                        hint_diagnostic,
+                    )
+                    if enforce_hint:
+                        hint_pose = self._pose_from_payload(
+                            hint_diagnostic.get("pose"),
+                            fallback_timestamp=timestamp,
                         )
-                        selected_source = "rigid_hint"
-                        hint_diagnostic["selected_for_pose"] = True
-                        hint_diagnostic["selection_reason"] = "object_gating_enforced"
+                        if hint_pose is not None and hint_pose.valid:
+                            selected_pose = hint_pose
+                            selected_score = dict(
+                                hint_diagnostic.get("score") or _empty_reprojection_score()
+                            )
+                            selected_source = "rigid_hint"
+                            hint_diagnostic["selected_for_pose"] = True
+                            hint_diagnostic["selection_reason"] = "object_gating_enforced"
+                        else:
+                            hint_diagnostic["selected_for_pose"] = False
+                            hint_diagnostic["selection_reason"] = "invalid_pose_payload"
                     else:
                         hint_diagnostic["selected_for_pose"] = False
-                        hint_diagnostic["selection_reason"] = "invalid_pose_payload"
-                else:
-                    hint_diagnostic["selected_for_pose"] = False
-                    if object_gating_enforced:
-                        if not hint_diagnostic.get("selection_reason"):
-                            hint_diagnostic["selection_reason"] = "not_enforceable"
-                    else:
-                        hint_diagnostic["selection_reason"] = "diagnostics_only"
-
+                        if object_gating_enforced:
+                            if not hint_diagnostic.get("selection_reason"):
+                                hint_diagnostic["selection_reason"] = "not_enforceable"
+                        else:
+                            hint_diagnostic["selection_reason"] = "diagnostics_only"
                 subset_diagnostic = self._subset_diagnostics_for_frame(
                     pattern,
                     tracker,
@@ -2987,13 +3176,24 @@ class RigidBodyEstimator:
                 guard = self._evaluate_reacquire_guard(tracker, selected_pose, selected_score)
 
                 invalid_reason = ""
+                boot_guard_reasons = self._multi_rigid_boot_reject_reasons(
+                    pattern,
+                    tracker,
+                    selected_source=selected_source,
+                    selected_score=selected_score,
+                )
                 generic_guard_reasons = self._generic_continue_reject_reasons(
                     tracker,
                     selected_source=selected_source,
                     selected_score=selected_score,
                     hint_diagnostic=hint_diagnostic,
                 )
-                if generic_guard_reasons:
+                if boot_guard_reasons:
+                    invalid_reason = (
+                        "multi_rigid_boot_reprojection_guard_rejected:"
+                        + ",".join(boot_guard_reasons)
+                    )
+                elif generic_guard_reasons:
                     invalid_reason = (
                         "generic_continue_reprojection_guard_rejected:"
                         + ",".join(generic_guard_reasons)
@@ -3038,9 +3238,46 @@ class RigidBodyEstimator:
                 if selected_source == "generic" and best_cluster_idx >= 0:
                     used_clusters.add(best_cluster_idx)
             else:
-                predicted = tracker.predict()
+                prediction = tracker.peek_prediction(timestamp)
+                predicted = (
+                    prediction.to_pose()
+                    if prediction.valid
+                    else tracker.predict()
+                )
                 predicted.timestamp = timestamp
                 score = _empty_reprojection_score(prediction_reason)
+                partial_hold_reasons = {
+                    "tracked_rigid_partial_marker_hold_prediction",
+                    "tracked_rigid_unseen_hold_prediction",
+                }
+                if prediction_reason in partial_hold_reasons and prediction.valid:
+                    predicted = RigidBodyPose(
+                        timestamp=int(timestamp),
+                        position=prediction.position.copy(),
+                        rotation=prediction.rotation.copy(),
+                        quaternion=prediction.quaternion.copy(),
+                        rms_error=0.0,
+                        observed_markers=int(len(hint_markers_by_rigid.get(pattern.name, {}))),
+                        valid=True,
+                    )
+                    camera_count = max(
+                        1,
+                        int(len(camera_params) if isinstance(camera_params, dict) else 0),
+                    )
+                    expected_marker_views = int(pattern.num_markers) * camera_count
+                    hint_views = int(
+                        sum(
+                            max(1, int(marker.get("contributing_rays", 0) or 0))
+                            for marker in hint_markers_by_rigid.get(pattern.name, {}).values()
+                        )
+                    )
+                    score.update(
+                        {
+                            "matched_marker_views": hint_views,
+                            "expected_marker_views": expected_marker_views,
+                            "missing_marker_views": max(0, expected_marker_views - hint_views),
+                        }
+                    )
                 hint_diagnostic = self._evaluate_rigid_hint_pose(
                     pattern,
                     timestamp,
@@ -3053,7 +3290,22 @@ class RigidBodyEstimator:
                     generic_is_rigid_hint=False,
                 )
                 selected_pose = predicted
-                selected_source = "prediction"
+                selected_source = (
+                    "prediction_hold"
+                    if selected_pose.valid and prediction_reason in partial_hold_reasons
+                    else "prediction"
+                )
+                if (
+                    selected_source == "prediction"
+                    and prediction_reason == "no_valid_pose"
+                    and object_gating_enforced
+                    and len(self.patterns) > 1
+                    and int(tracker.track_count) > 0
+                ):
+                    prediction_reason = "no_visible_rigid_evidence"
+                    selected_pose = self._invalid_pose(timestamp)
+                    score = _empty_reprojection_score(prediction_reason)
+                    selected_source = "invalid"
                 if self._should_select_rigid_hint_pose(tracker, hint_diagnostic):
                     hint_pose = self._pose_from_payload(
                         hint_diagnostic.get("pose"),
@@ -3236,7 +3488,158 @@ class RigidBodyEstimator:
             and int(score.get("duplicate_assignment_count", 0)) > 0
         ):
             reasons.append("duplicate_assignment")
+        allowed, subset_reason = self._mode_subset_allowed(
+            tracker.pattern,
+            tracker.mode,
+            score,
+            prediction_valid=tracker.peek_prediction(
+                int(score.get("timestamp", 0) or 0)
+            ).valid,
+        )
+        if not allowed:
+            reasons.append(f"subset_not_allowed:{subset_reason}")
         return reasons
+
+    def _multi_rigid_boot_reject_reasons(
+        self,
+        pattern: MarkerPattern,
+        tracker: RigidBodyTracker,
+        *,
+        selected_source: str,
+        selected_score: Dict[str, Any],
+    ) -> List[str]:
+        """Reject multi-rigid boot poses that fit in 3D but do not explain the camera blobs."""
+        if (
+            len(self.patterns) <= 1
+            or not self.object_gating_config.enabled
+            or not self.object_gating_config.enforce
+            or tracker.mode != TrackMode.BOOT
+            or int(tracker.track_count) > 0
+            or selected_source != "generic"
+        ):
+            return []
+        score = selected_score if isinstance(selected_score, dict) else {}
+        reasons: List[str] = []
+        min_views = max(6, int(pattern.num_markers) * 2)
+        if not score.get("scored", False):
+            reasons.append(f"score_not_available:{score.get('reason', 'unknown')}")
+            return reasons
+        if int(score.get("matched_marker_views", 0) or 0) < min_views:
+            reasons.append("insufficient_boot_matched_views")
+        if (
+            int(score.get("missing_marker_views", 0) or 0)
+            > self._MULTI_PATTERN_BOOT_MAX_MISSING_MARKER_VIEWS
+        ):
+            reasons.append("too_many_boot_missing_marker_views")
+        if (
+            float(score.get("mean_error_px", 0.0) or 0.0)
+            > self._MULTI_PATTERN_BOOT_MAX_MEAN_REPROJECTION_PX
+        ):
+            reasons.append("boot_mean_reprojection_error_too_high")
+        if (
+            float(score.get("p95_error_px", 0.0) or 0.0)
+            > self._MULTI_PATTERN_BOOT_MAX_P95_REPROJECTION_PX
+        ):
+            reasons.append("boot_p95_reprojection_error_too_high")
+        if int(score.get("duplicate_assignment_count", 0) or 0) > 0:
+            reasons.append("boot_duplicate_assignment")
+        allowed, subset_reason = self._mode_subset_allowed(
+            pattern,
+            TrackMode.BOOT,
+            score,
+            prediction_valid=False,
+        )
+        if not allowed:
+            reasons.append(f"boot_subset_not_allowed:{subset_reason}")
+        return reasons
+
+    @staticmethod
+    def _tracking_policy(pattern: MarkerPattern) -> Dict[str, Any]:
+        policy = (pattern.metadata or {}).get("tracking_policy", {})
+        return dict(policy) if isinstance(policy, dict) else {}
+
+    @staticmethod
+    def _normalized_subset_set(values: Any) -> set[Tuple[int, ...]]:
+        result: set[Tuple[int, ...]] = set()
+        if not isinstance(values, list):
+            return result
+        for item in values:
+            try:
+                subset = tuple(sorted(int(value) for value in item))
+            except (TypeError, ValueError):
+                continue
+            if subset:
+                result.add(subset)
+        return result
+
+    @staticmethod
+    def _score_marker_indices(score: Dict[str, Any]) -> Tuple[int, ...]:
+        if not isinstance(score, dict):
+            return tuple()
+        explicit = score.get("rigid_hint_marker_indices")
+        if isinstance(explicit, list) and explicit:
+            try:
+                return tuple(sorted({int(value) for value in explicit}))
+            except (TypeError, ValueError):
+                pass
+        counts: Counter[int] = Counter()
+        for item in score.get("matched_observations", []) or []:
+            if not isinstance(item, dict):
+                continue
+            try:
+                counts[int(item.get("marker_idx"))] += 1
+            except (TypeError, ValueError):
+                continue
+        return tuple(sorted(index for index, count in counts.items() if int(count) >= 2))
+
+    def _mode_subset_allowed(
+        self,
+        pattern: MarkerPattern,
+        mode: TrackMode,
+        score: Dict[str, Any],
+        *,
+        prediction_valid: bool,
+    ) -> Tuple[bool, str]:
+        policy = self._tracking_policy(pattern)
+        if not policy or int(pattern.num_markers) < 5:
+            return True, "no_policy"
+        marker_indices = self._score_marker_indices(score)
+        visible_count = len(marker_indices)
+        if visible_count >= int(pattern.num_markers):
+            return True, "full_pattern"
+
+        strong4 = self._normalized_subset_set(policy.get("strong_4_subsets"))
+        strong3 = self._normalized_subset_set(policy.get("strong_3_subsets"))
+        subset = tuple(sorted(marker_indices))
+        if mode in {TrackMode.BOOT, TrackMode.REACQUIRE, TrackMode.LOST}:
+            min_markers = int(
+                policy.get(
+                    "reacquire_min_markers" if mode != TrackMode.BOOT else "boot_min_markers",
+                    4,
+                )
+                or 4
+            )
+            if visible_count < min_markers:
+                return False, f"visible_{visible_count}_below_min_{min_markers}"
+            if visible_count == 4 and strong4 and subset not in strong4:
+                return False, "four_subset_not_whitelisted"
+            return True, "strong_recovery_subset"
+
+        if mode == TrackMode.CONTINUE:
+            min_markers = int(policy.get("continue_min_markers", 3) or 3)
+            if visible_count < min_markers:
+                return False, f"visible_{visible_count}_below_min_{min_markers}"
+            if visible_count == 4:
+                if strong4 and subset not in strong4:
+                    return False, "continue_four_subset_not_whitelisted"
+                return True, "strong_continue_four_subset"
+            if visible_count == 3:
+                if not prediction_valid:
+                    return False, "three_subset_without_prediction"
+                if strong3 and subset not in strong3:
+                    return False, "continue_three_subset_not_whitelisted"
+                return True, "strong_continue_three_subset"
+        return False, f"unsupported_subset_size_{visible_count}"
 
     def _other_object_gate_match_count(
         self,
@@ -3265,7 +3668,7 @@ class RigidBodyEstimator:
         for name, other_tracker in self.trackers.items():
             if str(name) == current_name:
                 continue
-            gating = other_tracker.get_diagnostics().get("object_gating", {})
+            gating = other_tracker.latest_object_gating()
             if not isinstance(gating, dict) or not gating.get("evaluated"):
                 continue
             per_camera = gating.get("per_camera", {})
@@ -3312,6 +3715,17 @@ class RigidBodyEstimator:
             return False
         if self._other_object_gate_match_count(tracker, score) > 0:
             diagnostic["selection_reason"] = "matched_other_rigid_gate_blobs"
+            return False
+        allowed, subset_reason = self._mode_subset_allowed(
+            tracker.pattern,
+            tracker.mode,
+            score,
+            prediction_valid=tracker.peek_prediction(
+                int(diagnostic.get("timestamp", 0) or 0)
+            ).valid,
+        )
+        if not allowed:
+            diagnostic["selection_reason"] = "subset_not_allowed:" + subset_reason
             return False
         diagnostic["selection_reason"] = "object_gating_enforced"
         return True
@@ -4161,6 +4575,7 @@ class RigidBodyEstimator:
         rigid_hint_triangulated_points: Optional[List[Dict[str, Any]]],
     ) -> Dict[int, Dict[str, Any]]:
         by_marker: Dict[int, Dict[str, Any]] = {}
+
         for payload in rigid_hint_triangulated_points or []:
             if not isinstance(payload, dict):
                 continue
@@ -4189,8 +4604,51 @@ class RigidBodyEstimator:
                 by_marker[marker_idx] = {
                     "point": point,
                     "weight": float(weight),
+                    "contributing_rays": int(contributing_rays),
+                    "mean_error_px": float(mean_error),
                 }
         return by_marker
+
+    def _rigid_hint_markers_by_rigid(
+        self,
+        rigid_hint_triangulated_points: Optional[List[Dict[str, Any]]],
+    ) -> Dict[str, Dict[int, Dict[str, Any]]]:
+        by_rigid: Dict[str, Dict[int, Dict[str, Any]]] = {}
+        pattern_by_name = {pattern.name: pattern for pattern in self.patterns}
+
+        for payload in rigid_hint_triangulated_points or []:
+            if not isinstance(payload, dict) or bool(payload.get("is_virtual", False)):
+                continue
+            rigid_name = str(payload.get("rigid_name", ""))
+            pattern = pattern_by_name.get(rigid_name)
+            if pattern is None:
+                continue
+            try:
+                marker_idx = int(payload["marker_idx"])
+                point = np.asarray(payload["point"], dtype=np.float64).reshape(3)
+            except (KeyError, TypeError, ValueError):
+                continue
+            if marker_idx < 0 or marker_idx >= pattern.num_markers or not np.isfinite(point).all():
+                continue
+            errors = payload.get("reprojection_errors_px", [])
+            mean_error = (
+                float(np.mean(np.asarray(errors, dtype=np.float64)))
+                if isinstance(errors, list) and errors
+                else 0.0
+            )
+            contributing_rays = int(payload.get("contributing_rays", 0))
+            weight = max(0.1, float(contributing_rays)) / (1.0 + mean_error)
+            markers = by_rigid.setdefault(rigid_name, {})
+            previous = markers.get(marker_idx)
+            previous_weight = float(previous.get("weight", -1.0)) if previous else -1.0
+            if previous is None or weight > previous_weight:
+                markers[marker_idx] = {
+                    "point": point,
+                    "weight": float(weight),
+                    "contributing_rays": int(contributing_rays),
+                    "mean_error_px": float(mean_error),
+                }
+        return by_rigid
 
     def _subset_candidate_pruned(
         self,
@@ -4406,6 +4864,25 @@ class RigidBodyEstimator:
             "rejected_count": 0,
         }
 
+    @staticmethod
+    def _residual_error_stats(residuals: List[float]) -> Tuple[float, float, float]:
+        if not residuals:
+            return 0.0, 0.0, 0.0
+        values = np.sort(np.asarray(residuals, dtype=np.float64).reshape(-1))
+        mean_error = float(values.mean())
+        max_error = float(values[-1])
+        if len(values) == 1:
+            return mean_error, max_error, max_error
+        rank = (len(values) - 1) * 0.95
+        lower = int(np.floor(rank))
+        upper = int(np.ceil(rank))
+        if lower == upper:
+            p95_error = float(values[lower])
+        else:
+            weight = float(rank - lower)
+            p95_error = float(values[lower] * (1.0 - weight) + values[upper] * weight)
+        return mean_error, p95_error, max_error
+
     def _score_pose_reprojection(
         self,
         pose: RigidBodyPose,
@@ -4487,9 +4964,7 @@ class RigidBodyEstimator:
             return _empty_reprojection_score("no_projectable_markers")
 
         missing = max(0, expected - matched)
-        mean_error = float(np.mean(residuals)) if residuals else 0.0
-        p95_error = float(np.percentile(residuals, 95)) if residuals else 0.0
-        max_error = float(np.max(residuals)) if residuals else 0.0
+        mean_error, p95_error, max_error = self._residual_error_stats(residuals)
         coverage = float(matched / expected) if expected else 0.0
         residual_score = 1.0 / (1.0 + mean_error / 5.0) if residuals else 0.0
         duplicate_penalty = min(1.0, duplicate_assignments / max(1, matched))
@@ -4513,15 +4988,268 @@ class RigidBodyEstimator:
             "matched_observations": matched_observations,
         }
 
-    @staticmethod
-    def _extract_observation_uvs(observations: List[Any], coordinate_space: str) -> List[Tuple[float, float]]:
-        return [
-            tuple(payload["uv"])
-            for payload in RigidBodyEstimator._extract_observation_payloads(
-                observations,
-                coordinate_space,
+    def _score_full_continue_hint_quality(
+        self,
+        pose: RigidBodyPose,
+        pattern: MarkerPattern,
+        tracker: RigidBodyTracker,
+        rigid_hint_triangulated_points: Optional[List[Dict[str, Any]]],
+        observations_by_camera: Optional[Dict[str, List[Any]]],
+        *,
+        coordinate_space: str,
+    ) -> Dict[str, Any]:
+        if (
+            not pose.valid
+            or tracker.mode != TrackMode.CONTINUE
+            or int(pose.observed_markers) < int(pattern.num_markers)
+        ):
+            return _empty_reprojection_score("not_full_continue_hint")
+
+        residuals: List[float] = []
+        matched_observations: List[Dict[str, Any]] = []
+        marker_indices: set[int] = set()
+        used_views: set[Tuple[str, int]] = set()
+        duplicate_assignments = 0
+        for payload in rigid_hint_triangulated_points or []:
+            if not isinstance(payload, dict):
+                continue
+            if str(payload.get("rigid_name", pattern.name)) != pattern.name:
+                continue
+            try:
+                marker_idx = int(payload["marker_idx"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if marker_idx < 0 or marker_idx >= pattern.num_markers:
+                continue
+            observations = payload.get("observations", []) or []
+            errors = payload.get("reprojection_errors_px", []) or []
+            if not isinstance(observations, list) or not isinstance(errors, list):
+                continue
+            marker_indices.add(marker_idx)
+            for observation, error_value in zip(observations, errors):
+                if not isinstance(observation, dict):
+                    continue
+                try:
+                    camera_id = str(observation.get("camera_id", ""))
+                    blob_index = int(observation.get("blob_index", -1))
+                    error = float(error_value)
+                except (TypeError, ValueError):
+                    continue
+                if error > self.reprojection_match_gate_px:
+                    continue
+                view = (camera_id, blob_index)
+                if blob_index >= 0 and view in used_views:
+                    duplicate_assignments += 1
+                    continue
+                if blob_index >= 0:
+                    used_views.add(view)
+                residuals.append(error)
+                matched_observations.append(
+                    {
+                        "camera_id": camera_id,
+                        "marker_idx": int(marker_idx),
+                        "blob_index": int(blob_index),
+                        "error_px": error,
+                    }
+                )
+        if len(marker_indices) < int(pattern.num_markers):
+            return _empty_reprojection_score("not_all_hint_markers")
+
+        camera_count = int(
+            len(observations_by_camera)
+            if isinstance(observations_by_camera, dict) and observations_by_camera
+            else len({item["camera_id"] for item in matched_observations})
+        )
+        (
+            object_gating_evaluated,
+            object_gating_marker_count,
+            object_gating_camera_count,
+            object_gating_assigned_views,
+        ) = tracker.latest_object_gating_counts()
+        if object_gating_evaluated and object_gating_marker_count == int(pattern.num_markers):
+            camera_count = max(camera_count, object_gating_camera_count)
+        expected = int(pattern.num_markers) * max(0, camera_count)
+        if expected <= 0:
+            return _empty_reprojection_score("no_projectable_markers")
+
+        matched = len(matched_observations)
+        if object_gating_evaluated and object_gating_marker_count == int(pattern.num_markers):
+            matched = max(
+                matched,
+                min(expected, object_gating_assigned_views),
             )
-        ]
+        missing = max(0, expected - matched)
+        mean_error, p95_error, max_error = self._residual_error_stats(residuals)
+        coverage = float(matched / expected) if expected else 0.0
+        residual_score = 1.0 / (1.0 + mean_error / 5.0) if residuals else 0.0
+        duplicate_penalty = min(1.0, duplicate_assignments / max(1, matched))
+        score = float(
+            np.clip(
+                0.70 * residual_score + 0.30 * coverage - 0.30 * duplicate_penalty,
+                0.0,
+                1.0,
+            )
+        )
+        total_blobs = (
+            sum(len(items or []) for items in observations_by_camera.values())
+            if isinstance(observations_by_camera, dict)
+            else matched
+        )
+        return {
+            "scored": True,
+            "reason": "ok",
+            "coordinate_space": (
+                "undistorted_pixel"
+                if coordinate_space == "undistorted_pixel"
+                else "raw_pixel"
+            ),
+            "score": score,
+            "mean_error_px": mean_error,
+            "p95_error_px": p95_error,
+            "max_error_px": max_error,
+            "matched_marker_views": int(matched),
+            "expected_marker_views": int(expected),
+            "missing_marker_views": int(missing),
+            "duplicate_assignment_count": int(duplicate_assignments),
+            "unexpected_blob_count": int(max(0, total_blobs - matched)),
+            "camera_count": int(camera_count),
+            "match_gate_px": float(self.reprojection_match_gate_px),
+            "matched_observations": matched_observations,
+            "rigid_hint_marker_indices": [int(index) for index in sorted(marker_indices)],
+            "rigid_hint_real_ray_count": int(matched),
+            "score_source": "rigid_hint_quality",
+        }
+
+    def _score_pose_reprojection_from_hint_observations(
+        self,
+        pose: RigidBodyPose,
+        pattern: MarkerPattern,
+        rigid_hint_triangulated_points: Optional[List[Dict[str, Any]]],
+        camera_params: Optional[Dict[str, Any]],
+        observations_by_camera: Optional[Dict[str, List[Any]]],
+        *,
+        coordinate_space: str,
+    ) -> Dict[str, Any]:
+        if not pose.valid:
+            return _empty_reprojection_score("invalid_pose")
+        if not camera_params:
+            return _empty_reprojection_score("no_camera_context")
+
+        space = "undistorted_pixel" if coordinate_space == "undistorted_pixel" else "raw_pixel"
+        markers_world = (
+            pose.rotation @ pattern.marker_positions.T
+        ).T + pose.position.reshape(1, 3)
+        residuals: List[float] = []
+        matched_observations: List[Dict[str, Any]] = []
+        used_views: set[Tuple[str, int]] = set()
+        duplicate_assignments = 0
+        scored_cameras: set[str] = set()
+        marker_indices: set[int] = set()
+        camera_projection_cache: Dict[str, List[Tuple[float, float]]] = {}
+
+        for payload in rigid_hint_triangulated_points or []:
+            if not isinstance(payload, dict):
+                continue
+            if str(payload.get("rigid_name", pattern.name)) != pattern.name:
+                continue
+            try:
+                marker_idx = int(payload["marker_idx"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if marker_idx < 0 or marker_idx >= pattern.num_markers:
+                continue
+            for observation in payload.get("observations", []) or []:
+                if not isinstance(observation, dict):
+                    continue
+                camera_id = str(observation.get("camera_id", ""))
+                camera = camera_params.get(camera_id)
+                if camera is None:
+                    continue
+                raw_uv = observation.get("undistorted_uv" if space == "undistorted_pixel" else "raw_uv")
+                if raw_uv is None:
+                    raw_uv = [observation.get("x", 0.0), observation.get("y", 0.0)]
+                try:
+                    observed_uv = np.asarray(raw_uv, dtype=np.float64).reshape(2)
+                    blob_index = int(observation.get("blob_index", -1))
+                except (TypeError, ValueError):
+                    continue
+                projected = camera_projection_cache.get(camera_id)
+                if projected is None:
+                    projected = self._project_markers_to_camera(markers_world, camera, space)
+                    camera_projection_cache[camera_id] = projected
+                if marker_idx >= len(projected):
+                    continue
+                error = float(
+                    np.linalg.norm(
+                        np.asarray(projected[marker_idx], dtype=np.float64) - observed_uv
+                    )
+                )
+                if error > self.reprojection_match_gate_px:
+                    continue
+                view = (camera_id, blob_index)
+                if blob_index >= 0 and view in used_views:
+                    duplicate_assignments += 1
+                    continue
+                if blob_index >= 0:
+                    used_views.add(view)
+                scored_cameras.add(camera_id)
+                marker_indices.add(marker_idx)
+                residuals.append(error)
+                matched_observations.append(
+                    {
+                        "camera_id": camera_id,
+                        "marker_idx": int(marker_idx),
+                        "blob_index": int(blob_index),
+                        "error_px": error,
+                    }
+                )
+
+        camera_count = int(
+            len(observations_by_camera)
+            if isinstance(observations_by_camera, dict) and observations_by_camera
+            else len(scored_cameras)
+        )
+        expected = int(pattern.num_markers) * max(0, camera_count)
+        if expected <= 0:
+            return _empty_reprojection_score("no_projectable_markers")
+
+        matched = len(matched_observations)
+        missing = max(0, expected - matched)
+        mean_error, p95_error, max_error = self._residual_error_stats(residuals)
+        coverage = float(matched / expected) if expected else 0.0
+        residual_score = 1.0 / (1.0 + mean_error / 5.0) if residuals else 0.0
+        duplicate_penalty = min(1.0, duplicate_assignments / max(1, matched))
+        score = float(
+            np.clip(
+                0.70 * residual_score + 0.30 * coverage - 0.30 * duplicate_penalty,
+                0.0,
+                1.0,
+            )
+        )
+        total_blobs = (
+            sum(len(items or []) for items in observations_by_camera.values())
+            if isinstance(observations_by_camera, dict)
+            else matched
+        )
+        return {
+            "scored": True,
+            "reason": "ok",
+            "coordinate_space": space,
+            "score": score,
+            "mean_error_px": mean_error,
+            "p95_error_px": p95_error,
+            "max_error_px": max_error,
+            "matched_marker_views": int(matched),
+            "expected_marker_views": int(expected),
+            "missing_marker_views": int(missing),
+            "duplicate_assignment_count": int(duplicate_assignments),
+            "unexpected_blob_count": int(max(0, total_blobs - matched)),
+            "camera_count": int(camera_count),
+            "match_gate_px": float(self.reprojection_match_gate_px),
+            "matched_observations": matched_observations,
+            "rigid_hint_marker_indices": [int(index) for index in sorted(marker_indices)],
+            "rigid_hint_real_ray_count": int(matched),
+        }
 
     @staticmethod
     def _extract_observation_payloads(
@@ -4563,7 +5291,11 @@ class RigidBodyEstimator:
             return []
 
         points_world = points_world[in_front]
-        if coordinate_space == "undistorted_pixel":
+        distortion = np.asarray(
+            getattr(camera, "distortion_coeffs", np.zeros(5, dtype=np.float64)),
+            dtype=np.float64,
+        ).reshape(-1)
+        if coordinate_space == "undistorted_pixel" or not np.any(np.abs(distortion) > 1e-12):
             points_cam = points_cam[in_front]
             fx = float(camera.intrinsic_matrix[0, 0])
             fy = float(camera.intrinsic_matrix[1, 1])
@@ -4580,7 +5312,7 @@ class RigidBodyEstimator:
             rvec,
             translation,
             camera.intrinsic_matrix,
-            camera.distortion_coeffs,
+            distortion,
         )
         return [(float(point[0]), float(point[1])) for point in projected.reshape(-1, 2)]
     
@@ -4591,5 +5323,12 @@ class RigidBodyEstimator:
                 "is_tracking": tracker.is_tracking,
                 **tracker.get_diagnostics(),
             }
+            for name, tracker in self.trackers.items()
+        }
+
+    def get_tracking_event_status(self) -> Dict[str, Dict[str, Any]]:
+        """Get lightweight tracking diagnostics for per-frame event recording."""
+        return {
+            name: tracker.get_event_diagnostics()
             for name, tracker in self.trackers.items()
         }

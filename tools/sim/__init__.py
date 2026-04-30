@@ -1,6 +1,7 @@
 """Synthetic tracking simulator development tools."""
 
 from .multi_rigid import (  # noqa: F401
+    DESIGN_5MARKER_LAYOUT,
     MultiRigidFrameGenerator,
     MultiRigidScenarioConfig,
     SyntheticFrameGenerator,

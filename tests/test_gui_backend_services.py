@@ -1336,6 +1336,29 @@ def test_camera_mjpeg_proxy_relays_upstream_stream(tmp_path: Path, monkeypatch: 
     assert state.get_preview_proxy_error("pi-cam-01") is None
 
 
+def test_gui_v2_route_serves_mock_html(tmp_path: Path) -> None:
+    state = _build_state(tmp_path)
+    LoutrackGuiHandler.state = state
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), LoutrackGuiHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=2.0)
+        connection.request("GET", "/v2")
+        response = connection.getresponse()
+        body = response.read().decode("utf-8")
+        assert response.status == 200
+        assert response.getheader("Content-Type") == "text/html"
+        assert "Loutrack GUI" in body
+        assert "V2" in body
+        connection.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=2.0)
+        server.server_close()
+
+
 def test_camera_mjpeg_proxy_client_disconnect_does_not_mark_upstream_unreachable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

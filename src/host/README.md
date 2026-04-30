@@ -162,7 +162,6 @@ print(poses["waist"].quaternion)
 | `RigidBodyPose` | 推定された剛体姿勢 |
 | `PointClusterer` | DBSCANクラスタリング |
 | `KabschEstimator` | SVDベース剛体姿勢推定 |
-| `PnPEstimator` | PnPフォールバック |
 | `RigidBodyTracker` | 時間追跡・予測 |
 | `RigidBodyEstimator` | 統合パイプライン |
 

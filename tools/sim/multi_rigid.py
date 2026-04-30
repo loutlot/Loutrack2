@@ -6,7 +6,7 @@ pipeline can be exercised deterministically without UDP receivers.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 import socket
 import threading
@@ -25,14 +25,117 @@ from host.geo import CameraParams, GeometryPipeline, Triangulator, create_dummy_
 from host.logger import FrameLogger
 from host.replay import FrameReplay
 from host.receiver import Frame, PairedFrames
-from host.rigid import MarkerPattern, RigidBodyEstimator, WAIST_PATTERN, marker_pattern_from_points
+from host.rigid import (
+    CHEST_PATTERN,
+    HEAD_PATTERN,
+    LEFT_FOOT_PATTERN,
+    MarkerPattern,
+    RIGHT_FOOT_PATTERN,
+    RigidBodyEstimator,
+    WAIST_PATTERN,
+    marker_pattern_from_points,
+)
 from host.visualize import TrackingVisualizer
-from host.pipeline import TrackingPipeline
+from host.pipeline import TrackingPipeline, _variant_has_geo_hotpath_optimizations
 
 
 DEFAULT_MVP_CAMERA_IDS = ("pi-cam-01", "pi-cam-02")
 DEFAULT_GENERATED_CAMERA_IDS = ("pi-cam-01", "pi-cam-02", "pi-cam-03", "pi-cam-04")
 DEFAULT_MVP_RIGIDS = ("waist", "wand")
+DEFAULT_BODY_RIGIDS = ("head", "waist", "chest", "left_foot", "right_foot")
+DESIGN_5MARKER_LAYOUT = "design_5marker_seed"
+FIVE_RIGID_BODY_SCENARIOS = {
+    "five_rigid_dance_occlusion",
+    "five_rigid_dance_hard_occlusion_v1",
+    "five_rigid_dance_swap_red_v1",
+}
+
+
+_DESIGN_5MARKER_POINTS_MM: dict[str, list[list[float]]] = {
+    "head": [
+        [39.5, -48.1, 18.9],
+        [39.0, 26.9, 29.1],
+        [-34.5, 53.8, 12.0],
+        [-8.4, -63.9, 8.3],
+        [64.0, 6.4, 9.2],
+    ],
+    "waist": [
+        [18.0, -50.0, 37.5],
+        [0.6, 61.8, 20.2],
+        [-6.6, -13.0, 63.3],
+        [22.9, -24.1, 55.9],
+        [58.2, -28.6, 4.8],
+    ],
+    "chest": [
+        [3.4, 39.5, 24.7],
+        [17.6, -30.4, 54.7],
+        [24.4, 58.4, 14.7],
+        [63.9, -1.0, 11.8],
+        [-23.3, -42.3, 32.6],
+    ],
+    "left_foot": [
+        [-29.7, -52.0, 25.3],
+        [62.1, -10.7, 16.1],
+        [0.7, 47.4, 44.4],
+        [-17.3, -17.8, 49.1],
+        [-63.6, -3.5, 13.0],
+    ],
+    "right_foot": [
+        [7.2, 45.2, 46.1],
+        [-44.2, 34.2, 33.1],
+        [24.0, -22.4, 56.1],
+        [-38.0, -5.0, 52.5],
+        [-59.5, 24.3, 9.8],
+    ],
+}
+
+
+_DESIGN_5MARKER_POLICIES: dict[str, dict[str, Any]] = {
+    "head": {
+        "strong_4_subsets": [[0, 2, 3, 4]],
+        "strong_3_subsets": [[2, 3, 4]],
+    },
+    "waist": {
+        "strong_4_subsets": [[0, 1, 2, 3]],
+        "strong_3_subsets": [[0, 2, 3]],
+    },
+    "chest": {
+        "strong_4_subsets": [[0, 1, 2, 3]],
+        "strong_3_subsets": [[0, 2, 3]],
+    },
+    "left_foot": {
+        "strong_4_subsets": [[1, 2, 3, 4]],
+        "strong_3_subsets": [[1, 2, 4]],
+    },
+    "right_foot": {
+        "strong_4_subsets": [[0, 1, 2, 3]],
+        "strong_3_subsets": [[1, 3, 4]],
+    },
+}
+
+
+def _design_5marker_patterns() -> list[MarkerPattern]:
+    patterns: list[MarkerPattern] = []
+    for name in DEFAULT_BODY_RIGIDS:
+        policy = {
+            "boot_min_markers": 4,
+            "reacquire_min_markers": 4,
+            "continue_min_markers": 3,
+            **_DESIGN_5MARKER_POLICIES[name],
+        }
+        patterns.append(
+            marker_pattern_from_points(
+                name,
+                np.asarray(_DESIGN_5MARKER_POINTS_MM[name], dtype=np.float64) * 0.001,
+                marker_diameter=0.014,
+                metadata={
+                    "source": "rigid_body_design_seed",
+                    "marker_layout": DESIGN_5MARKER_LAYOUT,
+                    "tracking_policy": policy,
+                },
+            )
+        )
+    return patterns
 
 
 def _sample_gaussian_pixel_noise(
@@ -189,6 +292,52 @@ def _max_consecutive_over(values: list[float], threshold: float) -> int:
     return int(longest)
 
 
+def _gui_live_rigid_stabilization() -> dict[str, Any]:
+    return {
+        "object_conditioned_gating": True,
+        "subset_ransac": False,
+        "reacquire_guard_shadow_enabled": False,
+        "reacquire_guard_event_logging": False,
+        "reacquire_guard_enforced": True,
+        "object_gating_enforced": True,
+        "pose_continuity_guard_enabled": True,
+        "pose_continuity_guard_enforced": True,
+        "pose_continuity_max_rotation_deg": 90.0,
+        "pose_continuity_max_angular_velocity_deg_s": 2500.0,
+        "pose_continuity_max_angular_accel_deg_s2": 200000.0,
+        "position_continuity_guard_enabled": True,
+        "position_continuity_guard_enforced": True,
+        "position_continuity_max_accel_m_s2": 60.0,
+        "position_continuity_max_velocity_m_s": 8.0,
+    }
+
+
+def _rigid_stabilization_for_profile(profile: str) -> dict[str, Any] | None:
+    normalized = str(profile or "pipeline_default").strip()
+    if normalized == "pipeline_default":
+        return None
+    if normalized == "gui_live":
+        return _gui_live_rigid_stabilization()
+    raise ValueError(
+        "rigid_stabilization_profile must be one of: pipeline_default, gui_live"
+    )
+
+
+def _default_rigids_for_scenario(scenario: str | None) -> tuple[str, ...]:
+    if str(scenario or "") in FIVE_RIGID_BODY_SCENARIOS:
+        return DEFAULT_BODY_RIGIDS
+    return DEFAULT_MVP_RIGIDS
+
+
+def _default_marker_layout_for_scenario(scenario: str | None, marker_layout: str) -> str:
+    if (
+        str(scenario or "") in FIVE_RIGID_BODY_SCENARIOS
+        and str(marker_layout or "current_4marker") == "current_4marker"
+    ):
+        return DESIGN_5MARKER_LAYOUT
+    return str(marker_layout or "current_4marker")
+
+
 def _latest_pipeline_stage_ms(pipeline: TrackingPipeline, name: str) -> float:
     stage_lock = getattr(pipeline, "_stage_lock", None)
     stage_ms = getattr(pipeline, "_stage_ms", {})
@@ -238,6 +387,7 @@ class MultiRigidScenarioConfig:
     rigids_path: str = "calibration/tracking_rigids.json"
     pipeline_variant: str = "fast_ABCDHRF"
     subset_diagnostics_mode: str = "off"
+    rigid_stabilization_profile: str = "pipeline_default"
 
 
 @dataclass(frozen=True)
@@ -312,9 +462,22 @@ def _load_custom_rigid_patterns(path: str | Path) -> dict[str, MarkerPattern]:
     return patterns
 
 
-def load_mvp_patterns(rigids_path: str | Path = "calibration/tracking_rigids.json") -> list[MarkerPattern]:
+def load_mvp_patterns(
+    rigids_path: str | Path = "calibration/tracking_rigids.json",
+    *,
+    marker_layout: str = "current_4marker",
+) -> list[MarkerPattern]:
     custom = _load_custom_rigid_patterns(rigids_path)
-    patterns = [WAIST_PATTERN]
+    if marker_layout == DESIGN_5MARKER_LAYOUT:
+        patterns = _design_5marker_patterns()
+    else:
+        patterns = [
+            HEAD_PATTERN,
+            WAIST_PATTERN,
+            CHEST_PATTERN,
+            LEFT_FOOT_PATTERN,
+            RIGHT_FOOT_PATTERN,
+        ]
     if "wand" in custom:
         patterns.append(custom["wand"])
     else:
@@ -402,6 +565,9 @@ def _install_camera_params_on_pipeline(
         epipolar_threshold_px=pipeline.geometry.epipolar_threshold_px,
         fast_geometry=pipeline.pipeline_variant != "baseline",
         epipolar_pruning_enabled=pipeline.pipeline_variant == "fast_ABCDP",
+        geo_hotpath_optimizations=_variant_has_geo_hotpath_optimizations(
+            pipeline.pipeline_variant
+        ),
         stage_callback=pipeline._record_stage,
     )
     pipeline._raw_scene_geometry.camera_params = camera_params
@@ -444,6 +610,26 @@ class SimulatedRigidInstance:
                 yaw += 0.04 * t_sec
             else:
                 pos += np.array([0.02 * np.sin(0.7 * t_sec + self.phase), 0.0, 0.0])
+        elif self.trajectory == "waist_rotate_partial_occlusion":
+            if self.pattern.name == "waist":
+                pos += np.array(
+                    [
+                        0.16 * t_sec,
+                        0.035 * np.sin(1.4 * t_sec + self.phase),
+                        0.012 * np.sin(0.9 * t_sec),
+                    ],
+                    dtype=np.float64,
+                )
+                yaw += 0.95 * t_sec
+            else:
+                pos += np.array(
+                    [
+                        0.025 * np.sin(0.8 * t_sec + self.phase),
+                        0.010 * np.cos(0.5 * t_sec),
+                        0.0,
+                    ],
+                    dtype=np.float64,
+                )
         elif self.trajectory == "circle":
             pos += np.array([
                 0.06 * np.cos(0.8 * t_sec + self.phase),
@@ -451,6 +637,70 @@ class SimulatedRigidInstance:
                 0.0,
             ])
             yaw += 0.4 * t_sec
+        elif self.trajectory in FIVE_RIGID_BODY_SCENARIOS:
+            # Human-scale dance stress: fast but plausible torso twist, head bob,
+            # and leg crossing near the camera baseline.
+            is_hard = self.trajectory in {
+                "five_rigid_dance_hard_occlusion_v1",
+                "five_rigid_dance_swap_red_v1",
+            }
+            is_red = self.trajectory == "five_rigid_dance_swap_red_v1"
+            omega = 2.0 * np.pi * (0.90 if is_red else 0.82 if is_hard else 0.75)
+            travel = 1.14 if is_red else 1.06 if is_hard else 1.0
+            twist = 1.18 if is_red else 1.10 if is_hard else 1.0
+            phase = self.phase
+            if self.pattern.name == "head":
+                pos += np.array(
+                    [
+                        travel * 0.045 * np.sin(omega * t_sec + phase),
+                        travel * 0.030 * np.cos(0.7 * omega * t_sec + phase),
+                        travel * 0.035 * np.sin(1.3 * omega * t_sec),
+                    ],
+                    dtype=np.float64,
+                )
+                yaw += twist * 0.70 * np.sin(omega * t_sec + phase)
+            elif self.pattern.name == "chest":
+                pos += np.array(
+                    [
+                        travel * 0.055 * np.sin(0.9 * omega * t_sec + phase),
+                        travel * 0.045 * np.sin(1.1 * omega * t_sec),
+                        travel * 0.020 * np.cos(0.8 * omega * t_sec + phase),
+                    ],
+                    dtype=np.float64,
+                )
+                yaw += twist * 1.05 * np.sin(0.85 * omega * t_sec)
+            elif self.pattern.name == "waist":
+                pos += np.array(
+                    [
+                        travel * 0.065 * np.sin(0.8 * omega * t_sec),
+                        travel * 0.055 * np.sin(omega * t_sec + 0.4),
+                        travel * 0.018 * np.sin(1.5 * omega * t_sec),
+                    ],
+                    dtype=np.float64,
+                )
+                yaw += twist * 1.25 * np.sin(0.9 * omega * t_sec)
+            elif self.pattern.name == "left_foot":
+                cross = np.sin(0.55 * omega * t_sec)
+                pos += np.array(
+                    [
+                        travel * 0.20 * cross,
+                        travel * 0.12 * np.sin(omega * t_sec + phase),
+                        travel * 0.045 * max(0.0, np.sin(1.1 * omega * t_sec)),
+                    ],
+                    dtype=np.float64,
+                )
+                yaw += twist * 0.95 * np.sin(1.2 * omega * t_sec + phase)
+            elif self.pattern.name == "right_foot":
+                cross = -np.sin(0.55 * omega * t_sec)
+                pos += np.array(
+                    [
+                        travel * 0.20 * cross,
+                        -travel * 0.12 * np.sin(omega * t_sec + phase),
+                        travel * 0.045 * max(0.0, np.cos(1.1 * omega * t_sec)),
+                    ],
+                    dtype=np.float64,
+                )
+                yaw += -twist * 0.95 * np.sin(1.2 * omega * t_sec + phase)
         return _rotz(yaw), pos
 
     def marker_positions_world(self, frame_index: int) -> np.ndarray:
@@ -482,6 +732,12 @@ class MultiRigidFrameGenerator:
         if not (0.0 <= config.camera_dropout_prob <= 1.0):
             raise ValueError("camera_dropout_prob must be in [0, 1]")
 
+        effective_marker_layout = _default_marker_layout_for_scenario(
+            config.scenario,
+            config.marker_layout,
+        )
+        if effective_marker_layout != config.marker_layout:
+            config = replace(config, marker_layout=effective_marker_layout)
         self.config = config
         self._rng = np.random.default_rng(int(config.seed))
         self._frame_index = 0
@@ -492,7 +748,10 @@ class MultiRigidFrameGenerator:
             for camera_id, camera in self.camera_params.items()
             if camera_id in set(config.camera_ids)
         }
-        pattern_list = patterns or load_mvp_patterns(config.rigids_path)
+        pattern_list = patterns or load_mvp_patterns(
+            config.rigids_path,
+            marker_layout=config.marker_layout,
+        )
         pattern_by_name = {pattern.name: pattern for pattern in pattern_list}
         self.patterns = [
             pattern_by_name[name]
@@ -504,14 +763,32 @@ class MultiRigidFrameGenerator:
         self._bodies = self._build_bodies(self.patterns)
 
     def _build_bodies(self, patterns: list[MarkerPattern]) -> dict[str, SimulatedRigidInstance]:
-        base_positions = {
-            "waist": np.array([0.08, 0.00, 2.20], dtype=np.float64),
-            "wand": np.array([0.78, 0.18, 2.25], dtype=np.float64),
-            "head": np.array([0.05, 0.00, 2.45], dtype=np.float64),
-            "chest": np.array([0.05, 0.00, 2.30], dtype=np.float64),
-            "left_foot": np.array([-0.10, -0.10, 2.05], dtype=np.float64),
-            "right_foot": np.array([0.20, -0.10, 2.05], dtype=np.float64),
-        }
+        if self.config.scenario in FIVE_RIGID_BODY_SCENARIOS:
+            if self.config.scenario == "five_rigid_dance_swap_red_v1":
+                base_positions = {
+                    "head": np.array([-0.18, 0.18, 2.46], dtype=np.float64),
+                    "chest": np.array([0.08, 0.08, 2.34], dtype=np.float64),
+                    "waist": np.array([0.05, 0.10, 2.20], dtype=np.float64),
+                    "left_foot": np.array([0.00, -0.05, 2.05], dtype=np.float64),
+                    "right_foot": np.array([0.10, 0.05, 2.05], dtype=np.float64),
+                }
+            else:
+                base_positions = {
+                    "head": np.array([-0.22, 0.18, 2.46], dtype=np.float64),
+                    "chest": np.array([0.20, -0.16, 2.34], dtype=np.float64),
+                    "waist": np.array([0.05, 0.10, 2.20], dtype=np.float64),
+                    "left_foot": np.array([-0.28, -0.16, 2.05], dtype=np.float64),
+                    "right_foot": np.array([0.38, 0.16, 2.05], dtype=np.float64),
+                }
+        else:
+            base_positions = {
+                "waist": np.array([0.08, 0.00, 2.20], dtype=np.float64),
+                "wand": np.array([0.78, 0.18, 2.25], dtype=np.float64),
+                "head": np.array([0.05, 0.00, 2.45], dtype=np.float64),
+                "chest": np.array([0.05, 0.00, 2.30], dtype=np.float64),
+                "left_foot": np.array([-0.10, -0.10, 2.05], dtype=np.float64),
+                "right_foot": np.array([0.20, -0.10, 2.05], dtype=np.float64),
+            }
         bodies = {}
         for index, pattern in enumerate(patterns):
             bodies[pattern.name] = SimulatedRigidInstance(
@@ -523,22 +800,259 @@ class MultiRigidFrameGenerator:
                 yaw=0.08 * float(index),
                 fps=self.config.fps,
                 trajectory=(
-                    "waist_wand_occlusion_reacquire"
-                    if self.config.scenario == "waist_wand_occlusion_reacquire"
+                    self.config.scenario
+                    if self.config.scenario
+                    in {
+                        "waist_wand_occlusion_reacquire",
+                        "waist_rotate_partial_occlusion",
+                        "five_rigid_dance_occlusion",
+                        "five_rigid_dance_hard_occlusion_v1",
+                        "five_rigid_dance_swap_red_v1",
+                    }
                     else self.config.trajectory_name
                 ),
                 phase=float(index) * 0.7,
             )
         return bodies
 
-    def _is_marker_occluded(self, rigid_name: str, marker_index: int, frame_index: int) -> bool:
-        if self.config.scenario != "waist_wand_occlusion_reacquire":
+    def _hard_occlusion_cycle_time(self, frame_index: int) -> tuple[int, float]:
+        t_sec = float(frame_index) / float(self.config.fps)
+        if t_sec < 0.25:
+            return 0, -1.0
+        cycle_len_sec = 2.40
+        cycle_pos = t_sec - 0.25
+        return int(cycle_pos // cycle_len_sec), float(cycle_pos % cycle_len_sec)
+
+    def _hard_scenario_false_blobs_per_camera(self, frame_index: int) -> int:
+        if self.config.scenario not in {
+            "five_rigid_dance_hard_occlusion_v1",
+            "five_rigid_dance_swap_red_v1",
+        }:
+            return int(self.config.false_blobs_per_camera)
+        _, cycle_t = self._hard_occlusion_cycle_time(frame_index)
+        if self.config.scenario == "five_rigid_dance_swap_red_v1":
+            extra = 10 if 0.34 <= cycle_t < 1.34 else 4 if 1.34 <= cycle_t < 1.78 else 0
+        else:
+            extra = 6 if 0.70 <= cycle_t < 1.18 else 0
+        return int(self.config.false_blobs_per_camera) + extra
+
+    def _is_marker_occluded(
+        self,
+        rigid_name: str,
+        marker_index: int,
+        frame_index: int,
+        camera_id: str,
+    ) -> bool:
+        if self.config.scenario == "five_rigid_dance_swap_red_v1":
+            cycle_index, cycle_t = self._hard_occlusion_cycle_time(frame_index)
+            if cycle_t < 0.0:
+                return False
+            camera_rank = {
+                camera_id_value: index
+                for index, camera_id_value in enumerate(self.config.camera_ids)
+            }
+            rank = int(camera_rank.get(camera_id, 0))
+            even_cycle = cycle_index % 2 == 0
+
+            if rigid_name in {"waist", "chest"} and 0.24 <= cycle_t < 0.76:
+                if rigid_name == "waist" and rank in {0, 1}:
+                    return marker_index in ({1, 4} if even_cycle else {0, 3})
+                if rigid_name == "chest" and rank in {2, 3}:
+                    return marker_index in ({0, 3} if even_cycle else {1, 4})
+                return marker_index == ((rank + cycle_index) % 5)
+
+            if rigid_name in {"left_foot", "right_foot"} and 0.66 <= cycle_t < 1.34:
+                if rigid_name == "left_foot":
+                    if rank in {0, 1} and marker_index in {0, 1, 4}:
+                        return True
+                    if rank in {2, 3} and marker_index in ({1, 4} if even_cycle else {0, 2}):
+                        return True
+                if rigid_name == "right_foot":
+                    if rank in {2, 3} and marker_index in {2, 3, 4}:
+                        return True
+                    if rank in {0, 1} and marker_index in ({0, 4} if even_cycle else {1, 3}):
+                        return True
+
+            if rigid_name in {"head", "chest"} and 1.36 <= cycle_t < 1.62:
+                return marker_index in ({0, 1, 2} if even_cycle else {1, 3, 4})
             return False
+
+        if self.config.scenario == "five_rigid_dance_hard_occlusion_v1":
+            cycle_index, cycle_t = self._hard_occlusion_cycle_time(frame_index)
+            if cycle_t < 0.0:
+                return False
+            camera_rank = {
+                camera_id_value: index
+                for index, camera_id_value in enumerate(self.config.camera_ids)
+            }
+            rank = int(camera_rank.get(camera_id, 0))
+            even_cycle = cycle_index % 2 == 0
+
+            if rigid_name in {"waist", "chest"} and 0.00 <= cycle_t < 0.28:
+                offset = 0 if rigid_name == "waist" else 2
+                return marker_index == ((rank + offset + cycle_index) % 5)
+
+            # Targeted reproducer: two cameras lose the same two markers while
+            # the torso is rotating. This stresses reacquire without random loss.
+            if 0.36 <= cycle_t < 0.62:
+                if rigid_name == "waist" and rank in {0, 1}:
+                    return marker_index in ({1, 4} if even_cycle else {0, 3})
+                if rigid_name == "chest" and rank in {2, 3}:
+                    return marker_index in ({0, 3} if even_cycle else {1, 4})
+
+            if rigid_name in {"left_foot", "right_foot"} and 0.70 <= cycle_t < 1.18:
+                if rigid_name == "left_foot":
+                    if rank in {0, 1} and marker_index in {0, 1}:
+                        return True
+                    if rank in {2, 3} and marker_index == (4 if even_cycle else 3):
+                        return True
+                if rigid_name == "right_foot":
+                    if rank in {2, 3} and marker_index in {2, 3}:
+                        return True
+                    if rank in {0, 1} and marker_index == (4 if even_cycle else 0):
+                        return True
+
+            # Briefly drop below reacquire minimum for one body; tracking should
+            # hold or mark invalid rather than commit a weak subset pose.
+            if rigid_name == ("head" if even_cycle else "chest") and 1.20 <= cycle_t < 1.40:
+                return marker_index in {0, 1, 2}
+
+            if rigid_name in {"left_foot", "right_foot"} and 1.48 <= cycle_t < 1.72:
+                shared_pair = {1, 4} if even_cycle else {0, 2}
+                if rank in {1, 2}:
+                    return marker_index in shared_pair
+            return False
+
+        if self.config.scenario == "five_rigid_dance_occlusion":
+            ratio = float(frame_index) / float(max(1, self.config.frames))
+            camera_rank = {
+                camera_id_value: index
+                for index, camera_id_value in enumerate(self.config.camera_ids)
+            }
+            rank = int(camera_rank.get(camera_id, 0))
+
+            # Torso self-occlusion while rotating: cameras see different
+            # marker subsets, which stresses object-conditioned gating.
+            if rigid_name in {"waist", "chest"}:
+                if 0.18 <= ratio < 0.36:
+                    return marker_index == ((rank + (0 if rigid_name == "waist" else 1)) % 4)
+                if 0.58 <= ratio < 0.72:
+                    return marker_index in {2, 3} and rank in {0, 2}
+
+            # Leg-cross interval: both feet get camera-dependent marker loss,
+            # including shared two-marker gaps on adjacent cameras.
+            if rigid_name in {"left_foot", "right_foot"}:
+                if 0.32 <= ratio < 0.56:
+                    if rank in {0, 1} and marker_index in {0, 1}:
+                        return rigid_name == "left_foot"
+                    if rank in {2, 3} and marker_index in {2, 3}:
+                        return rigid_name == "right_foot"
+                if 0.56 <= ratio < 0.68:
+                    return marker_index == ((rank + (1 if rigid_name == "left_foot" else 2)) % 4)
+
+            # A brief head turn hides the raised asymmetry marker in half the
+            # cameras, useful for testing pose flip resistance.
+            if rigid_name == "head" and 0.42 <= ratio < 0.50:
+                return marker_index == 3 and rank in {1, 3}
+            return False
+
         if rigid_name != "waist":
             return False
-        start = int(round(self.config.frames * 0.35))
-        end = int(round(self.config.frames * 0.65))
-        return start <= frame_index < end
+        if self.config.scenario == "waist_wand_occlusion_reacquire":
+            start = int(round(self.config.frames * 0.35))
+            end = int(round(self.config.frames * 0.65))
+            return start <= frame_index < end
+        if self.config.scenario != "waist_rotate_partial_occlusion":
+            return False
+
+        ratio = float(frame_index) / float(max(1, self.config.frames))
+        camera_rank = {camera_id: index for index, camera_id in enumerate(self.config.camera_ids)}
+        rank = int(camera_rank.get(camera_id, 0))
+
+        if 0.20 <= ratio < 0.34:
+            return marker_index == (rank % 2)
+        if 0.34 <= ratio < 0.52:
+            if marker_index == 3:
+                return True
+            return marker_index == 0 and rank in {0, 1}
+        if 0.52 <= ratio < 0.68:
+            if marker_index == 1 and rank in {1, 2}:
+                return True
+            return marker_index == 2 and rank in {0, 3}
+        if 0.68 <= ratio < 0.80:
+            return marker_index == 0
+        return False
+
+    def _swap_red_alias_blobs_for_camera(
+        self,
+        *,
+        frame_index: int,
+        camera_id: str,
+        projections: dict[str, dict[str, list[tuple[float, float] | None]]],
+    ) -> list[tuple[float, float, str, int, str]]:
+        if self.config.scenario != "five_rigid_dance_swap_red_v1":
+            return []
+        _, cycle_t = self._hard_occlusion_cycle_time(frame_index)
+        if cycle_t < 0.0:
+            return []
+
+        camera_rank = {
+            camera_id_value: index
+            for index, camera_id_value in enumerate(self.config.camera_ids)
+        }
+        rank = int(camera_rank.get(camera_id, 0))
+        aliases: list[tuple[float, float, str, int, str]] = []
+
+        def add_alias(
+            target_rigid: str,
+            target_marker: int,
+            source_rigid: str,
+            source_marker: int,
+            label: str,
+            *,
+            jitter_px: float = 0.22,
+        ) -> None:
+            target_projection = projections.get(camera_id, {}).get(target_rigid, [])
+            if target_marker < 0 or target_marker >= len(target_projection):
+                return
+            projection = target_projection[target_marker]
+            if projection is None:
+                return
+            dx, dy = _sample_gaussian_pixel_noise(self._rng, jitter_px)
+            aliases.append(
+                (
+                    float(projection[0] + dx),
+                    float(projection[1] + dy),
+                    source_rigid,
+                    int(source_marker),
+                    label,
+                )
+            )
+
+        if 0.24 <= cycle_t < 0.76:
+            if rank in {0, 1}:
+                add_alias("waist", 1, "chest", 0, "torso_chest_as_waist")
+                add_alias("waist", 4, "chest", 3, "torso_chest_as_waist")
+            if rank in {2, 3}:
+                add_alias("chest", 0, "waist", 1, "torso_waist_as_chest")
+                add_alias("chest", 3, "waist", 4, "torso_waist_as_chest")
+
+        if 0.66 <= cycle_t < 1.34:
+            if rank in {0, 1}:
+                add_alias("left_foot", 0, "right_foot", 2, "right_as_left_foot")
+                add_alias("left_foot", 1, "right_foot", 3, "right_as_left_foot")
+                add_alias("left_foot", 4, "right_foot", 4, "right_as_left_foot")
+            if rank in {2, 3}:
+                add_alias("right_foot", 2, "left_foot", 0, "left_as_right_foot")
+                add_alias("right_foot", 3, "left_foot", 1, "left_as_right_foot")
+                add_alias("right_foot", 4, "left_foot", 4, "left_as_right_foot")
+
+        if 1.36 <= cycle_t < 1.62:
+            if rank in {1, 2}:
+                add_alias("head", 0, "chest", 0, "chest_as_head")
+                add_alias("head", 1, "chest", 1, "chest_as_head")
+                add_alias("head", 2, "chest", 2, "chest_as_head")
+        return aliases
 
     def next_sample(self) -> SyntheticFrameSample | None:
         if self._frame_index >= self.config.frames:
@@ -586,7 +1100,7 @@ class MultiRigidFrameGenerator:
             for pattern in self.patterns:
                 rigid_name = pattern.name
                 for marker_index in range(pattern.num_markers):
-                    if self._is_marker_occluded(rigid_name, marker_index, frame_index):
+                    if self._is_marker_occluded(rigid_name, marker_index, frame_index, camera_id):
                         continue
                     if (
                         self.config.marker_dropout_prob > 0.0
@@ -616,7 +1130,35 @@ class MultiRigidFrameGenerator:
 
             camera = self.camera_params[camera_id]
             width, height = camera.resolution
-            for false_index in range(self.config.false_blobs_per_camera):
+            for alias_index, (x, y, source_rigid, source_marker, label) in enumerate(
+                self._swap_red_alias_blobs_for_camera(
+                    frame_index=frame_index,
+                    camera_id=camera_id,
+                    projections=projections,
+                )
+            ):
+                if not (20.0 <= x <= float(width - 20) and 20.0 <= y <= float(height - 20)):
+                    continue
+                blob_index = len(blobs)
+                blobs.append(
+                    {
+                        "x": float(x),
+                        "y": float(y),
+                        "area": 4.0,
+                    }
+                )
+                ledger[(timestamp_us, camera_id, blob_index)] = SyntheticBlobOwner(
+                    timestamp=timestamp_us,
+                    camera_id=camera_id,
+                    emitted_blob_index=blob_index,
+                    rigid_name=str(source_rigid),
+                    marker_index=int(source_marker),
+                    synthetic_blob_id=(
+                        f"{timestamp_us}:{camera_id}:alias:{label}:{alias_index}:"
+                        f"{source_rigid}:{source_marker}"
+                    ),
+                )
+            for false_index in range(self._hard_scenario_false_blobs_per_camera(frame_index)):
                 blob_index = len(blobs)
                 blobs.append(
                     {
@@ -693,7 +1235,16 @@ def run_multi_rigid_scenario(
     out_dir: str | None = None,
 ) -> dict[str, Any]:
     """Run a deterministic multi-rigid scenario through TrackingPipeline."""
-    patterns = load_mvp_patterns(config.rigids_path)
+    effective_marker_layout = _default_marker_layout_for_scenario(
+        config.scenario,
+        config.marker_layout,
+    )
+    if effective_marker_layout != config.marker_layout:
+        config = replace(config, marker_layout=effective_marker_layout)
+    patterns = load_mvp_patterns(
+        config.rigids_path,
+        marker_layout=config.marker_layout,
+    )
     camera_params = load_camera_rig(config)
     generator = MultiRigidFrameGenerator(config, patterns=patterns, camera_params=camera_params)
 
@@ -702,6 +1253,9 @@ def run_multi_rigid_scenario(
         patterns=[pattern for pattern in patterns if pattern.name in set(config.rigid_names)],
         pipeline_variant=config.pipeline_variant,
         subset_diagnostics_mode=config.subset_diagnostics_mode,
+        rigid_stabilization=_rigid_stabilization_for_profile(
+            config.rigid_stabilization_profile
+        ),
     )
     _install_camera_params_on_pipeline(pipeline, camera_params)
 
@@ -713,7 +1267,14 @@ def run_multi_rigid_scenario(
 
     position_errors_by_rigid: dict[str, list[float]] = {name: [] for name in config.rigid_names}
     rotation_errors_by_rigid: dict[str, list[float]] = {name: [] for name in config.rigid_names}
+    position_delta_errors_by_rigid: dict[str, list[float]] = {
+        name: [] for name in config.rigid_names
+    }
+    rotation_delta_errors_by_rigid: dict[str, list[float]] = {
+        name: [] for name in config.rigid_names
+    }
     valid_frames_by_rigid: dict[str, int] = {name: 0 for name in config.rigid_names}
+    last_valid_pose_by_rigid: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = {}
     emitted_ledger_entries = 0
     wrong_ownership_count = 0
     marker_source_confusion_count = 0
@@ -751,6 +1312,27 @@ def run_multi_rigid_scenario(
             )
             rotation_errors_by_rigid.setdefault(rigid_name, []).append(
                 _rotation_error_deg(np.asarray(pose.rotation, dtype=np.float64), gt_rotation)
+            )
+            pose_position = np.asarray(pose.position, dtype=np.float64).reshape(3)
+            pose_rotation = np.asarray(pose.rotation, dtype=np.float64).reshape(3, 3)
+            previous = last_valid_pose_by_rigid.get(rigid_name)
+            if previous is not None:
+                prev_pose_position, prev_pose_rotation, prev_gt_position, prev_gt_rotation = previous
+                estimated_delta = pose_position - prev_pose_position
+                gt_delta = gt_position - prev_gt_position
+                position_delta_errors_by_rigid.setdefault(rigid_name, []).append(
+                    float(np.linalg.norm(estimated_delta - gt_delta))
+                )
+                estimated_rotation_delta = pose_rotation @ prev_pose_rotation.T
+                gt_rotation_delta = gt_rotation @ prev_gt_rotation.T
+                rotation_delta_errors_by_rigid.setdefault(rigid_name, []).append(
+                    _rotation_error_deg(estimated_rotation_delta, gt_rotation_delta)
+                )
+            last_valid_pose_by_rigid[rigid_name] = (
+                pose_position.copy(),
+                pose_rotation.copy(),
+                gt_position.copy(),
+                gt_rotation.copy(),
             )
             valid_frames_by_rigid[rigid_name] = valid_frames_by_rigid.get(rigid_name, 0) + 1
 
@@ -791,10 +1373,40 @@ def run_multi_rigid_scenario(
         and production_go_no_go["pipeline_pair_no_sustained_over_8_475ms"]
         and production_go_no_go["rigid_p95_le_1_5ms"]
     )
+    valid_frame_ratio = {
+        name: float(valid_frames_by_rigid.get(name, 0)) / float(max(1, processed_samples))
+        for name in config.rigid_names
+    }
+    max_position_delta_error_m = max(
+        (
+            float(_summary(values).get("max", 0.0))
+            for values in position_delta_errors_by_rigid.values()
+        ),
+        default=0.0,
+    )
+    max_rotation_delta_error_deg = max(
+        (
+            float(_summary(values).get("max", 0.0))
+            for values in rotation_delta_errors_by_rigid.values()
+        ),
+        default=0.0,
+    )
+    scenario_go_no_go = {
+        "wrong_ownership_zero": int(wrong_ownership_count) == 0,
+        "marker_source_confusion_zero": int(marker_source_confusion_count) == 0,
+        "valid_frame_ratio_ge_0_95": all(
+            float(value) >= 0.95 for value in valid_frame_ratio.values()
+        ),
+        "position_delta_error_max_le_2cm": max_position_delta_error_m <= 0.02,
+        "rotation_delta_error_max_le_5deg": max_rotation_delta_error_deg <= 5.0,
+        "production_go_no_go_passed": bool(production_go_no_go["passed"]),
+    }
+    scenario_go_no_go["passed"] = all(bool(value) for value in scenario_go_no_go.values())
     summary = {
         "scenario": config.scenario,
         "marker_layout": config.marker_layout,
         "camera_rig_source": config.camera_rig_source,
+        "rigid_stabilization_profile": config.rigid_stabilization_profile,
         "camera_ids": list(camera_params),
         "rigid_names": list(config.rigid_names),
         "frames_requested": int(config.frames),
@@ -813,10 +1425,15 @@ def run_multi_rigid_scenario(
         "rotation_error_deg": {
             name: _summary(values) for name, values in rotation_errors_by_rigid.items()
         },
-        "valid_frame_ratio": {
-            name: float(valid_frames_by_rigid.get(name, 0)) / float(max(1, processed_samples))
-            for name in config.rigid_names
+        "position_delta_error_m": {
+            name: _summary(values)
+            for name, values in position_delta_errors_by_rigid.items()
         },
+        "rotation_delta_error_deg": {
+            name: _summary(values)
+            for name, values in rotation_delta_errors_by_rigid.items()
+        },
+        "valid_frame_ratio": valid_frame_ratio,
         "pipeline_pair_ms": pipeline_pair_ms,
         "rigid_ms": rigid_ms,
         "geometry_ms": geometry_ms,
@@ -833,6 +1450,7 @@ def run_multi_rigid_scenario(
             "rigid_last_ms": _summary(rigid_last_ms_values),
         },
         "production_go_no_go": production_go_no_go,
+        "scenario_go_no_go": scenario_go_no_go,
         "tracking": dict(status.get("tracking", {})),
         "error_count": len(errors),
         "errors": errors,
@@ -1285,6 +1903,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--false-blobs-per-camera", type=int, default=0)
     parser.add_argument("--pipeline-variant", type=str, default="fast_ABCDHRF")
     parser.add_argument("--subset-diagnostics-mode", type=str, default="off")
+    parser.add_argument(
+        "--rigid-stabilization-profile",
+        type=str,
+        default="pipeline_default",
+        choices=["pipeline_default", "gui_live"],
+        help="Rigid stabilization preset to apply before running the scenario",
+    )
     parser.add_argument("--noise-px", type=float, default=0.0, help="Pixel noise stddev")
     parser.add_argument("--marker-dropout", type=float, default=0.0, help="Marker dropout probability [0,1]")
     parser.add_argument("--camera-dropout", type=float, default=0.0, help="Camera dropout probability [0,1]")
@@ -1328,10 +1953,18 @@ def main(argv: list[str] | None = None) -> int:
         return _err("--trajectory must be one of: static, linear, circle")
 
     if args.scenario:
-        if args.camera_rig_source == "generated_4cam_from_1_2_intrinsics":
+        marker_layout = _default_marker_layout_for_scenario(
+            args.scenario,
+            str(args.marker_layout),
+        )
+        if (
+            args.camera_rig_source == "generated_4cam_from_1_2_intrinsics"
+            or args.scenario in FIVE_RIGID_BODY_SCENARIOS
+        ):
             camera_ids = DEFAULT_GENERATED_CAMERA_IDS
         else:
             camera_ids = DEFAULT_MVP_CAMERA_IDS
+        rigid_names = _default_rigids_for_scenario(args.scenario)
         try:
             summary = run_multi_rigid_scenario(
                 MultiRigidScenarioConfig(
@@ -1339,19 +1972,20 @@ def main(argv: list[str] | None = None) -> int:
                     camera_ids=tuple(camera_ids),
                     frames=int(args.frames),
                     fps=float(args.fps),
-                    rigid_names=DEFAULT_MVP_RIGIDS,
+                    rigid_names=rigid_names,
                     scenario=str(args.scenario),
                     trajectory_name=str(args.trajectory),
                     noise_px=float(args.noise_px),
                     false_blobs_per_camera=int(args.false_blobs_per_camera),
                     marker_dropout_prob=float(args.marker_dropout),
                     camera_dropout_prob=float(args.camera_dropout),
-                    marker_layout=str(args.marker_layout),
+                    marker_layout=marker_layout,
                     camera_rig_source=str(args.camera_rig_source),
                     calibration_dir=str(args.calibration),
                     rigids_path=str(args.rigids),
                     pipeline_variant=str(args.pipeline_variant),
                     subset_diagnostics_mode=str(args.subset_diagnostics_mode),
+                    rigid_stabilization_profile=str(args.rigid_stabilization_profile),
                 ),
                 out_dir=args.out_dir,
             )

@@ -429,15 +429,62 @@ def _metric_summary(values: List[float]) -> Dict[str, float]:
             "min": 0.0,
             "max": 0.0,
         }
-    arr = np.asarray(values, dtype=np.float64)
+    arr = np.sort(np.asarray(values, dtype=np.float64).reshape(-1))
+    count = int(arr.size)
+    mean = float(arr.mean())
+    if count == 1:
+        median = p90 = p95 = min_value = max_value = float(arr[0])
+    else:
+        def percentile(percent: float) -> float:
+            rank = (count - 1) * (percent / 100.0)
+            lower = int(np.floor(rank))
+            upper = int(np.ceil(rank))
+            if lower == upper:
+                return float(arr[lower])
+            weight = float(rank - lower)
+            return float(arr[lower] * (1.0 - weight) + arr[upper] * weight)
+
+        median = percentile(50.0)
+        p90 = percentile(90.0)
+        p95 = percentile(95.0)
+        min_value = float(arr[0])
+        max_value = float(arr[-1])
     return {
-        "count": int(arr.size),
-        "mean": float(arr.mean()),
-        "median": float(np.percentile(arr, 50)),
-        "p90": float(np.percentile(arr, 90)),
-        "p95": float(np.percentile(arr, 95)),
-        "min": float(arr.min()),
-        "max": float(arr.max()),
+        "count": count,
+        "mean": mean,
+        "median": median,
+        "p90": p90,
+        "p95": p95,
+        "min": min_value,
+        "max": max_value,
+    }
+
+
+def _small_metric_summary(values: List[float]) -> Dict[str, float]:
+    count = len(values)
+    if count > 2:
+        return _metric_summary(values)
+    if count == 0:
+        return _metric_summary([])
+    first = float(values[0])
+    if count == 1:
+        mean = median = p90 = p95 = min_value = max_value = first
+    else:
+        second = float(values[1])
+        min_value = first if first <= second else second
+        max_value = second if first <= second else first
+        mean = (first + second) * 0.5
+        median = mean
+        p90 = min_value * 0.1 + max_value * 0.9
+        p95 = min_value * 0.05 + max_value * 0.95
+    return {
+        "count": count,
+        "mean": mean,
+        "median": median,
+        "p90": p90,
+        "p95": p95,
+        "min": min_value,
+        "max": max_value,
     }
 
 
@@ -508,6 +555,7 @@ class Triangulator:
         self._rvecs: Dict[str, np.ndarray] = {}
         self._camera_centers: Dict[str, np.ndarray] = {}
         self._fundamental_matrices: Dict[Tuple[str, str], np.ndarray] = {}
+        self._wide_baseline_pair_cache: Dict[Tuple[str, ...], Tuple[str, str]] = {}
         self._last_assignment_diagnostics: Dict[str, float] = _empty_assignment_diagnostics()
         self._last_quality_metrics: Dict[str, Any] = self._empty_quality_metrics(
             self._last_assignment_diagnostics
@@ -1495,7 +1543,7 @@ class Triangulator:
                     "rejected_triangulation",
                 )
                 return None
-        residual_summary = _metric_summary(residuals)
+        residual_summary = _small_metric_summary(residuals)
         if residual_summary["p90"] > _P90_REPROJECTION_ERROR_PX:
             _increment_diagnostic(
                 diagnostics,
@@ -1538,6 +1586,78 @@ class Triangulator:
             "epipolar_error_px_summary": _metric_summary(epipolar_values),
             "triangulation_angles_deg": triangulation_angles,
             "triangulation_angle_deg_summary": _metric_summary(triangulation_angles),
+        }
+
+    def _wide_baseline_observation_pair(
+        self,
+        observations: List[_BlobObservation],
+    ) -> List[_BlobObservation]:
+        if len(observations) <= 2:
+            return list(observations)
+        observations_by_camera = {obs.camera_id: obs for obs in observations}
+        camera_key = tuple(sorted(observations_by_camera))
+        cached_pair = self._wide_baseline_pair_cache.get(camera_key)
+        if cached_pair is None:
+            best_pair = (observations[0].camera_id, observations[1].camera_id)
+            best_distance = -1.0
+            for camera_a, camera_b in combinations(camera_key, 2):
+                center_a = self._camera_centers.get(camera_a)
+                center_b = self._camera_centers.get(camera_b)
+                if center_a is None or center_b is None:
+                    continue
+                distance = float(np.linalg.norm(center_a - center_b))
+                if distance > best_distance:
+                    best_distance = distance
+                    best_pair = (camera_a, camera_b)
+            self._wide_baseline_pair_cache[camera_key] = best_pair
+            cached_pair = best_pair
+        obs_a = observations_by_camera.get(cached_pair[0])
+        obs_b = observations_by_camera.get(cached_pair[1])
+        if obs_a is None or obs_b is None:
+            return list(observations[:2])
+        return [obs_a, obs_b]
+
+    def _fast_refine_rigid_hint_observation(
+        self,
+        observations: List[_BlobObservation],
+        diagnostics: Dict[str, float],
+        *,
+        required_inlier_views: int = 2,
+    ) -> Optional[Dict[str, Any]]:
+        if len(observations) < max(2, int(required_inlier_views)):
+            return None
+        current_observations = self._wide_baseline_observation_pair(observations)
+        point_3d = self._triangulate_from_observations(current_observations)
+        if point_3d is None:
+            return None
+        residuals = self._compute_reprojection_errors_for_observations(
+            current_observations,
+            point_3d,
+        )
+        if not residuals:
+            return None
+        residual_summary = _metric_summary(residuals)
+        if (
+            residual_summary["max"] > _MAX_REPROJECTION_ERROR_PX
+            or residual_summary["p90"] > _P90_REPROJECTION_ERROR_PX
+        ):
+            return None
+        inlier_camera_ids = [obs.camera_id for obs in current_observations]
+        triangulation_angles = self._triangulation_angles_deg(point_3d, inlier_camera_ids)
+        best_angle = max(triangulation_angles) if triangulation_angles else 0.0
+        if best_angle < _MIN_TRIANGULATION_ANGLE_DEG:
+            return None
+        _increment_diagnostic(diagnostics, "rigid_hint_fast_pair_accept")
+        return {
+            "point_3d": point_3d,
+            "inlier_observations": current_observations,
+            "contributing_rays": len(current_observations),
+            "reprojection_errors": residuals,
+            "reprojection_error_px_summary": residual_summary,
+            "epipolar_errors": [],
+            "epipolar_error_px_summary": _metric_summary([]),
+            "triangulation_angles_deg": triangulation_angles,
+            "triangulation_angle_deg_summary": _small_metric_summary(triangulation_angles),
         }
 
     # ---------------------------------------------------------------------- #
@@ -1741,6 +1861,13 @@ class Triangulator:
         total_single_ray = 0
         total_rejected = 0
         total_invalid = 0
+        observations_by_blob_by_camera: Dict[str, Dict[int, _BlobObservation]] = {
+            str(camera_id): {
+                int(observation.blob_index): observation
+                for observation in camera_observations
+            }
+            for camera_id, camera_observations in self._last_observations_by_camera.items()
+        }
 
         for rigid_name, gating in object_gating.items():
             if not isinstance(gating, dict) or not gating.get("evaluated"):
@@ -1754,11 +1881,7 @@ class Triangulator:
             for camera_id, camera_payload in per_camera.items():
                 if not isinstance(camera_payload, dict):
                     continue
-                camera_observations = self._last_observations_by_camera.get(str(camera_id), [])
-                observations_by_blob_index = {
-                    int(observation.blob_index): observation
-                    for observation in camera_observations
-                }
+                observations_by_blob_index = observations_by_blob_by_camera.get(str(camera_id), {})
                 assignments = camera_payload.get("assignments", [])
                 if not isinstance(assignments, list):
                     continue
@@ -1790,11 +1913,19 @@ class Triangulator:
             for marker_idx, observations in sorted(observations_by_marker.items()):
                 if len(observations) < 2:
                     continue
-                candidate = self._refine_candidate_observation(
-                    observations,
-                    diagnostics,
-                    required_inlier_views=min_inlier_views,
-                )
+                candidate = None
+                if self.geo_hotpath_optimizations:
+                    candidate = self._fast_refine_rigid_hint_observation(
+                        observations,
+                        diagnostics,
+                        required_inlier_views=min_inlier_views,
+                    )
+                if candidate is None:
+                    candidate = self._refine_candidate_observation(
+                        observations,
+                        diagnostics,
+                        required_inlier_views=min_inlier_views,
+                    )
                 if candidate is None:
                     rejected_for_rigid += 1
                     continue

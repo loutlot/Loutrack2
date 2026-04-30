@@ -198,11 +198,12 @@ def test_tracked_unseen_rigid_holds_prediction_instead_of_generic_scan(
         rigid_hint_triangulated_points=rigid_hints,
     )
 
-    assert poses["waist"].valid is False
+    assert poses["waist"].valid is True
+    assert np.allclose(poses["waist"].position, waist_offset)
     assert "waist" not in estimate_calls
-    assert estimator.get_tracking_status()["waist"]["invalid_reason"] == (
-        "tracked_rigid_unseen_hold_prediction"
-    )
+    waist_status = estimator.get_tracking_status()["waist"]
+    assert waist_status["invalid_reason"] == ""
+    assert waist_status["reprojection_score"]["reason"] == "tracked_rigid_unseen_hold_prediction"
     metrics = estimator.get_variant_metrics()
     assert metrics["rigid_candidate_fallback_reason_counts"][
         "tracked_rigid_unseen_hold_prediction"
