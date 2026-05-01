@@ -1,0 +1,109 @@
+[
+  {
+    "run": "baseline",
+    "label": "Baseline",
+    "change": "GUI baseline, noise 0.25px",
+    "camera_rig_source": "cube_top_2_4m_aim_center",
+    "wrong_ownership_count": 1,
+    "marker_source_confusion_count": 8,
+    "min_valid_frame_ratio": 0.825,
+    "left_foot_valid_frame_ratio": 0.825,
+    "pipeline_pair_p95_ms": 4.23675,
+    "rigid_p95_ms": 1.638625,
+    "geometry_p95_ms": 1.551541,
+    "rigid_candidate_fallback_count": 65,
+    "rigid_candidate_fallback_reason_counts": {
+      "insufficient_rigid_hint_points": 32,
+      "rigid_candidate_subset_gate:four_subset_not_whitelisted": 1,
+      "tracked_rigid_unseen_hold_prediction": 32
+    },
+    "pi_cam_02_equiv_diameter_p95_px": 4.501536585256527
+  },
+  {
+    "run": "cycle01_noise000",
+    "label": "Cycle 1",
+    "change": "noise 0.0px",
+    "camera_rig_source": "cube_top_2_4m_aim_center",
+    "wrong_ownership_count": 0,
+    "marker_source_confusion_count": 0,
+    "min_valid_frame_ratio": 1.0,
+    "left_foot_valid_frame_ratio": 1.0,
+    "pipeline_pair_p95_ms": 4.314,
+    "rigid_p95_ms": 1.680334,
+    "geometry_p95_ms": 1.541917,
+    "rigid_candidate_fallback_count": 0,
+    "rigid_candidate_fallback_reason_counts": {},
+    "pi_cam_02_equiv_diameter_p95_px": 4.496797791840797
+  },
+  {
+    "run": "cycle02_gate50_noise025",
+    "label": "Cycle 2",
+    "change": "gate 5.0px, noise 0.25px",
+    "camera_rig_source": "cube_top_2_4m_aim_center",
+    "wrong_ownership_count": 1,
+    "marker_source_confusion_count": 8,
+    "min_valid_frame_ratio": 0.825,
+    "left_foot_valid_frame_ratio": 0.825,
+    "pipeline_pair_p95_ms": 4.2435,
+    "rigid_p95_ms": 1.664125,
+    "geometry_p95_ms": 1.596792,
+    "rigid_candidate_fallback_count": 63,
+    "rigid_candidate_fallback_reason_counts": {
+      "insufficient_rigid_hint_points": 32,
+      "tracked_rigid_unseen_hold_prediction": 31
+    },
+    "pi_cam_02_equiv_diameter_p95_px": 4.501536585256527
+  },
+  {
+    "run": "cycle03_object_gate_diagnostics_noise025",
+    "label": "Cycle 3",
+    "change": "object gate diagnostics-only, noise 0.25px",
+    "camera_rig_source": "cube_top_2_4m_aim_center",
+    "wrong_ownership_count": 1,
+    "marker_source_confusion_count": 8,
+    "min_valid_frame_ratio": 0.825,
+    "left_foot_valid_frame_ratio": 0.825,
+    "pipeline_pair_p95_ms": 4.391875,
+    "rigid_p95_ms": 1.799416,
+    "geometry_p95_ms": 1.59125,
+    "rigid_candidate_fallback_count": 65,
+    "rigid_candidate_fallback_reason_counts": {
+      "insufficient_rigid_hint_points": 32,
+      "rigid_candidate_subset_gate:four_subset_not_whitelisted": 1,
+      "tracked_rigid_unseen_hold_prediction": 32
+    },
+    "pi_cam_02_equiv_diameter_p95_px": 4.501536585256527
+  },
+  {
+    "run": "cycle04_noise010",
+    "label": "Cycle 4",
+    "change": "noise 0.1px",
+    "camera_rig_source": "cube_top_2_4m_aim_center",
+    "wrong_ownership_count": 0,
+    "marker_source_confusion_count": 0,
+    "min_valid_frame_ratio": 1.0,
+    "left_foot_valid_frame_ratio": 1.0,
+    "pipeline_pair_p95_ms": 4.277208,
+    "rigid_p95_ms": 1.658,
+    "geometry_p95_ms": 1.590292,
+    "rigid_candidate_fallback_count": 0,
+    "rigid_candidate_fallback_reason_counts": {},
+    "pi_cam_02_equiv_diameter_p95_px": 4.501536585256527
+  },
+  {
+    "run": "cycle05_noise020",
+    "label": "Cycle 5",
+    "change": "noise 0.2px",
+    "camera_rig_source": "cube_top_2_4m_aim_center",
+    "wrong_ownership_count": 0,
+    "marker_source_confusion_count": 6,
+    "min_valid_frame_ratio": 1.0,
+    "left_foot_valid_frame_ratio": 1.0,
+    "pipeline_pair_p95_ms": 4.262584,
+    "rigid_p95_ms": 1.744542,
+    "geometry_p95_ms": 1.549041,
+    "rigid_candidate_fallback_count": 0,
+    "rigid_candidate_fallback_reason_counts": {},
+    "pi_cam_02_equiv_diameter_p95_px": 4.501536585256527
+  }
+]

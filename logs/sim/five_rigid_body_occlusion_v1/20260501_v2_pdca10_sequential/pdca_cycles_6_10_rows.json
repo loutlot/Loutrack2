@@ -1,0 +1,107 @@
+[
+  {
+    "cycle": 6,
+    "run": "cycle06_noise015",
+    "change": "noise 0.15px",
+    "hypothesis": "0.2px failure と 0.1px clean の間で green 上限を探す",
+    "wrong_ownership_count": 0,
+    "marker_source_confusion_count": 0,
+    "min_valid_frame_ratio": 0.9958333333333333,
+    "valid_frame_ratio": {
+      "chest": 1.0,
+      "head": 1.0,
+      "left_foot": 1.0,
+      "right_foot": 1.0,
+      "waist": 0.9958333333333333
+    },
+    "pipeline_pair_p95_ms": 4.351542,
+    "rigid_p95_ms": 1.670167,
+    "geometry_p95_ms": 1.579,
+    "rigid_candidate_fallback_count": 0,
+    "rigid_candidate_fallback_reason_counts": {}
+  },
+  {
+    "cycle": 7,
+    "run": "cycle07_noise0175",
+    "change": "noise 0.175px",
+    "hypothesis": "0.15px が clean なら 0.2px との中点で confusion 境界を見る",
+    "wrong_ownership_count": 0,
+    "marker_source_confusion_count": 6,
+    "min_valid_frame_ratio": 0.9958333333333333,
+    "valid_frame_ratio": {
+      "chest": 1.0,
+      "head": 1.0,
+      "left_foot": 1.0,
+      "right_foot": 1.0,
+      "waist": 0.9958333333333333
+    },
+    "pipeline_pair_p95_ms": 4.1995,
+    "rigid_p95_ms": 1.639292,
+    "geometry_p95_ms": 1.568125,
+    "rigid_candidate_fallback_count": 0,
+    "rigid_candidate_fallback_reason_counts": {}
+  },
+  {
+    "cycle": 8,
+    "run": "cycle08_noise01625",
+    "change": "noise 0.1625px",
+    "hypothesis": "0.175px で confusion が出たため 0.15px との中点を見る",
+    "wrong_ownership_count": 0,
+    "marker_source_confusion_count": 2,
+    "min_valid_frame_ratio": 0.9958333333333333,
+    "valid_frame_ratio": {
+      "chest": 1.0,
+      "head": 1.0,
+      "left_foot": 1.0,
+      "right_foot": 1.0,
+      "waist": 0.9958333333333333
+    },
+    "pipeline_pair_p95_ms": 4.193583,
+    "rigid_p95_ms": 1.608958,
+    "geometry_p95_ms": 1.5205,
+    "rigid_candidate_fallback_count": 0,
+    "rigid_candidate_fallback_reason_counts": {}
+  },
+  {
+    "cycle": 9,
+    "run": "cycle09_noise015625",
+    "change": "noise 0.15625px",
+    "hypothesis": "0.1625px で confusion が残ったため clean 上限をさらに詰める",
+    "wrong_ownership_count": 0,
+    "marker_source_confusion_count": 2,
+    "min_valid_frame_ratio": 0.9958333333333333,
+    "valid_frame_ratio": {
+      "chest": 1.0,
+      "head": 1.0,
+      "left_foot": 1.0,
+      "right_foot": 1.0,
+      "waist": 0.9958333333333333
+    },
+    "pipeline_pair_p95_ms": 4.187042,
+    "rigid_p95_ms": 1.657916,
+    "geometry_p95_ms": 1.517792,
+    "rigid_candidate_fallback_count": 0,
+    "rigid_candidate_fallback_reason_counts": {}
+  },
+  {
+    "cycle": 10,
+    "run": "cycle10_noise0153125",
+    "change": "noise 0.153125px",
+    "hypothesis": "0.15625px で confusion が残ったため 0.15px 近傍の境界を確認する",
+    "wrong_ownership_count": 0,
+    "marker_source_confusion_count": 2,
+    "min_valid_frame_ratio": 0.9958333333333333,
+    "valid_frame_ratio": {
+      "chest": 1.0,
+      "head": 1.0,
+      "left_foot": 1.0,
+      "right_foot": 1.0,
+      "waist": 0.9958333333333333
+    },
+    "pipeline_pair_p95_ms": 4.234209,
+    "rigid_p95_ms": 1.594417,
+    "geometry_p95_ms": 1.558833,
+    "rigid_candidate_fallback_count": 0,
+    "rigid_candidate_fallback_reason_counts": {}
+  }
+]

@@ -208,6 +208,36 @@ def test_waist_rotation_partial_occlusion_gui_profile_go_no_go(tmp_path):
     assert summary["valid_frame_ratio"]["waist"] >= 0.95
 
 
+def test_sim_gui_profile_allows_stabilization_overrides(tmp_path):
+    summary = run_multi_rigid_scenario(
+        MultiRigidScenarioConfig(
+            frames=2,
+            fps=118,
+            seed=13,
+            camera_ids=("pi-cam-01", "pi-cam-02"),
+            camera_rig_source="dummy",
+            scenario="waist_rotate_partial_occlusion",
+            rigid_stabilization_profile="gui_live",
+            rigid_stabilization_overrides={
+                "object_gating_pixel_max_px": 4.0,
+                "position_continuity_guard_enabled": False,
+                "position_continuity_guard_enforced": False,
+            },
+        ),
+        out_dir=str(tmp_path / "override"),
+    )
+
+    assert summary["rigid_stabilization_profile"] == "gui_live"
+    assert summary["pipeline_variant"] == "fast_ABCDHRF"
+    assert summary["subset_diagnostics_mode"] == "off"
+    assert summary["rigid_stabilization_overrides"] == {
+        "object_gating_pixel_max_px": 4.0,
+        "position_continuity_guard_enabled": False,
+        "position_continuity_guard_enforced": False,
+    }
+    assert summary["error_count"] == 0
+
+
 def test_waist_rotation_partial_occlusion_two_camera_shared_blob_loss_no_jump(tmp_path):
     summary = run_multi_rigid_scenario(
         MultiRigidScenarioConfig(

@@ -1,0 +1,2331 @@
+{
+  "blob_area_summary": {
+    "area_px2": {
+      "count": 11544,
+      "max": 145.267244301992,
+      "mean": 38.89851713912438,
+      "p95": 93.77387906768094
+    },
+    "by_camera": {
+      "pi-cam-01": {
+        "area_px2": {
+          "count": 5772,
+          "max": 145.267244301992,
+          "mean": 65.91029942401907,
+          "p95": 102.84691129689249
+        },
+        "equivalent_diameter_px": {
+          "count": 5772,
+          "max": 13.6,
+          "mean": 9.041311316188562,
+          "p95": 11.443284251341757
+        }
+      },
+      "pi-cam-02": {
+        "area_px2": {
+          "count": 5772,
+          "max": 28.549704962164274,
+          "mean": 11.886734854229683,
+          "p95": 18.844274319135877
+        },
+        "equivalent_diameter_px": {
+          "count": 5772,
+          "max": 6.029146983475296,
+          "mean": 3.8401322358992975,
+          "p95": 4.8982927703889985
+        }
+      }
+    },
+    "equivalent_diameter_px": {
+      "count": 11544,
+      "max": 13.6,
+      "mean": 6.4407217760439295,
+      "p95": 10.9268756324761
+    }
+  },
+  "blob_merge_summary": {
+    "by_camera": {},
+    "by_owner_count": {},
+    "by_rigid_group": {},
+    "count": 0,
+    "sample_event_limit": 50,
+    "sample_events": []
+  },
+  "camera_ids": [
+    "pi-cam-01",
+    "pi-cam-02"
+  ],
+  "camera_rig_source": "cube_top_2_4m_aim_center",
+  "elapsed_wall_ms": 4413.892375,
+  "error_count": 0,
+  "errors": [],
+  "frames_processed": 240,
+  "frames_requested": 240,
+  "geometry_ms": {
+    "last": 0.34325,
+    "max": 29.712458,
+    "mean": 3.2565374666666664,
+    "p95": 13.650625
+  },
+  "marker_layout": "design_5marker_seed",
+  "marker_source_confusion_count": 2,
+  "ownership_confusion_summary": {
+    "by_camera": {
+      "pi-cam-02": 2
+    },
+    "by_expected_rigid": {
+      "chest": 2
+    },
+    "by_marker_pair": {
+      "chest:0<-chest:4": 1,
+      "chest:4<-chest:0": 1
+    },
+    "by_owner_rigid": {
+      "chest": 2
+    },
+    "by_type": {
+      "marker_confusion": 2
+    },
+    "count": 2,
+    "frames": [
+      62
+    ],
+    "sample_event_limit": 50,
+    "sample_events": [
+      {
+        "blob_index": 12,
+        "camera_id": "pi-cam-02",
+        "expected_marker": 0,
+        "expected_rigid": "chest",
+        "frame_index": 62,
+        "owner_marker": 4,
+        "owner_rigid": "chest",
+        "synthetic_blob_id": "525450:pi-cam-02:chest:4",
+        "timestamp": 525450,
+        "type": "marker_confusion"
+      },
+      {
+        "blob_index": 9,
+        "camera_id": "pi-cam-02",
+        "expected_marker": 4,
+        "expected_rigid": "chest",
+        "frame_index": 62,
+        "owner_marker": 0,
+        "owner_rigid": "chest",
+        "synthetic_blob_id": "525450:pi-cam-02:chest:0",
+        "timestamp": 525450,
+        "type": "marker_confusion"
+      }
+    ]
+  },
+  "ownership_ledger_entries": 11544,
+  "pairs_per_second": 54.37377706791049,
+  "performance_budget": {
+    "pipeline_pair_last_ms": {
+      "count": 240,
+      "max": 134.385708,
+      "mean": 14.788681075000001,
+      "p95": 35.59093544999997
+    },
+    "pipeline_pair_over_8_475ms_count": 142,
+    "pipeline_pair_over_8_475ms_max_consecutive": 15,
+    "pipeline_pair_over_budget_threshold_ms": 8.475,
+    "rigid_last_ms": {
+      "count": 240,
+      "max": 128.32475,
+      "mean": 7.865379520833334,
+      "p95": 24.369966349999924
+    }
+  },
+  "pipeline_pair_ms": {
+    "last": 2.031417,
+    "max": 134.385708,
+    "mean": 14.788681075,
+    "p95": 35.513625
+  },
+  "pipeline_variant": "fast_ABCDHRF",
+  "poses_estimated": 819,
+  "position_delta_error_m": {
+    "chest": {
+      "count": 90,
+      "max": 0.0012908143310945302,
+      "mean": 0.00048751628140180465,
+      "p95": 0.0012806298902237512
+    },
+    "head": {
+      "count": 239,
+      "max": 0.0018907950361818913,
+      "mean": 0.00029107872985784984,
+      "p95": 0.0010903883873095977
+    },
+    "left_foot": {
+      "count": 153,
+      "max": 0.0012002498949169433,
+      "mean": 0.00022302527341423357,
+      "p95": 0.00041360924790740956
+    },
+    "right_foot": {
+      "count": 238,
+      "max": 0.0007122459556233581,
+      "mean": 0.0002431529736264976,
+      "p95": 0.00047274384391354855
+    },
+    "waist": {
+      "count": 94,
+      "max": 0.002333357597199514,
+      "mean": 0.0008015938249113694,
+      "p95": 0.0022877970004673426
+    }
+  },
+  "position_error_m": {
+    "chest": {
+      "count": 91,
+      "max": 0.0333807690689387,
+      "mean": 0.005527357199830848,
+      "p95": 0.02843726915349204
+    },
+    "head": {
+      "count": 240,
+      "max": 0.02478423962472059,
+      "mean": 0.0009975448952920978,
+      "p95": 0.0059727402751309795
+    },
+    "left_foot": {
+      "count": 154,
+      "max": 0.0011013503510658015,
+      "mean": 0.00015532391005867088,
+      "p95": 0.000284028630701337
+    },
+    "right_foot": {
+      "count": 239,
+      "max": 0.00045794111737508373,
+      "mean": 0.00017315048385135293,
+      "p95": 0.0003244440524144686
+    },
+    "waist": {
+      "count": 95,
+      "max": 0.0616267431882587,
+      "mean": 0.010517197766702176,
+      "p95": 0.051736075584092774
+    }
+  },
+  "production_go_no_go": {
+    "passed": false,
+    "pipeline_pair_max_le_8_475ms": false,
+    "pipeline_pair_no_sustained_over_8_475ms": false,
+    "pipeline_pair_p95_le_6ms": false,
+    "rigid_p95_le_1_5ms": false
+  },
+  "rigid_ms": {
+    "last": 0.924792,
+    "max": 128.32475,
+    "mean": 7.865379520833333,
+    "p95": 24.143958
+  },
+  "rigid_names": [
+    "head",
+    "waist",
+    "chest",
+    "left_foot",
+    "right_foot"
+  ],
+  "rigid_stabilization_overrides": {},
+  "rigid_stabilization_profile": "gui_live",
+  "rotation_delta_error_deg": {
+    "chest": {
+      "count": 90,
+      "max": 1.99652490068012,
+      "mean": 0.7032033298157268,
+      "p95": 1.94136690580008
+    },
+    "head": {
+      "count": 239,
+      "max": 1.4776271785225188,
+      "mean": 0.2760961395855239,
+      "p95": 1.0529972084220325
+    },
+    "left_foot": {
+      "count": 153,
+      "max": 0.5284675570190009,
+      "mean": 0.2540771433112008,
+      "p95": 0.43374240262531927
+    },
+    "right_foot": {
+      "count": 238,
+      "max": 1.042221559083187,
+      "mean": 0.39342698512958596,
+      "p95": 0.6935378696232201
+    },
+    "waist": {
+      "count": 94,
+      "max": 2.5050853498428416,
+      "mean": 1.0228299820893294,
+      "p95": 2.49342629986946
+    }
+  },
+  "rotation_error_deg": {
+    "chest": {
+      "count": 91,
+      "max": 49.158771219675025,
+      "mean": 7.9109208288996875,
+      "p95": 40.25855288503584
+    },
+    "head": {
+      "count": 240,
+      "max": 21.66754977610151,
+      "mean": 0.9121105689782071,
+      "p95": 5.499714103772413
+    },
+    "left_foot": {
+      "count": 154,
+      "max": 0.36139006363900117,
+      "mean": 0.17896797217058255,
+      "p95": 0.30743726537165517
+    },
+    "right_foot": {
+      "count": 239,
+      "max": 0.7409087783400802,
+      "mean": 0.27750703014074124,
+      "p95": 0.5323783717629557
+    },
+    "waist": {
+      "count": 95,
+      "max": 78.51542619893108,
+      "mean": 14.355090100406517,
+      "p95": 66.97088549835908
+    }
+  },
+  "scenario": "five_rigid_body_occlusion_v1",
+  "scenario_go_no_go": {
+    "marker_source_confusion_zero": false,
+    "passed": false,
+    "position_delta_error_max_le_2cm": true,
+    "production_go_no_go_passed": false,
+    "rotation_delta_error_max_le_5deg": true,
+    "valid_frame_ratio_ge_0_95": false,
+    "wrong_ownership_zero": true
+  },
+  "subset_diagnostics_mode": "off",
+  "tracking": {
+    "chest": {
+      "confidence": 0.37916666666666665,
+      "current_lost_run_frames": 149,
+      "current_valid_run_frames": 0,
+      "hypothesis_margin": 0.0,
+      "invalid_reason": "strict_reacquire_rejected:insufficient_reacquire_markers,score_not_available:tracked_rigid_unseen_hold_prediction,insufficient_reacquire_matched_views,too_many_missing_marker_views,reacquire_subset_not_allowed:visible_0_below_min_4",
+      "is_tracking": false,
+      "last_mode_reason": "lost_waiting_for_shape",
+      "last_mode_transition": "reacquire->lost:reacquire_timeout",
+      "last_pose_flip_deg": 0.0,
+      "last_pose_jump_m": 0.0,
+      "last_position_innovation_m": 0.0019045135133538371,
+      "last_rotation_innovation_deg": 0.327324089906499,
+      "lost_frames": 149,
+      "max_pose_flip_deg": 0.0,
+      "max_pose_jump_m": 0.0,
+      "max_position_innovation_m": 0.0020412589530695168,
+      "max_rotation_innovation_deg": 1.9323117389424747,
+      "max_valid_run_frames": 91,
+      "mean_lost_run_frames": 149.0,
+      "mean_valid_run_frames": 91.0,
+      "mode": "lost",
+      "mode_consecutive_accepts": 0,
+      "mode_consecutive_rejects": 149,
+      "mode_frame_count": 144,
+      "mode_transition_count": 3,
+      "object_gating": {
+        "allow_single_ray": false,
+        "assigned_marker_views": 0,
+        "camera_count": 2,
+        "candidate_window_count": 10,
+        "confidence": 0.0,
+        "diagnostics_only": false,
+        "duplicate_assignment_count": 0,
+        "enabled": true,
+        "enforced": true,
+        "evaluated": true,
+        "generic_fallback_blob_count": 48,
+        "marker_count": 5,
+        "markers_with_one_ray": 0,
+        "markers_with_two_or_more_rays": 0,
+        "mode": "lost",
+        "per_camera": {
+          "pi-cam-01": {
+            "assigned_marker_views": 0,
+            "assignments": [],
+            "blob_count": 24,
+            "projected_marker_count": 5,
+            "unmatched_marker_views": 5
+          },
+          "pi-cam-02": {
+            "assigned_marker_views": 0,
+            "assignments": [],
+            "blob_count": 24,
+            "projected_marker_count": 5,
+            "unmatched_marker_views": 5
+          }
+        },
+        "per_marker_ray_count": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "pixel_gate_px": 4.5,
+        "prediction_valid": true,
+        "reason": "ok",
+        "single_ray_candidates": 0,
+        "thresholds": {
+          "activation_mode": "always",
+          "enforce": true,
+          "min_enforced_markers": 3,
+          "pixel_max": 4.5,
+          "pixel_min": 4.0,
+          "single_ray_confidence_min": 0.75
+        },
+        "unmatched_marker_views": 10
+      },
+      "observed_markers": 0,
+      "pose_continuity_guard": {
+        "angular_accel_deg_s2": 0.0,
+        "angular_velocity_deg_s": 0.0,
+        "enabled": true,
+        "enforced": true,
+        "evaluated": true,
+        "evaluated_count": 184,
+        "expected_marker_views": 10,
+        "expected_markers": 5,
+        "held_count": 1,
+        "held_prediction": false,
+        "held_rotation": false,
+        "matched_marker_views": 0,
+        "missing_marker_views": 10,
+        "observed_markers": 0,
+        "occluded": true,
+        "passed": true,
+        "position_innovation_m": 0.0,
+        "prediction": {
+          "dt_s": 1.262775,
+          "position": [
+            0.14381033299609555,
+            -0.20147323580455068,
+            2.291662303073195
+          ],
+          "quaternion": [
+            0.8502474496003641,
+            0.0018012932574020335,
+            0.00818491514222947,
+            0.5263164798434414
+          ],
+          "timestamp": 2025525,
+          "velocity": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "previous_angular_velocity_deg_s": 0.0,
+        "reason": "ok",
+        "rotation_innovation_deg": 0.0,
+        "thresholds": {
+          "apply_to_occlusion_only": true,
+          "enabled": true,
+          "enforced": true,
+          "hold_prediction_on_reject": true,
+          "max_angular_accel_deg_s2": 200000.0,
+          "max_angular_velocity_deg_s": 2500.0,
+          "max_position_innovation_m": 0.08,
+          "max_rotation_innovation_deg": 90.0
+        },
+        "would_reject": false,
+        "would_reject_count": 1
+      },
+      "pose_jump_count": 0,
+      "position_continuity_guard": {
+        "clamped_count": 1,
+        "clamped_position": false,
+        "enabled": true,
+        "enforced": true,
+        "evaluated": false,
+        "evaluated_count": 93,
+        "expected_marker_views": 0,
+        "expected_markers": 0,
+        "matched_marker_views": 0,
+        "missing_marker_views": 0,
+        "observed_markers": 0,
+        "occluded": false,
+        "passed": true,
+        "position_accel_m_s2": 0.0,
+        "position_innovation_m": 0.0,
+        "position_velocity_m_s": 0.0,
+        "previous_velocity_m_s": 0.0,
+        "reason": "no_prediction",
+        "thresholds": {
+          "apply_to_occlusion_only": true,
+          "enabled": true,
+          "enforced": true,
+          "max_accel_m_s2": 60.0,
+          "max_velocity_m_s": 8.0
+        },
+        "would_reject": false,
+        "would_reject_count": 1
+      },
+      "prediction": {
+        "confidence": 0.0,
+        "dt_s": 1.262775,
+        "lost_frames": 149,
+        "position": [
+          0.14381033299609555,
+          -0.20147323580455068,
+          2.291662303073195
+        ],
+        "position_sigma_m": 0.13299082556944755,
+        "quaternion": [
+          0.8502474496003641,
+          0.0018012932574020335,
+          0.00818491514222947,
+          0.5263164798434414
+        ],
+        "rotation_sigma_deg": 58.88325,
+        "timestamp": 2025525,
+        "valid": true,
+        "velocity": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "reacquire_count": 0,
+      "reacquire_guard": {
+        "enabled": false,
+        "enforced": true,
+        "evaluated": false,
+        "evaluated_count": 4,
+        "passed": true,
+        "position_innovation_m": 0.0,
+        "reason": "not_guarded_mode",
+        "rejected_count": 4,
+        "rotation_innovation_deg": 0.0,
+        "score": {},
+        "thresholds": {
+          "allow_duplicate_assignment": false,
+          "max_mean_reprojection_error_px": 4.0,
+          "max_missing_marker_views": 2,
+          "max_p95_reprojection_error_px": 8.0,
+          "max_position_innovation_m": 0.25,
+          "max_rotation_innovation_deg": 136.0,
+          "min_matched_marker_views": 6,
+          "post_reacquire_continue_frames": 0
+        },
+        "would_reject": false,
+        "would_reject_count": 4
+      },
+      "real_ray_count": 0,
+      "reprojection_score": {
+        "camera_count": 0,
+        "coordinate_space": "raw_pixel",
+        "duplicate_assignment_count": 0,
+        "expected_marker_views": 10,
+        "match_gate_px": 0.0,
+        "matched_marker_views": 0,
+        "max_error_px": 0.0,
+        "mean_error_px": 0.0,
+        "missing_marker_views": 10,
+        "p95_error_px": 0.0,
+        "reason": "tracked_rigid_unseen_hold_prediction",
+        "score": 0.0,
+        "scored": false,
+        "unexpected_blob_count": 0
+      },
+      "rigid_hint_pose": {
+        "candidate_points": 0,
+        "diagnostics_only": true,
+        "enforced": true,
+        "evaluated": true,
+        "generic_rms_error_m": 0.0,
+        "generic_score": {
+          "camera_count": 0,
+          "coordinate_space": "raw_pixel",
+          "duplicate_assignment_count": 0,
+          "expected_marker_views": 10,
+          "match_gate_px": 0.0,
+          "matched_marker_views": 0,
+          "max_error_px": 0.0,
+          "mean_error_px": 0.0,
+          "missing_marker_views": 10,
+          "p95_error_px": 0.0,
+          "reason": "tracked_rigid_unseen_hold_prediction",
+          "score": 0.0,
+          "scored": false,
+          "unexpected_blob_count": 0
+        },
+        "generic_valid": false,
+        "invalid_points": 0,
+        "marker_indices": [],
+        "observed_markers": 0,
+        "pose": {},
+        "position_delta_m": 0.0,
+        "real_ray_count": 0,
+        "reason": "insufficient_rigid_hint_points",
+        "rms_error_m": 0.0,
+        "rotation_delta_deg": 0.0,
+        "score": {
+          "camera_count": 0,
+          "coordinate_space": "raw_pixel",
+          "duplicate_assignment_count": 0,
+          "expected_marker_views": 0,
+          "match_gate_px": 0.0,
+          "matched_marker_views": 0,
+          "max_error_px": 0.0,
+          "mean_error_px": 0.0,
+          "missing_marker_views": 0,
+          "p95_error_px": 0.0,
+          "reason": "not_scored",
+          "score": 0.0,
+          "scored": false,
+          "unexpected_blob_count": 0
+        },
+        "score_delta": 0.0,
+        "selected_for_pose": false,
+        "selection_reason": "insufficient_rigid_hint_points",
+        "valid": false,
+        "virtual_marker_count": 0,
+        "would_improve_score": false
+      },
+      "rms_error_m": 0.0,
+      "rolling_confidence": 0.0,
+      "short_valid_count": 0,
+      "short_valid_ratio": 0.0,
+      "subset_hypothesis": {
+        "best": {},
+        "best_combined_score": 0.0,
+        "best_score": 0.0,
+        "candidate_count": 0,
+        "combined_margin": 0.0,
+        "diagnostics_only": true,
+        "enabled": false,
+        "evaluated": false,
+        "flip_risk_count": 0,
+        "generic_score": 0.0,
+        "margin": 0.0,
+        "pruned_candidate_count": 0,
+        "reason": "disabled_by_mode",
+        "rejected_by_2d_score": 0,
+        "rejected_by_ambiguity": 0,
+        "rejected_by_rms": 0,
+        "sampled": false,
+        "score_delta": 0.0,
+        "second": {},
+        "second_combined_score": 0.0,
+        "second_score": 0.0,
+        "subset_adoption_ready": false,
+        "thresholds": {
+          "adoption_min_valid_ratio": 0.98,
+          "ambiguous_subset_delta_m": 0.005,
+          "coverage_weight": 0.08,
+          "diagnostics_only": true,
+          "enabled": false,
+          "flip_penalty": 0.25,
+          "max_generic_observed_subsets": 24,
+          "max_hypotheses": 4096,
+          "max_observed_points": 10,
+          "max_p95_error_px": 8.0,
+          "max_rotation_delta_deg": 90.0,
+          "min_margin": 0.02,
+          "min_score": 0.65,
+          "prediction_gate_m": 0.08,
+          "source_priority_bonus": 0.04,
+          "subset_sizes": [
+            3,
+            4
+          ],
+          "temporal_penalty_weight": 0.18
+        },
+        "truncated": false,
+        "valid_candidate_count": 0,
+        "weighted_solve": {}
+      },
+      "total_frames": 240,
+      "track_count": 91,
+      "valid": false,
+      "virtual_marker_count": 0
+    },
+    "head": {
+      "confidence": 1.0,
+      "current_lost_run_frames": 0,
+      "current_valid_run_frames": 240,
+      "hypothesis_margin": 0.0,
+      "invalid_reason": "",
+      "is_tracking": true,
+      "last_mode_reason": "continue_measurement_accepted",
+      "last_mode_transition": "boot->continue:boot_confirmed",
+      "last_pose_flip_deg": 0.0,
+      "last_pose_jump_m": 0.0,
+      "last_position_innovation_m": 0.0006476621575318263,
+      "last_rotation_innovation_deg": 1.1246608011199992,
+      "lost_frames": 0,
+      "max_pose_flip_deg": 0.0,
+      "max_pose_jump_m": 0.0,
+      "max_position_innovation_m": 0.0022988118817942526,
+      "max_rotation_innovation_deg": 1.4894540281122266,
+      "max_valid_run_frames": 240,
+      "mean_lost_run_frames": 0.0,
+      "mean_valid_run_frames": 240.0,
+      "mode": "continue",
+      "mode_consecutive_accepts": 240,
+      "mode_consecutive_rejects": 0,
+      "mode_frame_count": 237,
+      "mode_transition_count": 1,
+      "object_gating": {
+        "allow_single_ray": true,
+        "assigned_marker_views": 0,
+        "camera_count": 2,
+        "candidate_window_count": 10,
+        "confidence": 1.0,
+        "diagnostics_only": false,
+        "duplicate_assignment_count": 0,
+        "enabled": true,
+        "enforced": true,
+        "evaluated": true,
+        "generic_fallback_blob_count": 48,
+        "marker_count": 5,
+        "markers_with_one_ray": 0,
+        "markers_with_two_or_more_rays": 0,
+        "mode": "continue",
+        "per_camera": {
+          "pi-cam-01": {
+            "assigned_marker_views": 0,
+            "assignments": [],
+            "blob_count": 24,
+            "projected_marker_count": 5,
+            "unmatched_marker_views": 5
+          },
+          "pi-cam-02": {
+            "assigned_marker_views": 0,
+            "assignments": [],
+            "blob_count": 24,
+            "projected_marker_count": 5,
+            "unmatched_marker_views": 5
+          }
+        },
+        "per_marker_ray_count": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "pixel_gate_px": 4.368733429475943,
+        "prediction_valid": true,
+        "reason": "ok",
+        "single_ray_candidates": 0,
+        "thresholds": {
+          "activation_mode": "always",
+          "enforce": true,
+          "min_enforced_markers": 3,
+          "pixel_max": 4.5,
+          "pixel_min": 4.0,
+          "single_ray_confidence_min": 0.75
+        },
+        "unmatched_marker_views": 10
+      },
+      "observed_markers": 0,
+      "pose_continuity_guard": {
+        "angular_accel_deg_s2": 13918.409897335088,
+        "angular_velocity_deg_s": 132.70333936519165,
+        "enabled": true,
+        "enforced": true,
+        "evaluated": true,
+        "evaluated_count": 21,
+        "expected_marker_views": 10,
+        "expected_markers": 5,
+        "held_count": 0,
+        "held_prediction": false,
+        "held_rotation": false,
+        "matched_marker_views": 0,
+        "missing_marker_views": 10,
+        "observed_markers": 0,
+        "occluded": true,
+        "passed": true,
+        "position_innovation_m": 0.0006476621575318263,
+        "prediction": {
+          "dt_s": 0.008475,
+          "position": [
+            -0.20992510182256338,
+            0.21520165473783204,
+            2.4373567785092036
+          ],
+          "quaternion": [
+            0.99050732778626,
+            0.015363414687588041,
+            -0.0017455040536772854,
+            0.13658752617445805
+          ],
+          "timestamp": 2025525,
+          "velocity": [
+            -0.14354117259907062,
+            0.04025788363009186,
+            0.07639235733153868
+          ]
+        },
+        "previous_angular_velocity_deg_s": 14.74481548527678,
+        "reason": "ok",
+        "rotation_innovation_deg": 1.1246608011199992,
+        "thresholds": {
+          "apply_to_occlusion_only": true,
+          "enabled": true,
+          "enforced": true,
+          "hold_prediction_on_reject": true,
+          "max_angular_accel_deg_s2": 200000.0,
+          "max_angular_velocity_deg_s": 2500.0,
+          "max_position_innovation_m": 0.08,
+          "max_rotation_innovation_deg": 90.0
+        },
+        "would_reject": false,
+        "would_reject_count": 0
+      },
+      "pose_jump_count": 0,
+      "position_continuity_guard": {
+        "clamped_count": 0,
+        "clamped_position": false,
+        "dt_s": 0.008475,
+        "enabled": true,
+        "enforced": true,
+        "evaluated": true,
+        "evaluated_count": 21,
+        "expected_marker_views": 10,
+        "expected_markers": 5,
+        "limited_position": [
+          -0.20937012242275513,
+          0.2150460039535307,
+          2.4370614194574824
+        ],
+        "limited_velocity_m_s": 0.09109254469207156,
+        "matched_marker_views": 0,
+        "missing_marker_views": 10,
+        "observed_markers": 0,
+        "occluded": true,
+        "passed": true,
+        "position_accel_m_s2": 9.01714614431585,
+        "position_innovation_m": 0.0006476621575318263,
+        "position_velocity_m_s": 0.09109254469207156,
+        "previous_velocity_m_s": 0.1675128582651484,
+        "reason": "ok",
+        "thresholds": {
+          "apply_to_occlusion_only": true,
+          "enabled": true,
+          "enforced": true,
+          "max_accel_m_s2": 60.0,
+          "max_velocity_m_s": 8.0
+        },
+        "would_reject": false,
+        "would_reject_count": 0
+      },
+      "prediction": {
+        "confidence": 1.0,
+        "dt_s": 0.0,
+        "lost_frames": 0,
+        "position": [
+          -0.20937012242275513,
+          0.2150460039535307,
+          2.4370614194574824
+        ],
+        "position_sigma_m": 0.003,
+        "quaternion": [
+          0.9891559913241726,
+          0.013915763944781704,
+          -0.00160800227121114,
+          0.14619914729581093
+        ],
+        "rotation_sigma_deg": 1.0,
+        "timestamp": 2025525,
+        "valid": true,
+        "velocity": [
+          -0.075715171307353,
+          0.02123524909495983,
+          0.040295479806937456
+        ]
+      },
+      "reacquire_count": 0,
+      "reacquire_guard": {
+        "enabled": false,
+        "enforced": true,
+        "evaluated": false,
+        "evaluated_count": 0,
+        "passed": true,
+        "position_innovation_m": 0.0,
+        "reason": "not_guarded_mode",
+        "rejected_count": 0,
+        "rotation_innovation_deg": 0.0,
+        "score": {},
+        "thresholds": {
+          "allow_duplicate_assignment": false,
+          "max_mean_reprojection_error_px": 4.0,
+          "max_missing_marker_views": 2,
+          "max_p95_reprojection_error_px": 8.0,
+          "max_position_innovation_m": 0.25,
+          "max_rotation_innovation_deg": 136.0,
+          "min_matched_marker_views": 6,
+          "post_reacquire_continue_frames": 0
+        },
+        "would_reject": false,
+        "would_reject_count": 0
+      },
+      "real_ray_count": 0,
+      "reprojection_score": {
+        "camera_count": 0,
+        "coordinate_space": "raw_pixel",
+        "duplicate_assignment_count": 0,
+        "expected_marker_views": 10,
+        "match_gate_px": 0.0,
+        "matched_marker_views": 0,
+        "max_error_px": 0.0,
+        "mean_error_px": 0.0,
+        "missing_marker_views": 10,
+        "p95_error_px": 0.0,
+        "reason": "tracked_rigid_unseen_hold_prediction",
+        "score": 0.0,
+        "scored": false,
+        "unexpected_blob_count": 0
+      },
+      "rigid_hint_pose": {
+        "candidate_points": 0,
+        "diagnostics_only": true,
+        "enforced": true,
+        "evaluated": true,
+        "generic_rms_error_m": 0.0,
+        "generic_score": {
+          "camera_count": 0,
+          "coordinate_space": "raw_pixel",
+          "duplicate_assignment_count": 0,
+          "expected_marker_views": 10,
+          "match_gate_px": 0.0,
+          "matched_marker_views": 0,
+          "max_error_px": 0.0,
+          "mean_error_px": 0.0,
+          "missing_marker_views": 10,
+          "p95_error_px": 0.0,
+          "reason": "tracked_rigid_unseen_hold_prediction",
+          "score": 0.0,
+          "scored": false,
+          "unexpected_blob_count": 0
+        },
+        "generic_valid": false,
+        "invalid_points": 0,
+        "marker_indices": [],
+        "observed_markers": 0,
+        "pose": {},
+        "position_delta_m": 0.0,
+        "real_ray_count": 0,
+        "reason": "insufficient_rigid_hint_points",
+        "rms_error_m": 0.0,
+        "rotation_delta_deg": 0.0,
+        "score": {
+          "camera_count": 0,
+          "coordinate_space": "raw_pixel",
+          "duplicate_assignment_count": 0,
+          "expected_marker_views": 0,
+          "match_gate_px": 0.0,
+          "matched_marker_views": 0,
+          "max_error_px": 0.0,
+          "mean_error_px": 0.0,
+          "missing_marker_views": 0,
+          "p95_error_px": 0.0,
+          "reason": "not_scored",
+          "score": 0.0,
+          "scored": false,
+          "unexpected_blob_count": 0
+        },
+        "score_delta": 0.0,
+        "selected_for_pose": false,
+        "selection_reason": "insufficient_rigid_hint_points",
+        "valid": false,
+        "virtual_marker_count": 0,
+        "would_improve_score": false
+      },
+      "rms_error_m": 0.0,
+      "rolling_confidence": 1.0,
+      "short_valid_count": 0,
+      "short_valid_ratio": 0.0,
+      "subset_hypothesis": {
+        "best": {},
+        "best_combined_score": 0.0,
+        "best_score": 0.0,
+        "candidate_count": 0,
+        "combined_margin": 0.0,
+        "diagnostics_only": true,
+        "enabled": false,
+        "evaluated": false,
+        "flip_risk_count": 0,
+        "generic_score": 0.0,
+        "margin": 0.0,
+        "pruned_candidate_count": 0,
+        "reason": "disabled_by_mode",
+        "rejected_by_2d_score": 0,
+        "rejected_by_ambiguity": 0,
+        "rejected_by_rms": 0,
+        "sampled": false,
+        "score_delta": 0.0,
+        "second": {},
+        "second_combined_score": 0.0,
+        "second_score": 0.0,
+        "subset_adoption_ready": false,
+        "thresholds": {
+          "adoption_min_valid_ratio": 0.98,
+          "ambiguous_subset_delta_m": 0.005,
+          "coverage_weight": 0.08,
+          "diagnostics_only": true,
+          "enabled": false,
+          "flip_penalty": 0.25,
+          "max_generic_observed_subsets": 24,
+          "max_hypotheses": 4096,
+          "max_observed_points": 10,
+          "max_p95_error_px": 8.0,
+          "max_rotation_delta_deg": 90.0,
+          "min_margin": 0.02,
+          "min_score": 0.65,
+          "prediction_gate_m": 0.08,
+          "source_priority_bonus": 0.04,
+          "subset_sizes": [
+            3,
+            4
+          ],
+          "temporal_penalty_weight": 0.18
+        },
+        "truncated": false,
+        "valid_candidate_count": 0,
+        "weighted_solve": {}
+      },
+      "total_frames": 240,
+      "track_count": 240,
+      "valid": true,
+      "virtual_marker_count": 0
+    },
+    "left_foot": {
+      "confidence": 0.6416666666666667,
+      "current_lost_run_frames": 85,
+      "current_valid_run_frames": 0,
+      "hypothesis_margin": 0.0,
+      "invalid_reason": "strict_reacquire_rejected:insufficient_reacquire_markers,score_not_available:tracked_rigid_unseen_hold_prediction,insufficient_reacquire_matched_views,too_many_missing_marker_views,reacquire_subset_not_allowed:visible_0_below_min_4",
+      "is_tracking": false,
+      "last_mode_reason": "lost_waiting_for_shape",
+      "last_mode_transition": "reacquire->lost:reacquire_timeout",
+      "last_pose_flip_deg": 0.0,
+      "last_pose_jump_m": 0.0,
+      "last_position_innovation_m": 0.00030468580409328676,
+      "last_rotation_innovation_deg": 0.23173095234644875,
+      "lost_frames": 85,
+      "max_pose_flip_deg": 0.0,
+      "max_pose_jump_m": 0.0,
+      "max_position_innovation_m": 0.004309537500000041,
+      "max_rotation_innovation_deg": 1.60228006334319,
+      "max_valid_run_frames": 154,
+      "mean_lost_run_frames": 43.0,
+      "mean_valid_run_frames": 154.0,
+      "mode": "lost",
+      "mode_consecutive_accepts": 0,
+      "mode_consecutive_rejects": 85,
+      "mode_frame_count": 80,
+      "mode_transition_count": 3,
+      "object_gating": {
+        "allow_single_ray": false,
+        "assigned_marker_views": 0,
+        "camera_count": 2,
+        "candidate_window_count": 10,
+        "confidence": 0.0,
+        "diagnostics_only": false,
+        "duplicate_assignment_count": 0,
+        "enabled": true,
+        "enforced": true,
+        "evaluated": true,
+        "generic_fallback_blob_count": 48,
+        "marker_count": 5,
+        "markers_with_one_ray": 0,
+        "markers_with_two_or_more_rays": 0,
+        "mode": "lost",
+        "per_camera": {
+          "pi-cam-01": {
+            "assigned_marker_views": 0,
+            "assignments": [],
+            "blob_count": 24,
+            "projected_marker_count": 5,
+            "unmatched_marker_views": 5
+          },
+          "pi-cam-02": {
+            "assigned_marker_views": 0,
+            "assignments": [],
+            "blob_count": 24,
+            "projected_marker_count": 5,
+            "unmatched_marker_views": 5
+          }
+        },
+        "per_marker_ray_count": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "pixel_gate_px": 4.5,
+        "prediction_valid": true,
+        "reason": "ok",
+        "single_ray_candidates": 0,
+        "thresholds": {
+          "activation_mode": "always",
+          "enforce": true,
+          "min_enforced_markers": 3,
+          "pixel_max": 4.5,
+          "pixel_min": 4.0,
+          "single_ray_confidence_min": 0.75
+        },
+        "unmatched_marker_views": 10
+      },
+      "observed_markers": 0,
+      "pose_continuity_guard": {
+        "angular_accel_deg_s2": 0.0,
+        "angular_velocity_deg_s": 0.0,
+        "enabled": true,
+        "enforced": true,
+        "evaluated": true,
+        "evaluated_count": 86,
+        "expected_marker_views": 10,
+        "expected_markers": 5,
+        "held_count": 1,
+        "held_prediction": false,
+        "held_rotation": false,
+        "matched_marker_views": 0,
+        "missing_marker_views": 10,
+        "observed_markers": 0,
+        "occluded": true,
+        "passed": true,
+        "position_innovation_m": 0.0,
+        "prediction": {
+          "dt_s": 0.720375,
+          "position": [
+            -0.32769213130511105,
+            -0.04924012192565723,
+            2.070927608639616
+          ],
+          "quaternion": [
+            0.9954606505380823,
+            0.00023269796085240851,
+            -0.0006592530127951553,
+            0.09517144775310629
+          ],
+          "timestamp": 2025525,
+          "velocity": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "previous_angular_velocity_deg_s": 0.0,
+        "reason": "ok",
+        "rotation_innovation_deg": 0.0,
+        "thresholds": {
+          "apply_to_occlusion_only": true,
+          "enabled": true,
+          "enforced": true,
+          "hold_prediction_on_reject": true,
+          "max_angular_accel_deg_s2": 200000.0,
+          "max_angular_velocity_deg_s": 2500.0,
+          "max_position_innovation_m": 0.08,
+          "max_rotation_innovation_deg": 90.0
+        },
+        "would_reject": false,
+        "would_reject_count": 1
+      },
+      "pose_jump_count": 0,
+      "position_continuity_guard": {
+        "clamped_count": 2,
+        "clamped_position": false,
+        "enabled": true,
+        "enforced": true,
+        "evaluated": false,
+        "evaluated_count": 59,
+        "expected_marker_views": 0,
+        "expected_markers": 0,
+        "matched_marker_views": 0,
+        "missing_marker_views": 0,
+        "observed_markers": 0,
+        "occluded": false,
+        "passed": true,
+        "position_accel_m_s2": 0.0,
+        "position_innovation_m": 0.0,
+        "position_velocity_m_s": 0.0,
+        "previous_velocity_m_s": 0.0,
+        "reason": "no_prediction",
+        "thresholds": {
+          "apply_to_occlusion_only": true,
+          "enabled": true,
+          "enforced": true,
+          "max_accel_m_s2": 60.0,
+          "max_velocity_m_s": 8.0
+        },
+        "would_reject": false,
+        "would_reject_count": 2
+      },
+      "prediction": {
+        "confidence": 0.0,
+        "dt_s": 0.720375,
+        "lost_frames": 85,
+        "position": [
+          -0.32769213130511105,
+          -0.04924012192565723,
+          2.070927608639616
+        ],
+        "position_sigma_m": 0.13140722394965887,
+        "quaternion": [
+          0.9954606505380823,
+          0.00023269796085240851,
+          -0.0006592530127951553,
+          0.09517144775310629
+        ],
+        "rotation_sigma_deg": 42.61125,
+        "timestamp": 2025525,
+        "valid": true,
+        "velocity": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "reacquire_count": 0,
+      "reacquire_guard": {
+        "enabled": false,
+        "enforced": true,
+        "evaluated": false,
+        "evaluated_count": 4,
+        "passed": true,
+        "position_innovation_m": 0.0,
+        "reason": "not_guarded_mode",
+        "rejected_count": 0,
+        "rotation_innovation_deg": 0.0,
+        "score": {},
+        "thresholds": {
+          "allow_duplicate_assignment": false,
+          "max_mean_reprojection_error_px": 4.0,
+          "max_missing_marker_views": 2,
+          "max_p95_reprojection_error_px": 8.0,
+          "max_position_innovation_m": 0.25,
+          "max_rotation_innovation_deg": 136.0,
+          "min_matched_marker_views": 6,
+          "post_reacquire_continue_frames": 0
+        },
+        "would_reject": false,
+        "would_reject_count": 0
+      },
+      "real_ray_count": 0,
+      "reprojection_score": {
+        "camera_count": 0,
+        "coordinate_space": "raw_pixel",
+        "duplicate_assignment_count": 0,
+        "expected_marker_views": 10,
+        "match_gate_px": 0.0,
+        "matched_marker_views": 0,
+        "max_error_px": 0.0,
+        "mean_error_px": 0.0,
+        "missing_marker_views": 10,
+        "p95_error_px": 0.0,
+        "reason": "tracked_rigid_unseen_hold_prediction",
+        "score": 0.0,
+        "scored": false,
+        "unexpected_blob_count": 0
+      },
+      "rigid_hint_pose": {
+        "candidate_points": 0,
+        "diagnostics_only": true,
+        "enforced": true,
+        "evaluated": true,
+        "generic_rms_error_m": 0.0,
+        "generic_score": {
+          "camera_count": 0,
+          "coordinate_space": "raw_pixel",
+          "duplicate_assignment_count": 0,
+          "expected_marker_views": 10,
+          "match_gate_px": 0.0,
+          "matched_marker_views": 0,
+          "max_error_px": 0.0,
+          "mean_error_px": 0.0,
+          "missing_marker_views": 10,
+          "p95_error_px": 0.0,
+          "reason": "tracked_rigid_unseen_hold_prediction",
+          "score": 0.0,
+          "scored": false,
+          "unexpected_blob_count": 0
+        },
+        "generic_valid": false,
+        "invalid_points": 0,
+        "marker_indices": [],
+        "observed_markers": 0,
+        "pose": {},
+        "position_delta_m": 0.0,
+        "real_ray_count": 0,
+        "reason": "insufficient_rigid_hint_points",
+        "rms_error_m": 0.0,
+        "rotation_delta_deg": 0.0,
+        "score": {
+          "camera_count": 0,
+          "coordinate_space": "raw_pixel",
+          "duplicate_assignment_count": 0,
+          "expected_marker_views": 0,
+          "match_gate_px": 0.0,
+          "matched_marker_views": 0,
+          "max_error_px": 0.0,
+          "mean_error_px": 0.0,
+          "missing_marker_views": 0,
+          "p95_error_px": 0.0,
+          "reason": "not_scored",
+          "score": 0.0,
+          "scored": false,
+          "unexpected_blob_count": 0
+        },
+        "score_delta": 0.0,
+        "selected_for_pose": false,
+        "selection_reason": "insufficient_rigid_hint_points",
+        "valid": false,
+        "virtual_marker_count": 0,
+        "would_improve_score": false
+      },
+      "rms_error_m": 0.0,
+      "rolling_confidence": 0.0,
+      "short_valid_count": 0,
+      "short_valid_ratio": 0.0,
+      "subset_hypothesis": {
+        "best": {},
+        "best_combined_score": 0.0,
+        "best_score": 0.0,
+        "candidate_count": 0,
+        "combined_margin": 0.0,
+        "diagnostics_only": true,
+        "enabled": false,
+        "evaluated": false,
+        "flip_risk_count": 0,
+        "generic_score": 0.0,
+        "margin": 0.0,
+        "pruned_candidate_count": 0,
+        "reason": "disabled_by_mode",
+        "rejected_by_2d_score": 0,
+        "rejected_by_ambiguity": 0,
+        "rejected_by_rms": 0,
+        "sampled": false,
+        "score_delta": 0.0,
+        "second": {},
+        "second_combined_score": 0.0,
+        "second_score": 0.0,
+        "subset_adoption_ready": false,
+        "thresholds": {
+          "adoption_min_valid_ratio": 0.98,
+          "ambiguous_subset_delta_m": 0.005,
+          "coverage_weight": 0.08,
+          "diagnostics_only": true,
+          "enabled": false,
+          "flip_penalty": 0.25,
+          "max_generic_observed_subsets": 24,
+          "max_hypotheses": 4096,
+          "max_observed_points": 10,
+          "max_p95_error_px": 8.0,
+          "max_rotation_delta_deg": 90.0,
+          "min_margin": 0.02,
+          "min_score": 0.65,
+          "prediction_gate_m": 0.08,
+          "source_priority_bonus": 0.04,
+          "subset_sizes": [
+            3,
+            4
+          ],
+          "temporal_penalty_weight": 0.18
+        },
+        "truncated": false,
+        "valid_candidate_count": 0,
+        "weighted_solve": {}
+      },
+      "total_frames": 240,
+      "track_count": 154,
+      "valid": false,
+      "virtual_marker_count": 0
+    },
+    "right_foot": {
+      "confidence": 0.9958333333333333,
+      "current_lost_run_frames": 0,
+      "current_valid_run_frames": 239,
+      "hypothesis_margin": 0.0,
+      "invalid_reason": "",
+      "is_tracking": true,
+      "last_mode_reason": "continue_measurement_accepted",
+      "last_mode_transition": "boot->continue:boot_confirmed",
+      "last_pose_flip_deg": 0.0,
+      "last_pose_jump_m": 0.0,
+      "last_position_innovation_m": 0.000534725817896156,
+      "last_rotation_innovation_deg": 0.8963908830386762,
+      "lost_frames": 0,
+      "max_pose_flip_deg": 0.0,
+      "max_pose_jump_m": 0.0,
+      "max_position_innovation_m": 0.006280121906254724,
+      "max_rotation_innovation_deg": 2.745287502349976,
+      "max_valid_run_frames": 239,
+      "mean_lost_run_frames": 1.0,
+      "mean_valid_run_frames": 239.0,
+      "mode": "continue",
+      "mode_consecutive_accepts": 239,
+      "mode_consecutive_rejects": 0,
+      "mode_frame_count": 236,
+      "mode_transition_count": 1,
+      "object_gating": {
+        "allow_single_ray": true,
+        "assigned_marker_views": 10,
+        "camera_count": 2,
+        "candidate_window_count": 10,
+        "confidence": 0.9916631160239846,
+        "diagnostics_only": false,
+        "duplicate_assignment_count": 0,
+        "enabled": true,
+        "enforced": true,
+        "evaluated": true,
+        "generic_fallback_blob_count": 38,
+        "marker_count": 5,
+        "markers_with_one_ray": 0,
+        "markers_with_two_or_more_rays": 5,
+        "mode": "continue",
+        "per_camera": {
+          "pi-cam-01": {
+            "assigned_marker_views": 5,
+            "assignments": [
+              {
+                "blob_index": 19,
+                "distance_px": 0.5820621196620543,
+                "marker_idx": 0
+              },
+              {
+                "blob_index": 20,
+                "distance_px": 0.37170314902685847,
+                "marker_idx": 1
+              },
+              {
+                "blob_index": 21,
+                "distance_px": 0.3708994007244546,
+                "marker_idx": 2
+              },
+              {
+                "blob_index": 22,
+                "distance_px": 0.3200106473700864,
+                "marker_idx": 3
+              },
+              {
+                "blob_index": 23,
+                "distance_px": 0.20735360037354303,
+                "marker_idx": 4
+              }
+            ],
+            "blob_count": 24,
+            "projected_marker_count": 5,
+            "unmatched_marker_views": 0
+          },
+          "pi-cam-02": {
+            "assigned_marker_views": 5,
+            "assignments": [
+              {
+                "blob_index": 19,
+                "distance_px": 0.3661969445457638,
+                "marker_idx": 0
+              },
+              {
+                "blob_index": 20,
+                "distance_px": 0.5883487734384266,
+                "marker_idx": 1
+              },
+              {
+                "blob_index": 21,
+                "distance_px": 0.7316682587453612,
+                "marker_idx": 2
+              },
+              {
+                "blob_index": 22,
+                "distance_px": 0.2522470635845528,
+                "marker_idx": 3
+              },
+              {
+                "blob_index": 23,
+                "distance_px": 0.27818014893595,
+                "marker_idx": 4
+              }
+            ],
+            "blob_count": 24,
+            "projected_marker_count": 5,
+            "unmatched_marker_views": 0
+          }
+        },
+        "per_marker_ray_count": [
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "pixel_gate_px": 4.476981225286599,
+        "prediction_valid": true,
+        "reason": "ok",
+        "single_ray_candidates": 0,
+        "thresholds": {
+          "activation_mode": "always",
+          "enforce": true,
+          "min_enforced_markers": 3,
+          "pixel_max": 4.5,
+          "pixel_min": 4.0,
+          "single_ray_confidence_min": 0.75
+        },
+        "unmatched_marker_views": 0
+      },
+      "observed_markers": 5,
+      "pose_continuity_guard": {
+        "angular_accel_deg_s2": 0.0,
+        "angular_velocity_deg_s": 0.0,
+        "enabled": true,
+        "enforced": true,
+        "evaluated": false,
+        "evaluated_count": 0,
+        "expected_marker_views": 0,
+        "expected_markers": 0,
+        "held_count": 0,
+        "held_prediction": false,
+        "held_rotation": false,
+        "matched_marker_views": 0,
+        "missing_marker_views": 0,
+        "observed_markers": 0,
+        "occluded": false,
+        "passed": true,
+        "position_innovation_m": 0.0,
+        "previous_angular_velocity_deg_s": 0.0,
+        "reason": "not_occluded",
+        "rotation_innovation_deg": 0.0,
+        "thresholds": {
+          "apply_to_occlusion_only": true,
+          "enabled": true,
+          "enforced": true,
+          "hold_prediction_on_reject": true,
+          "max_angular_accel_deg_s2": 200000.0,
+          "max_angular_velocity_deg_s": 2500.0,
+          "max_position_innovation_m": 0.08,
+          "max_rotation_innovation_deg": 90.0
+        },
+        "would_reject": false,
+        "would_reject_count": 0
+      },
+      "pose_jump_count": 0,
+      "position_continuity_guard": {
+        "clamped_count": 0,
+        "clamped_position": false,
+        "enabled": true,
+        "enforced": true,
+        "evaluated": false,
+        "evaluated_count": 0,
+        "expected_marker_views": 0,
+        "expected_markers": 0,
+        "matched_marker_views": 0,
+        "missing_marker_views": 0,
+        "observed_markers": 0,
+        "occluded": false,
+        "passed": true,
+        "position_accel_m_s2": 0.0,
+        "position_innovation_m": 0.0,
+        "position_velocity_m_s": 0.0,
+        "previous_velocity_m_s": 0.0,
+        "reason": "not_occluded",
+        "thresholds": {
+          "apply_to_occlusion_only": true,
+          "enabled": true,
+          "enforced": true,
+          "max_accel_m_s2": 60.0,
+          "max_velocity_m_s": 8.0
+        },
+        "would_reject": false,
+        "would_reject_count": 0
+      },
+      "prediction": {
+        "confidence": 0.9916631160239846,
+        "dt_s": 0.0,
+        "lost_frames": 0,
+        "position": [
+          0.551753868196149,
+          0.18632625183535187,
+          2.0500859651505934
+        ],
+        "position_sigma_m": 0.003166737679520308,
+        "quaternion": [
+          0.9517988242790477,
+          -0.0013678550461119646,
+          -0.00213977816349665,
+          -0.3067124849480477
+        ],
+        "rotation_sigma_deg": 1.166737679520308,
+        "timestamp": 2025525,
+        "valid": true,
+        "velocity": [
+          -0.2606148183044185,
+          -0.5306958070533631,
+          0.0033393704881613958
+        ]
+      },
+      "reacquire_count": 0,
+      "reacquire_guard": {
+        "enabled": false,
+        "enforced": true,
+        "evaluated": false,
+        "evaluated_count": 0,
+        "passed": true,
+        "position_innovation_m": 0.0,
+        "reason": "not_guarded_mode",
+        "rejected_count": 0,
+        "rotation_innovation_deg": 0.0,
+        "score": {},
+        "thresholds": {
+          "allow_duplicate_assignment": false,
+          "max_mean_reprojection_error_px": 4.0,
+          "max_missing_marker_views": 2,
+          "max_p95_reprojection_error_px": 8.0,
+          "max_position_innovation_m": 0.25,
+          "max_rotation_innovation_deg": 136.0,
+          "min_matched_marker_views": 6,
+          "post_reacquire_continue_frames": 0
+        },
+        "would_reject": false,
+        "would_reject_count": 0
+      },
+      "real_ray_count": 5,
+      "reprojection_score": {
+        "camera_count": 2,
+        "coordinate_space": "raw_pixel",
+        "duplicate_assignment_count": 0,
+        "expected_marker_views": 10,
+        "match_gate_px": 12.0,
+        "matched_marker_views": 10,
+        "matched_observations": [
+          {
+            "blob_index": 19,
+            "camera_id": "pi-cam-01",
+            "error_px": 0.006884369654606424,
+            "marker_idx": 0
+          },
+          {
+            "blob_index": 19,
+            "camera_id": "pi-cam-02",
+            "error_px": 0.010218768491710889,
+            "marker_idx": 0
+          },
+          {
+            "blob_index": 20,
+            "camera_id": "pi-cam-01",
+            "error_px": 0.006634066773066846,
+            "marker_idx": 1
+          },
+          {
+            "blob_index": 20,
+            "camera_id": "pi-cam-02",
+            "error_px": 0.009533817800185562,
+            "marker_idx": 1
+          },
+          {
+            "blob_index": 21,
+            "camera_id": "pi-cam-01",
+            "error_px": 0.04388726871686561,
+            "marker_idx": 2
+          },
+          {
+            "blob_index": 21,
+            "camera_id": "pi-cam-02",
+            "error_px": 0.06427026913385102,
+            "marker_idx": 2
+          },
+          {
+            "blob_index": 22,
+            "camera_id": "pi-cam-01",
+            "error_px": 0.060336096107584794,
+            "marker_idx": 3
+          },
+          {
+            "blob_index": 22,
+            "camera_id": "pi-cam-02",
+            "error_px": 0.08515151952513683,
+            "marker_idx": 3
+          },
+          {
+            "blob_index": 23,
+            "camera_id": "pi-cam-01",
+            "error_px": 0.003986637235669583,
+            "marker_idx": 4
+          },
+          {
+            "blob_index": 23,
+            "camera_id": "pi-cam-02",
+            "error_px": 0.005557623448602634,
+            "marker_idx": 4
+          }
+        ],
+        "max_error_px": 0.08515151952513683,
+        "mean_error_px": 0.02964604368872802,
+        "missing_marker_views": 0,
+        "p95_error_px": 0.0757549568490582,
+        "reason": "ok",
+        "rigid_hint_marker_indices": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "rigid_hint_real_ray_count": 10,
+        "score": 0.9958740176939189,
+        "score_source": "rigid_hint_quality",
+        "scored": true,
+        "unexpected_blob_count": 0
+      },
+      "rigid_hint_pose": {
+        "candidate_points": 5,
+        "diagnostics_only": false,
+        "enforced": true,
+        "evaluated": true,
+        "generic_rms_error_m": 0.0004188128146285078,
+        "generic_score": {
+          "camera_count": 2,
+          "coordinate_space": "raw_pixel",
+          "duplicate_assignment_count": 0,
+          "expected_marker_views": 10,
+          "match_gate_px": 12.0,
+          "matched_marker_views": 10,
+          "matched_observations": [
+            {
+              "blob_index": 19,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.006884369654606424,
+              "marker_idx": 0
+            },
+            {
+              "blob_index": 19,
+              "camera_id": "pi-cam-02",
+              "error_px": 0.010218768491710889,
+              "marker_idx": 0
+            },
+            {
+              "blob_index": 20,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.006634066773066846,
+              "marker_idx": 1
+            },
+            {
+              "blob_index": 20,
+              "camera_id": "pi-cam-02",
+              "error_px": 0.009533817800185562,
+              "marker_idx": 1
+            },
+            {
+              "blob_index": 21,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.04388726871686561,
+              "marker_idx": 2
+            },
+            {
+              "blob_index": 21,
+              "camera_id": "pi-cam-02",
+              "error_px": 0.06427026913385102,
+              "marker_idx": 2
+            },
+            {
+              "blob_index": 22,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.060336096107584794,
+              "marker_idx": 3
+            },
+            {
+              "blob_index": 22,
+              "camera_id": "pi-cam-02",
+              "error_px": 0.08515151952513683,
+              "marker_idx": 3
+            },
+            {
+              "blob_index": 23,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.003986637235669583,
+              "marker_idx": 4
+            },
+            {
+              "blob_index": 23,
+              "camera_id": "pi-cam-02",
+              "error_px": 0.005557623448602634,
+              "marker_idx": 4
+            }
+          ],
+          "max_error_px": 0.08515151952513683,
+          "mean_error_px": 0.02964604368872802,
+          "missing_marker_views": 0,
+          "p95_error_px": 0.0757549568490582,
+          "reason": "ok",
+          "rigid_hint_marker_indices": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "rigid_hint_real_ray_count": 10,
+          "score": 0.9958740176939189,
+          "score_source": "rigid_hint_quality",
+          "scored": true,
+          "unexpected_blob_count": 0
+        },
+        "generic_valid": true,
+        "invalid_points": 0,
+        "marker_indices": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "observed_markers": 5,
+        "pose": {
+          "observed_markers": 5,
+          "position": [
+            0.551753868196149,
+            0.18632625183535187,
+            2.0500859651505934
+          ],
+          "quaternion": [
+            0.9517988242790476,
+            -0.0013678550461119644,
+            -0.0021397781634966495,
+            -0.30671248494804765
+          ],
+          "rms_error": 0.0004188128146285078,
+          "timestamp": 2025525,
+          "valid": true
+        },
+        "position_delta_m": 0.0,
+        "real_ray_count": 10,
+        "reason": "ok",
+        "rms_error_m": 0.0004188128146285078,
+        "rotation_delta_deg": 0.0,
+        "score": {
+          "camera_count": 2,
+          "coordinate_space": "raw_pixel",
+          "duplicate_assignment_count": 0,
+          "expected_marker_views": 10,
+          "match_gate_px": 12.0,
+          "matched_marker_views": 10,
+          "matched_observations": [
+            {
+              "blob_index": 19,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.006884369654606424,
+              "marker_idx": 0
+            },
+            {
+              "blob_index": 19,
+              "camera_id": "pi-cam-02",
+              "error_px": 0.010218768491710889,
+              "marker_idx": 0
+            },
+            {
+              "blob_index": 20,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.006634066773066846,
+              "marker_idx": 1
+            },
+            {
+              "blob_index": 20,
+              "camera_id": "pi-cam-02",
+              "error_px": 0.009533817800185562,
+              "marker_idx": 1
+            },
+            {
+              "blob_index": 21,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.04388726871686561,
+              "marker_idx": 2
+            },
+            {
+              "blob_index": 21,
+              "camera_id": "pi-cam-02",
+              "error_px": 0.06427026913385102,
+              "marker_idx": 2
+            },
+            {
+              "blob_index": 22,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.060336096107584794,
+              "marker_idx": 3
+            },
+            {
+              "blob_index": 22,
+              "camera_id": "pi-cam-02",
+              "error_px": 0.08515151952513683,
+              "marker_idx": 3
+            },
+            {
+              "blob_index": 23,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.003986637235669583,
+              "marker_idx": 4
+            },
+            {
+              "blob_index": 23,
+              "camera_id": "pi-cam-02",
+              "error_px": 0.005557623448602634,
+              "marker_idx": 4
+            }
+          ],
+          "max_error_px": 0.08515151952513683,
+          "mean_error_px": 0.02964604368872802,
+          "missing_marker_views": 0,
+          "p95_error_px": 0.0757549568490582,
+          "reason": "ok",
+          "rigid_hint_marker_indices": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "rigid_hint_real_ray_count": 10,
+          "score": 0.9958740176939189,
+          "score_source": "rigid_hint_quality",
+          "scored": true,
+          "unexpected_blob_count": 0
+        },
+        "score_delta": 0.0,
+        "selected_for_pose": true,
+        "selection_reason": "object_gating_enforced",
+        "valid": true,
+        "virtual_marker_count": 0,
+        "would_improve_score": false
+      },
+      "rms_error_m": 0.0004188128146285078,
+      "rolling_confidence": 0.9916631160239846,
+      "short_valid_count": 0,
+      "short_valid_ratio": 0.0,
+      "subset_hypothesis": {
+        "best": {},
+        "best_combined_score": 0.0,
+        "best_score": 0.0,
+        "candidate_count": 0,
+        "combined_margin": 0.0,
+        "diagnostics_only": true,
+        "enabled": false,
+        "evaluated": false,
+        "flip_risk_count": 0,
+        "generic_score": 0.0,
+        "margin": 0.0,
+        "pruned_candidate_count": 0,
+        "reason": "disabled_by_mode",
+        "rejected_by_2d_score": 0,
+        "rejected_by_ambiguity": 0,
+        "rejected_by_rms": 0,
+        "sampled": false,
+        "score_delta": 0.0,
+        "second": {},
+        "second_combined_score": 0.0,
+        "second_score": 0.0,
+        "subset_adoption_ready": false,
+        "thresholds": {
+          "adoption_min_valid_ratio": 0.98,
+          "ambiguous_subset_delta_m": 0.005,
+          "coverage_weight": 0.08,
+          "diagnostics_only": true,
+          "enabled": false,
+          "flip_penalty": 0.25,
+          "max_generic_observed_subsets": 24,
+          "max_hypotheses": 4096,
+          "max_observed_points": 10,
+          "max_p95_error_px": 8.0,
+          "max_rotation_delta_deg": 90.0,
+          "min_margin": 0.02,
+          "min_score": 0.65,
+          "prediction_gate_m": 0.08,
+          "source_priority_bonus": 0.04,
+          "subset_sizes": [
+            3,
+            4
+          ],
+          "temporal_penalty_weight": 0.18
+        },
+        "truncated": false,
+        "valid_candidate_count": 0,
+        "weighted_solve": {}
+      },
+      "total_frames": 240,
+      "track_count": 239,
+      "valid": true,
+      "virtual_marker_count": 0
+    },
+    "waist": {
+      "confidence": 0.3958333333333333,
+      "current_lost_run_frames": 144,
+      "current_valid_run_frames": 0,
+      "hypothesis_margin": 0.0,
+      "invalid_reason": "strict_reacquire_rejected:insufficient_reacquire_markers,score_not_available:tracked_rigid_unseen_hold_prediction,insufficient_reacquire_matched_views,too_many_missing_marker_views,reacquire_subset_not_allowed:visible_0_below_min_4",
+      "is_tracking": false,
+      "last_mode_reason": "lost_waiting_for_shape",
+      "last_mode_transition": "reacquire->lost:reacquire_timeout",
+      "last_pose_flip_deg": 0.0,
+      "last_pose_jump_m": 0.0,
+      "last_position_innovation_m": 0.0020371682326260658,
+      "last_rotation_innovation_deg": 0.6436078627089914,
+      "lost_frames": 144,
+      "max_pose_flip_deg": 0.0,
+      "max_pose_jump_m": 0.0,
+      "max_position_innovation_m": 0.0030520448664823154,
+      "max_rotation_innovation_deg": 2.693859647770354,
+      "max_valid_run_frames": 95,
+      "mean_lost_run_frames": 72.5,
+      "mean_valid_run_frames": 95.0,
+      "mode": "lost",
+      "mode_consecutive_accepts": 0,
+      "mode_consecutive_rejects": 144,
+      "mode_frame_count": 139,
+      "mode_transition_count": 3,
+      "object_gating": {
+        "allow_single_ray": false,
+        "assigned_marker_views": 0,
+        "camera_count": 2,
+        "candidate_window_count": 10,
+        "confidence": 0.0,
+        "diagnostics_only": false,
+        "duplicate_assignment_count": 0,
+        "enabled": true,
+        "enforced": true,
+        "evaluated": true,
+        "generic_fallback_blob_count": 48,
+        "marker_count": 5,
+        "markers_with_one_ray": 0,
+        "markers_with_two_or_more_rays": 0,
+        "mode": "lost",
+        "per_camera": {
+          "pi-cam-01": {
+            "assigned_marker_views": 0,
+            "assignments": [],
+            "blob_count": 24,
+            "projected_marker_count": 5,
+            "unmatched_marker_views": 5
+          },
+          "pi-cam-02": {
+            "assigned_marker_views": 0,
+            "assignments": [],
+            "blob_count": 24,
+            "projected_marker_count": 5,
+            "unmatched_marker_views": 5
+          }
+        },
+        "per_marker_ray_count": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "pixel_gate_px": 4.5,
+        "prediction_valid": true,
+        "reason": "ok",
+        "single_ray_candidates": 0,
+        "thresholds": {
+          "activation_mode": "always",
+          "enforce": true,
+          "min_enforced_markers": 3,
+          "pixel_max": 4.5,
+          "pixel_min": 4.0,
+          "single_ray_confidence_min": 0.75
+        },
+        "unmatched_marker_views": 10
+      },
+      "observed_markers": 0,
+      "pose_continuity_guard": {
+        "angular_accel_deg_s2": 0.0,
+        "angular_velocity_deg_s": 0.0,
+        "enabled": true,
+        "enforced": true,
+        "evaluated": true,
+        "evaluated_count": 184,
+        "expected_marker_views": 10,
+        "expected_markers": 5,
+        "held_count": 1,
+        "held_prediction": false,
+        "held_rotation": false,
+        "matched_marker_views": 0,
+        "missing_marker_views": 10,
+        "observed_markers": 0,
+        "occluded": true,
+        "passed": true,
+        "position_innovation_m": 0.0,
+        "prediction": {
+          "dt_s": 1.2204,
+          "position": [
+            0.10358483915353467,
+            0.03213086860198831,
+            2.1450737175552477
+          ],
+          "quaternion": [
+            0.8489600657142042,
+            0.0012673237812541667,
+            -0.016817535232799552,
+            0.5281878181306922
+          ],
+          "timestamp": 2025525,
+          "velocity": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "previous_angular_velocity_deg_s": 0.0,
+        "reason": "ok",
+        "rotation_innovation_deg": 0.0,
+        "thresholds": {
+          "apply_to_occlusion_only": true,
+          "enabled": true,
+          "enforced": true,
+          "hold_prediction_on_reject": true,
+          "max_angular_accel_deg_s2": 200000.0,
+          "max_angular_velocity_deg_s": 2500.0,
+          "max_position_innovation_m": 0.08,
+          "max_rotation_innovation_deg": 90.0
+        },
+        "would_reject": false,
+        "would_reject_count": 1
+      },
+      "pose_jump_count": 0,
+      "position_continuity_guard": {
+        "clamped_count": 1,
+        "clamped_position": false,
+        "enabled": true,
+        "enforced": true,
+        "evaluated": false,
+        "evaluated_count": 98,
+        "expected_marker_views": 0,
+        "expected_markers": 0,
+        "matched_marker_views": 0,
+        "missing_marker_views": 0,
+        "observed_markers": 0,
+        "occluded": false,
+        "passed": true,
+        "position_accel_m_s2": 0.0,
+        "position_innovation_m": 0.0,
+        "position_velocity_m_s": 0.0,
+        "previous_velocity_m_s": 0.0,
+        "reason": "no_prediction",
+        "thresholds": {
+          "apply_to_occlusion_only": true,
+          "enabled": true,
+          "enforced": true,
+          "max_accel_m_s2": 60.0,
+          "max_velocity_m_s": 8.0
+        },
+        "would_reject": false,
+        "would_reject_count": 1
+      },
+      "prediction": {
+        "confidence": 0.0,
+        "dt_s": 1.2204,
+        "lost_frames": 144,
+        "position": [
+          0.10358483915353467,
+          0.03213086860198831,
+          2.1450737175552477
+        ],
+        "position_sigma_m": 0.1358277790377458,
+        "quaternion": [
+          0.8489600657142042,
+          0.0012673237812541667,
+          -0.016817535232799552,
+          0.5281878181306922
+        ],
+        "rotation_sigma_deg": 57.611999999999995,
+        "timestamp": 2025525,
+        "valid": true,
+        "velocity": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "reacquire_count": 0,
+      "reacquire_guard": {
+        "enabled": false,
+        "enforced": true,
+        "evaluated": false,
+        "evaluated_count": 4,
+        "passed": true,
+        "position_innovation_m": 0.0,
+        "reason": "not_guarded_mode",
+        "rejected_count": 4,
+        "rotation_innovation_deg": 0.0,
+        "score": {},
+        "thresholds": {
+          "allow_duplicate_assignment": false,
+          "max_mean_reprojection_error_px": 4.0,
+          "max_missing_marker_views": 2,
+          "max_p95_reprojection_error_px": 8.0,
+          "max_position_innovation_m": 0.25,
+          "max_rotation_innovation_deg": 136.0,
+          "min_matched_marker_views": 6,
+          "post_reacquire_continue_frames": 0
+        },
+        "would_reject": false,
+        "would_reject_count": 4
+      },
+      "real_ray_count": 0,
+      "reprojection_score": {
+        "camera_count": 0,
+        "coordinate_space": "raw_pixel",
+        "duplicate_assignment_count": 0,
+        "expected_marker_views": 10,
+        "match_gate_px": 0.0,
+        "matched_marker_views": 0,
+        "max_error_px": 0.0,
+        "mean_error_px": 0.0,
+        "missing_marker_views": 10,
+        "p95_error_px": 0.0,
+        "reason": "tracked_rigid_unseen_hold_prediction",
+        "score": 0.0,
+        "scored": false,
+        "unexpected_blob_count": 0
+      },
+      "rigid_hint_pose": {
+        "candidate_points": 0,
+        "diagnostics_only": true,
+        "enforced": true,
+        "evaluated": true,
+        "generic_rms_error_m": 0.0,
+        "generic_score": {
+          "camera_count": 0,
+          "coordinate_space": "raw_pixel",
+          "duplicate_assignment_count": 0,
+          "expected_marker_views": 10,
+          "match_gate_px": 0.0,
+          "matched_marker_views": 0,
+          "max_error_px": 0.0,
+          "mean_error_px": 0.0,
+          "missing_marker_views": 10,
+          "p95_error_px": 0.0,
+          "reason": "tracked_rigid_unseen_hold_prediction",
+          "score": 0.0,
+          "scored": false,
+          "unexpected_blob_count": 0
+        },
+        "generic_valid": false,
+        "invalid_points": 0,
+        "marker_indices": [],
+        "observed_markers": 0,
+        "pose": {},
+        "position_delta_m": 0.0,
+        "real_ray_count": 0,
+        "reason": "insufficient_rigid_hint_points",
+        "rms_error_m": 0.0,
+        "rotation_delta_deg": 0.0,
+        "score": {
+          "camera_count": 0,
+          "coordinate_space": "raw_pixel",
+          "duplicate_assignment_count": 0,
+          "expected_marker_views": 0,
+          "match_gate_px": 0.0,
+          "matched_marker_views": 0,
+          "max_error_px": 0.0,
+          "mean_error_px": 0.0,
+          "missing_marker_views": 0,
+          "p95_error_px": 0.0,
+          "reason": "not_scored",
+          "score": 0.0,
+          "scored": false,
+          "unexpected_blob_count": 0
+        },
+        "score_delta": 0.0,
+        "selected_for_pose": false,
+        "selection_reason": "insufficient_rigid_hint_points",
+        "valid": false,
+        "virtual_marker_count": 0,
+        "would_improve_score": false
+      },
+      "rms_error_m": 0.0,
+      "rolling_confidence": 0.0,
+      "short_valid_count": 0,
+      "short_valid_ratio": 0.0,
+      "subset_hypothesis": {
+        "best": {},
+        "best_combined_score": 0.0,
+        "best_score": 0.0,
+        "candidate_count": 0,
+        "combined_margin": 0.0,
+        "diagnostics_only": true,
+        "enabled": false,
+        "evaluated": false,
+        "flip_risk_count": 0,
+        "generic_score": 0.0,
+        "margin": 0.0,
+        "pruned_candidate_count": 0,
+        "reason": "disabled_by_mode",
+        "rejected_by_2d_score": 0,
+        "rejected_by_ambiguity": 0,
+        "rejected_by_rms": 0,
+        "sampled": false,
+        "score_delta": 0.0,
+        "second": {},
+        "second_combined_score": 0.0,
+        "second_score": 0.0,
+        "subset_adoption_ready": false,
+        "thresholds": {
+          "adoption_min_valid_ratio": 0.98,
+          "ambiguous_subset_delta_m": 0.005,
+          "coverage_weight": 0.08,
+          "diagnostics_only": true,
+          "enabled": false,
+          "flip_penalty": 0.25,
+          "max_generic_observed_subsets": 24,
+          "max_hypotheses": 4096,
+          "max_observed_points": 10,
+          "max_p95_error_px": 8.0,
+          "max_rotation_delta_deg": 90.0,
+          "min_margin": 0.02,
+          "min_score": 0.65,
+          "prediction_gate_m": 0.08,
+          "source_priority_bonus": 0.04,
+          "subset_sizes": [
+            3,
+            4
+          ],
+          "temporal_penalty_weight": 0.18
+        },
+        "truncated": false,
+        "valid_candidate_count": 0,
+        "weighted_solve": {}
+      },
+      "total_frames": 240,
+      "track_count": 95,
+      "valid": false,
+      "virtual_marker_count": 0
+    }
+  },
+  "valid_frame_ratio": {
+    "chest": 0.37916666666666665,
+    "head": 1.0,
+    "left_foot": 0.6416666666666667,
+    "right_foot": 0.9958333333333333,
+    "waist": 0.3958333333333333
+  },
+  "variant_metrics": {
+    "rigid_candidate_fallback_count": 939,
+    "rigid_candidate_fallback_reason_counts": {
+      "insufficient_rigid_hint_points": 467,
+      "rigid_candidate_subset_gate:continue_four_subset_not_whitelisted": 1,
+      "rigid_candidate_subset_gate:four_subset_not_whitelisted": 7,
+      "tracked_rigid_partial_marker_hold_prediction": 27,
+      "tracked_rigid_unseen_hold_prediction": 437
+    },
+    "rigid_candidate_separated_count": 715,
+    "rigid_candidate_separation_enabled": true,
+    "subset_budget_exceeded_count": 0,
+    "subset_diagnostics_mode": "off",
+    "subset_max_hypotheses": 512,
+    "subset_sampled_count": 0,
+    "subset_skipped_count": 1200,
+    "subset_time_budget_ms": 6.0
+  },
+  "wrong_ownership_count": 0
+}

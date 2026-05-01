@@ -85,6 +85,21 @@ PYTHONPATH=src .venv/bin/python -m tools.sim \
   --out logs/sim/waist_wand_generated_4cam
 ```
 
+2.4m cube 上面4隅に camera を置き、cube center を aim する body-mounted 寄りの generated 4 camera:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m tools.sim \
+  --scenario five_rigid_body_occlusion_v1 \
+  --frames 240 \
+  --fps 118 \
+  --rigid-stabilization-profile gui_live \
+  --noise-px 0.25 \
+  --false-blobs-per-camera 0 \
+  --out logs/sim/five_rigid_body_occlusion_v1_cube_top
+```
+
+`five_rigid_body_occlusion_v1` など body-mounted 系 scenario では、`--camera-rig-source auto` の既定値が `cube_top_2_4m_aim_center` に解決される。`cube_top_2_4m_aim_center` は camera center を `(+/-1.2m, +/-1.2m, 2.4m)` に置き、`(0, 0, 1.2m)` を camera 正面にする。intrinsics は `generated_4cam_from_1_2_intrinsics` と同じく `pi-cam-01` / `pi-cam-02` から交互にコピーする。平行4カメラより実装着の囲い込み配置に近いが、full body mesh や実カメラ姿勢の再現ではない。
+
 ## Summary の見方
 
 `--out` を指定すると `summary.json` と `eval.json` が出る。
@@ -136,6 +151,39 @@ PYTHONPATH=src .venv/bin/python -m tools.sim \
 `five_rigid_dance_occlusion` は `head` / `waist` / `chest` / `left_foot` / `right_foot` を同時に流し、ダンス相当の移動・回転、胴体遮蔽、脚交差、部分的な同時 marker loss を入れる stress scenario。
 この scenario は既定で `marker_layout: design_5marker_seed` を使う。明示指定なしでも、`docs/10_in_progress/rigid_body_design.md` の 5-marker seed と subset whitelist policy が適用される。
 現時点では production go/no-go ではなく、4 camera / 5 rigid の boot 識別性、subset policy、処理時間の限界を測る PDCA 用 scenario として扱う。cycle 45 の balanced repeat は pair mean `4.27ms`、pair p95 `4.18ms`、rigid p95 `1.49ms`、geometry p95 `1.44ms`、valid `1.0`、wrong/confusion/jump `0/0/0`。cycle 50 の final repeat は pair mean `4.36ms`、pair p95 `4.44ms`、rigid p95 `1.74ms`、geometry p95 `1.65ms`、valid `1.0`、wrong/confusion/jump `0/0/0` で、精度は維持しつつ cycle 40 より pair/geometry は改善した。startup spike と high-speed rotation delta の strict gate はまだ残っている。
+
+実装着に寄せた body-mounted stress:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m tools.sim \
+  --scenario five_rigid_body_occlusion_v1 \
+  --frames 240 \
+  --fps 118 \
+  --rigid-stabilization-profile gui_live \
+  --noise-px 0.25 \
+  --false-blobs-per-camera 0 \
+  --out logs/sim/five_rigid_body_occlusion_v1
+```
+
+`five_rigid_body_occlusion_v1` は既存 5-rigid anatomical spacing を保ちつつ、false blob ではなく人体側の遮蔽で camera 別 visibility を変える。座り気味の waist、torso yaw による胸・腰の片側遮蔽、足交差時の left / right foot visibility 変化を deterministic に入れるが、alias blob 注入や full body mesh は使わない。`--false-blobs-per-camera` を渡してもこの scenario では random false blob を追加しない。実ログに合わせて true blob area は camera 別に偏らせ、`pi-cam-02` / `pi-cam-04` 相当は等価 diameter 約 4px 前後の小さい blob を出す。body-mounted scenario では各 camera の初期 body depth 中央値を基準にし、近い marker ほど等価 diameter を緩やかに大きくする。red stress より現実ログ寄りの hard regression 入口として扱う。
+この scenario は pixel gate 定数の最適化には使わない。gate tuning は合成投影と seed に自己最適化しやすいため、実ログ replay を主評価にする。
+
+body-mounted PDCA で GUI profile の一部だけを振る場合は、profile は `gui_live` のまま、sim 専用 override を付ける。
+
+```bash
+PYTHONPATH=src .venv/bin/python -m tools.sim \
+  --scenario five_rigid_body_occlusion_v1 \
+  --frames 240 \
+  --fps 118 \
+  --rigid-stabilization-profile gui_live \
+  --object-gating-pixel-max-px 4.0 \
+  --position-continuity-guard false \
+  --noise-px 0.25 \
+  --false-blobs-per-camera 0 \
+  --out logs/sim/five_rigid_body_occlusion_v1/pdca_gate40_no_pos_guard
+```
+
+使える override は `--object-gating-pixel-max-px`、`--object-conditioned-gating`、`--object-gating-enforced`、`--pose-continuity-guard`、`--position-continuity-guard`。`summary.json` には `pipeline_variant`、`subset_diagnostics_mode`、`rigid_stabilization_overrides` が残る。
 
 より厳しい deterministic stress をかける場合:
 
@@ -194,7 +242,9 @@ Simulator だけを確認:
 ## 実装メモ
 
 - `tools/sim/multi_rigid.py` は `TrackingPipeline._on_paired_frames()` に `PairedFrames` を直接流す。
+- `camera_rig_source=auto` は body-mounted 系 scenario では `cube_top_2_4m_aim_center`、それ以外では `real_2cam` に解決される。
 - `camera_rig_source=real_2cam` は `calibration/` の実 calibration を使う。
 - `camera_rig_source=generated_4cam_from_1_2_intrinsics` は `pi-cam-01` / `pi-cam-02` の intrinsics を `pi-cam-03` / `pi-cam-04` へコピーし、deterministic extrinsics を使う。
+- `camera_rig_source=cube_top_2_4m_aim_center` は 2.4m cube 上面4隅から中心を見る deterministic extrinsics を使う。
 - `camera_rig_source=dummy` は軽い unit / CI 用。
 - 5-marker / 5-rigid は `current_4marker` の MVP が安定してから `future_5marker` fixture として追加する。

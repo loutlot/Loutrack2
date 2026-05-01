@@ -6,6 +6,7 @@ pipeline can be exercised deterministically without UDP receivers.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, replace
 from datetime import datetime
 import socket
@@ -48,6 +49,7 @@ FIVE_RIGID_BODY_SCENARIOS = {
     "five_rigid_dance_occlusion",
     "five_rigid_dance_hard_occlusion_v1",
     "five_rigid_dance_swap_red_v1",
+    "five_rigid_body_occlusion_v1",
 }
 
 
@@ -258,6 +260,11 @@ class VirtualCamera:
 
         return results
 
+    def camera_depth(self, point_world: Iterable[float]) -> float:
+        point = np.asarray(point_world, dtype=np.float64).reshape(3)
+        point_camera = self._rotation @ point + self._translation
+        return float(point_camera[2])
+
 
 def _rotation_error_deg(r_pred: np.ndarray, r_gt: np.ndarray) -> float:
     """Rotation error in degrees between two rotation matrices."""
@@ -300,7 +307,7 @@ def _gui_live_rigid_stabilization() -> dict[str, Any]:
         "reacquire_guard_event_logging": False,
         "reacquire_guard_enforced": True,
         "object_gating_enforced": True,
-        "object_gating_pixel_max_px": 6.0,
+        "object_gating_pixel_max_px": 4.5,
         "pose_continuity_guard_enabled": True,
         "pose_continuity_guard_enforced": True,
         "pose_continuity_max_rotation_deg": 90.0,
@@ -324,6 +331,22 @@ def _rigid_stabilization_for_profile(profile: str) -> dict[str, Any] | None:
     )
 
 
+def _rigid_stabilization_for_config(
+    config: "MultiRigidScenarioConfig",
+) -> dict[str, Any] | None:
+    base = _rigid_stabilization_for_profile(config.rigid_stabilization_profile)
+    overrides = {
+        str(key): value
+        for key, value in (config.rigid_stabilization_overrides or {}).items()
+        if value is not None
+    }
+    if not overrides:
+        return base
+    merged = dict(base or {})
+    merged.update(overrides)
+    return merged
+
+
 def _default_rigids_for_scenario(scenario: str | None) -> tuple[str, ...]:
     if str(scenario or "") in FIVE_RIGID_BODY_SCENARIOS:
         return DEFAULT_BODY_RIGIDS
@@ -337,6 +360,15 @@ def _default_marker_layout_for_scenario(scenario: str | None, marker_layout: str
     ):
         return DESIGN_5MARKER_LAYOUT
     return str(marker_layout or "current_4marker")
+
+
+def _default_camera_rig_source_for_scenario(scenario: str | None, source: str | None) -> str:
+    normalized = str(source or "auto").strip()
+    if normalized != "auto":
+        return normalized
+    if str(scenario or "") in FIVE_RIGID_BODY_SCENARIOS:
+        return "cube_top_2_4m_aim_center"
+    return "real_2cam"
 
 
 def _latest_pipeline_stage_ms(pipeline: TrackingPipeline, name: str) -> float:
@@ -383,12 +415,13 @@ class MultiRigidScenarioConfig:
     max_velocity_mps: float = 0.8
     max_angular_velocity_deg_s: float = 180.0
     marker_layout: str = "current_4marker"
-    camera_rig_source: str = "real_2cam"
+    camera_rig_source: str = "auto"
     calibration_dir: str = "calibration"
     rigids_path: str = "calibration/tracking_rigids.json"
     pipeline_variant: str = "fast_ABCDHRF"
     subset_diagnostics_mode: str = "off"
     rigid_stabilization_profile: str = "pipeline_default"
+    rigid_stabilization_overrides: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -399,6 +432,7 @@ class SyntheticBlobOwner:
     rigid_name: str
     marker_index: int | None
     synthetic_blob_id: str
+    merged_owners: tuple[tuple[str, int], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -408,6 +442,10 @@ class SyntheticBlobOwner:
             "rigid_name": self.rigid_name,
             "marker_index": None if self.marker_index is None else int(self.marker_index),
             "synthetic_blob_id": self.synthetic_blob_id,
+            "merged_owners": [
+                {"rigid_name": str(rigid_name), "marker_index": int(marker_index)}
+                for rigid_name, marker_index in self.merged_owners
+            ],
         }
 
 
@@ -541,13 +579,68 @@ def _generated_4cam_from_1_2_intrinsics(calibration_dir: str | Path) -> dict[str
     return generated
 
 
+def _look_at_world_to_camera(
+    camera_center: np.ndarray,
+    target: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    center = np.asarray(camera_center, dtype=np.float64).reshape(3)
+    target = np.asarray(target, dtype=np.float64).reshape(3)
+    forward = target - center
+    forward_norm = float(np.linalg.norm(forward))
+    if forward_norm <= 1e-9:
+        raise ValueError("camera center and target must differ")
+    z_axis = forward / forward_norm
+    world_up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+    x_axis = np.cross(world_up, z_axis)
+    if float(np.linalg.norm(x_axis)) <= 1e-9:
+        world_up = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        x_axis = np.cross(world_up, z_axis)
+    x_axis = x_axis / float(np.linalg.norm(x_axis))
+    y_axis = np.cross(z_axis, x_axis)
+    y_axis = y_axis / float(np.linalg.norm(y_axis))
+    rotation = np.vstack([x_axis, y_axis, z_axis])
+    translation = -rotation @ center
+    return rotation, translation
+
+
+def _cube_top_2_4m_aim_center(calibration_dir: str | Path) -> dict[str, CameraParams]:
+    real = _load_real_camera_params(calibration_dir)
+    if not all(camera_id in real for camera_id in DEFAULT_MVP_CAMERA_IDS):
+        real = create_dummy_calibration(list(DEFAULT_MVP_CAMERA_IDS))
+    generated: dict[str, CameraParams] = {}
+    half = 1.2
+    height = 2.4
+    target = np.array([0.0, 0.0, height * 0.5], dtype=np.float64)
+    camera_centers = {
+        "pi-cam-01": np.array([-half, -half, height], dtype=np.float64),
+        "pi-cam-02": np.array([half, -half, height], dtype=np.float64),
+        "pi-cam-03": np.array([-half, half, height], dtype=np.float64),
+        "pi-cam-04": np.array([half, half, height], dtype=np.float64),
+    }
+    for index, camera_id in enumerate(DEFAULT_GENERATED_CAMERA_IDS):
+        source_id = DEFAULT_MVP_CAMERA_IDS[index % 2]
+        camera = _copy_camera_params(real[source_id], camera_id)
+        camera.rotation, camera.translation = _look_at_world_to_camera(
+            camera_centers[camera_id],
+            target,
+        )
+        generated[camera_id] = camera
+    return generated
+
+
 def load_camera_rig(config: MultiRigidScenarioConfig) -> dict[str, CameraParams]:
-    source = str(config.camera_rig_source)
+    source = _default_camera_rig_source_for_scenario(
+        config.scenario,
+        config.camera_rig_source,
+    )
     camera_ids = list(config.camera_ids)
     if source == "dummy":
         return create_dummy_calibration(camera_ids)
     if source == "generated_4cam_from_1_2_intrinsics":
         generated = _generated_4cam_from_1_2_intrinsics(config.calibration_dir)
+        return {camera_id: generated[camera_id] for camera_id in camera_ids if camera_id in generated}
+    if source == "cube_top_2_4m_aim_center":
+        generated = _cube_top_2_4m_aim_center(config.calibration_dir)
         return {camera_id: generated[camera_id] for camera_id in camera_ids if camera_id in generated}
     real = _load_real_camera_params(config.calibration_dir)
     selected = {camera_id: real[camera_id] for camera_id in camera_ids if camera_id in real}
@@ -646,16 +739,20 @@ class SimulatedRigidInstance:
                 "five_rigid_dance_swap_red_v1",
             }
             is_red = self.trajectory == "five_rigid_dance_swap_red_v1"
-            omega = 2.0 * np.pi * (0.90 if is_red else 0.82 if is_hard else 0.75)
+            is_body_mount = self.trajectory == "five_rigid_body_occlusion_v1"
+            omega = 2.0 * np.pi * (
+                0.90 if is_red else 0.82 if is_hard else 0.75
+            )
             travel = 1.14 if is_red else 1.06 if is_hard else 1.0
             twist = 1.18 if is_red else 1.10 if is_hard else 1.0
             phase = self.phase
+            sit = max(0.0, np.sin(0.42 * omega * t_sec - 0.35)) if is_body_mount else 0.0
             if self.pattern.name == "head":
                 pos += np.array(
                     [
                         travel * 0.045 * np.sin(omega * t_sec + phase),
-                        travel * 0.030 * np.cos(0.7 * omega * t_sec + phase),
-                        travel * 0.035 * np.sin(1.3 * omega * t_sec),
+                        travel * 0.030 * np.cos(0.7 * omega * t_sec + phase) - 0.035 * sit,
+                        travel * 0.035 * np.sin(1.3 * omega * t_sec) - 0.020 * sit,
                     ],
                     dtype=np.float64,
                 )
@@ -664,8 +761,8 @@ class SimulatedRigidInstance:
                 pos += np.array(
                     [
                         travel * 0.055 * np.sin(0.9 * omega * t_sec + phase),
-                        travel * 0.045 * np.sin(1.1 * omega * t_sec),
-                        travel * 0.020 * np.cos(0.8 * omega * t_sec + phase),
+                        travel * 0.045 * np.sin(1.1 * omega * t_sec) - 0.045 * sit,
+                        travel * 0.020 * np.cos(0.8 * omega * t_sec + phase) - 0.035 * sit,
                     ],
                     dtype=np.float64,
                 )
@@ -674,8 +771,8 @@ class SimulatedRigidInstance:
                 pos += np.array(
                     [
                         travel * 0.065 * np.sin(0.8 * omega * t_sec),
-                        travel * 0.055 * np.sin(omega * t_sec + 0.4),
-                        travel * 0.018 * np.sin(1.5 * omega * t_sec),
+                        travel * 0.055 * np.sin(omega * t_sec + 0.4) - 0.060 * sit,
+                        travel * 0.018 * np.sin(1.5 * omega * t_sec) - 0.030 * sit,
                     ],
                     dtype=np.float64,
                 )
@@ -739,6 +836,12 @@ class MultiRigidFrameGenerator:
         )
         if effective_marker_layout != config.marker_layout:
             config = replace(config, marker_layout=effective_marker_layout)
+        effective_camera_rig_source = _default_camera_rig_source_for_scenario(
+            config.scenario,
+            config.camera_rig_source,
+        )
+        if effective_camera_rig_source != config.camera_rig_source:
+            config = replace(config, camera_rig_source=effective_camera_rig_source)
         self.config = config
         self._rng = np.random.default_rng(int(config.seed))
         self._frame_index = 0
@@ -762,6 +865,7 @@ class MultiRigidFrameGenerator:
         if not self.patterns:
             raise ValueError("no rigid patterns available for scenario")
         self._bodies = self._build_bodies(self.patterns)
+        self._blob_reference_depth_by_camera = self._build_blob_reference_depths()
 
     def _build_bodies(self, patterns: list[MarkerPattern]) -> dict[str, SimulatedRigidInstance]:
         if self.config.scenario in FIVE_RIGID_BODY_SCENARIOS:
@@ -772,6 +876,14 @@ class MultiRigidFrameGenerator:
                     "waist": np.array([0.05, 0.10, 2.20], dtype=np.float64),
                     "left_foot": np.array([0.00, -0.05, 2.05], dtype=np.float64),
                     "right_foot": np.array([0.10, 0.05, 2.05], dtype=np.float64),
+                }
+            elif self.config.scenario == "five_rigid_body_occlusion_v1":
+                base_positions = {
+                    "head": np.array([-0.22, 0.18, 2.46], dtype=np.float64),
+                    "chest": np.array([0.20, -0.16, 2.34], dtype=np.float64),
+                    "waist": np.array([0.05, 0.10, 2.20], dtype=np.float64),
+                    "left_foot": np.array([-0.28, -0.16, 2.05], dtype=np.float64),
+                    "right_foot": np.array([0.38, 0.16, 2.05], dtype=np.float64),
                 }
             else:
                 base_positions = {
@@ -809,6 +921,7 @@ class MultiRigidFrameGenerator:
                         "five_rigid_dance_occlusion",
                         "five_rigid_dance_hard_occlusion_v1",
                         "five_rigid_dance_swap_red_v1",
+                        "five_rigid_body_occlusion_v1",
                     }
                     else self.config.trajectory_name
                 ),
@@ -831,7 +944,7 @@ class MultiRigidFrameGenerator:
         }
         return int(camera_rank.get(camera_id, 0))
 
-    def _swap_red_blob_area(self, camera_id: str, *, alias: bool = False) -> float:
+    def _real_log_like_blob_area(self, camera_id: str, *, alias: bool = False) -> float:
         rank = self._camera_rank(camera_id)
         if rank % 2 == 0:
             area = float(self._rng.normal(66.0, 16.0))
@@ -841,6 +954,63 @@ class MultiRigidFrameGenerator:
             area += 2.0
         return float(np.clip(area, 4.5, 26.0))
 
+    def _build_blob_reference_depths(self) -> dict[str, float]:
+        if self.config.scenario not in {
+            "five_rigid_body_occlusion_v1",
+            "five_rigid_dance_swap_red_v1",
+        }:
+            return {}
+        references: dict[str, float] = {}
+        for camera_id, camera in self._cameras.items():
+            depths: list[float] = []
+            for body in self._bodies.values():
+                for point in body.marker_positions_world(0):
+                    depth = camera.camera_depth(point)
+                    if depth > 0.0:
+                        depths.append(depth)
+            if depths:
+                references[camera_id] = float(np.median(np.asarray(depths, dtype=np.float64)))
+        return references
+
+    def _depth_adjusted_blob_area(
+        self,
+        camera_id: str,
+        base_area: float,
+        marker_world: np.ndarray | None,
+    ) -> float:
+        if marker_world is None or camera_id not in self._cameras:
+            return float(base_area)
+        reference_depth = float(self._blob_reference_depth_by_camera.get(camera_id, 0.0))
+        current_depth = float(self._cameras[camera_id].camera_depth(marker_world))
+        if reference_depth <= 0.0 or current_depth <= 0.0:
+            return float(base_area)
+
+        base_diameter = float(np.sqrt(max(0.0, 4.0 * float(base_area) / np.pi)))
+        depth_scale = float(np.clip((reference_depth / current_depth) ** 0.75, 0.72, 1.55))
+        diameter = base_diameter * depth_scale
+        if self._camera_rank(camera_id) % 2 == 0:
+            diameter = float(np.clip(diameter, 3.5, 13.6))
+        else:
+            diameter = float(np.clip(diameter, 2.2, 6.4))
+        return float(np.pi * (diameter * 0.5) ** 2)
+
+    def _synthetic_blob_area(
+        self,
+        camera_id: str,
+        pattern: MarkerPattern,
+        marker_world: np.ndarray | None = None,
+    ) -> float:
+        if self.config.scenario in {
+            "five_rigid_body_occlusion_v1",
+            "five_rigid_dance_swap_red_v1",
+        }:
+            return self._depth_adjusted_blob_area(
+                camera_id,
+                self._real_log_like_blob_area(camera_id),
+                marker_world,
+            )
+        return float(max(4.0, pattern.marker_diameter * 3600.0))
+
     def _hard_scenario_false_blobs_per_camera(
         self,
         frame_index: int,
@@ -849,10 +1019,14 @@ class MultiRigidFrameGenerator:
         if self.config.scenario not in {
             "five_rigid_dance_hard_occlusion_v1",
             "five_rigid_dance_swap_red_v1",
+            "five_rigid_body_occlusion_v1",
         }:
             return int(self.config.false_blobs_per_camera)
         _, cycle_t = self._hard_occlusion_cycle_time(frame_index)
-        if self.config.scenario == "five_rigid_dance_swap_red_v1":
+        if self.config.scenario in {
+            "five_rigid_dance_swap_red_v1",
+            "five_rigid_body_occlusion_v1",
+        }:
             return 0
         else:
             extra = 6 if 0.70 <= cycle_t < 1.18 else 0
@@ -865,6 +1039,39 @@ class MultiRigidFrameGenerator:
         frame_index: int,
         camera_id: str,
     ) -> bool:
+        if self.config.scenario == "five_rigid_body_occlusion_v1":
+            cycle_index, cycle_t = self._hard_occlusion_cycle_time(frame_index)
+            if cycle_t < 0.0:
+                return False
+            rank = self._camera_rank(camera_id)
+            even_cycle = cycle_index % 2 == 0
+
+            # Approximate body-mounted optics without a full body mesh: front
+            # markers stay plausible, while body-side markers disappear from
+            # camera groups as torso yaw, sitting, and leg crossing change.
+            if rigid_name in {"chest", "waist"} and 0.22 <= cycle_t < 0.64:
+                offset = 0 if rigid_name == "waist" else 1
+                return marker_index == ((rank + offset + cycle_index) % 5)
+
+            if rigid_name == "waist" and 0.88 <= cycle_t < 1.14:
+                if rank == 0:
+                    return marker_index in ({1, 4} if even_cycle else {0, 3})
+                if rank == 1:
+                    return marker_index in ({0, 4} if even_cycle else {1, 3})
+                if rank == 2:
+                    return marker_index == (4 if even_cycle else 0)
+
+            if rigid_name in {"left_foot", "right_foot"} and 1.06 <= cycle_t < 1.44:
+                if rigid_name == "left_foot":
+                    return rank in {0, 1} and marker_index == (1 if even_cycle else 4)
+                return rank in {2, 3} and marker_index == (3 if even_cycle else 0)
+
+            if rigid_name == "head" and 1.60 <= cycle_t < 1.84:
+                if rank in {1, 3}:
+                    return marker_index == (4 if even_cycle else 3)
+                return marker_index == (3 if even_cycle else 2)
+            return False
+
         if self.config.scenario == "five_rigid_dance_swap_red_v1":
             cycle_index, cycle_t = self._hard_occlusion_cycle_time(frame_index)
             if cycle_t < 0.0:
@@ -1128,10 +1335,10 @@ class MultiRigidFrameGenerator:
                         {
                             "x": float(projection[0] + dx),
                             "y": float(projection[1] + dy),
-                            "area": (
-                                self._swap_red_blob_area(camera_id)
-                                if self.config.scenario == "five_rigid_dance_swap_red_v1"
-                                else float(max(4.0, pattern.marker_diameter * 3600.0))
+                            "area": self._synthetic_blob_area(
+                                camera_id,
+                                pattern,
+                                marker_world_by_rigid[rigid_name][marker_index],
                             ),
                         }
                     )
@@ -1160,7 +1367,7 @@ class MultiRigidFrameGenerator:
                     {
                         "x": float(x),
                         "y": float(y),
-                        "area": float(self._swap_red_blob_area(camera_id, alias=True)),
+                        "area": float(self._real_log_like_blob_area(camera_id, alias=True)),
                     }
                 )
                 ledger[(timestamp_us, camera_id, blob_index)] = SyntheticBlobOwner(
@@ -1230,9 +1437,9 @@ class MultiRigidFrameGenerator:
 def _ownership_confusion_from_snapshot(
     snapshot: dict[str, Any],
     ledger: dict[tuple[int, str, int], SyntheticBlobOwner],
-) -> tuple[int, int]:
-    wrong = 0
-    marker_confusion = 0
+) -> tuple[int, int, list[dict[str, Any]]]:
+    events: list[dict[str, Any]] = []
+    timestamp = int(snapshot.get("timestamp", 0) or 0)
     for point in snapshot.get("rigid_hint_triangulated_points", []) or []:
         rigid_name = point.get("rigid_name")
         marker_idx = point.get("marker_idx")
@@ -1241,14 +1448,97 @@ def _ownership_confusion_from_snapshot(
         for observation in point.get("observations", []) or []:
             camera_id = str(observation.get("camera_id", ""))
             blob_index = int(observation.get("blob_index", -1))
-            owner = ledger.get((int(snapshot.get("timestamp", 0) or 0), camera_id, blob_index))
+            owner = ledger.get((timestamp, camera_id, blob_index))
             if owner is None:
                 continue
+            merged_owners = set(owner.merged_owners or ())
+            if marker_idx is not None and (str(rigid_name), int(marker_idx)) in merged_owners:
+                continue
             if owner.rigid_name != rigid_name:
-                wrong += 1
-            elif owner.marker_index is not None and marker_idx is not None and int(owner.marker_index) != int(marker_idx):
-                marker_confusion += 1
-    return wrong, marker_confusion
+                events.append(
+                    {
+                        "type": "wrong_owner",
+                        "timestamp": timestamp,
+                        "camera_id": camera_id,
+                        "blob_index": blob_index,
+                        "expected_rigid": str(rigid_name),
+                        "expected_marker": int(marker_idx) if marker_idx is not None else None,
+                        "owner_rigid": str(owner.rigid_name),
+                        "owner_marker": (
+                            int(owner.marker_index)
+                            if owner.marker_index is not None
+                            else None
+                        ),
+                        "synthetic_blob_id": str(owner.synthetic_blob_id),
+                    }
+                )
+            elif (
+                owner.marker_index is not None
+                and marker_idx is not None
+                and int(owner.marker_index) != int(marker_idx)
+            ):
+                events.append(
+                    {
+                        "type": "marker_confusion",
+                        "timestamp": timestamp,
+                        "camera_id": camera_id,
+                        "blob_index": blob_index,
+                        "expected_rigid": str(rigid_name),
+                        "expected_marker": int(marker_idx),
+                        "owner_rigid": str(owner.rigid_name),
+                        "owner_marker": int(owner.marker_index),
+                        "synthetic_blob_id": str(owner.synthetic_blob_id),
+                    }
+                )
+    wrong = sum(1 for event in events if event["type"] == "wrong_owner")
+    marker_confusion = sum(1 for event in events if event["type"] == "marker_confusion")
+    return wrong, marker_confusion, events
+
+
+def _ownership_confusion_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
+    by_type = Counter(str(event.get("type", "")) for event in events)
+    by_expected_rigid = Counter(str(event.get("expected_rigid", "")) for event in events)
+    by_camera = Counter(str(event.get("camera_id", "")) for event in events)
+    by_owner_rigid = Counter(str(event.get("owner_rigid", "")) for event in events)
+    by_marker_pair = Counter(
+        (
+            f"{event.get('expected_rigid')}:{event.get('expected_marker')}"
+            f"<-{event.get('owner_rigid')}:{event.get('owner_marker')}"
+        )
+        for event in events
+    )
+    frames = sorted({int(event.get("frame_index", -1)) for event in events})
+    return {
+        "count": int(len(events)),
+        "by_type": dict(sorted(by_type.items())),
+        "by_expected_rigid": dict(sorted(by_expected_rigid.items())),
+        "by_owner_rigid": dict(sorted(by_owner_rigid.items())),
+        "by_camera": dict(sorted(by_camera.items())),
+        "by_marker_pair": dict(sorted(by_marker_pair.items())),
+        "frames": frames[:50],
+        "sample_events": events[:50],
+        "sample_event_limit": 50,
+    }
+
+
+def _blob_merge_summary(owners: list[SyntheticBlobOwner]) -> dict[str, Any]:
+    merged = [owner for owner in owners if len(owner.merged_owners or ()) > 1]
+    by_camera = Counter(owner.camera_id for owner in merged)
+    by_owner_count = Counter(str(len(owner.merged_owners or ())) for owner in merged)
+    by_rigid_group = Counter(
+        "+".join(
+            sorted({str(rigid_name) for rigid_name, _ in owner.merged_owners})
+        )
+        for owner in merged
+    )
+    return {
+        "count": int(len(merged)),
+        "by_camera": dict(sorted(by_camera.items())),
+        "by_owner_count": dict(sorted(by_owner_count.items())),
+        "by_rigid_group": dict(sorted(by_rigid_group.items())),
+        "sample_events": [owner.to_dict() for owner in merged[:50]],
+        "sample_event_limit": 50,
+    }
 
 
 def run_multi_rigid_scenario(
@@ -1263,6 +1553,12 @@ def run_multi_rigid_scenario(
     )
     if effective_marker_layout != config.marker_layout:
         config = replace(config, marker_layout=effective_marker_layout)
+    effective_camera_rig_source = _default_camera_rig_source_for_scenario(
+        config.scenario,
+        config.camera_rig_source,
+    )
+    if effective_camera_rig_source != config.camera_rig_source:
+        config = replace(config, camera_rig_source=effective_camera_rig_source)
     patterns = load_mvp_patterns(
         config.rigids_path,
         marker_layout=config.marker_layout,
@@ -1275,9 +1571,7 @@ def run_multi_rigid_scenario(
         patterns=[pattern for pattern in patterns if pattern.name in set(config.rigid_names)],
         pipeline_variant=config.pipeline_variant,
         subset_diagnostics_mode=config.subset_diagnostics_mode,
-        rigid_stabilization=_rigid_stabilization_for_profile(
-            config.rigid_stabilization_profile
-        ),
+        rigid_stabilization=_rigid_stabilization_for_config(config),
     )
     _install_camera_params_on_pipeline(pipeline, camera_params)
 
@@ -1303,6 +1597,12 @@ def run_multi_rigid_scenario(
     processed_samples = 0
     pipeline_pair_last_ms_values: list[float] = []
     rigid_last_ms_values: list[float] = []
+    ownership_confusion_events: list[dict[str, Any]] = []
+    emitted_blob_owners: list[SyntheticBlobOwner] = []
+    blob_area_values: list[float] = []
+    blob_area_values_by_camera: dict[str, list[float]] = {
+        camera_id: [] for camera_id in config.camera_ids
+    }
     started_ns = time.perf_counter_ns()
 
     for _ in range(int(config.frames)):
@@ -1310,6 +1610,18 @@ def run_multi_rigid_scenario(
         if sample is None:
             break
         emitted_ledger_entries += len(sample.ownership_ledger)
+        emitted_blob_owners.extend(sample.ownership_ledger.values())
+        for frame in sample.paired.frames.values():
+            camera_bucket = blob_area_values_by_camera.setdefault(str(frame.camera_id), [])
+            for blob in frame.blobs or []:
+                try:
+                    area = float(blob.get("area", 0.0) or 0.0)
+                except Exception:
+                    continue
+                if area <= 0.0:
+                    continue
+                blob_area_values.append(area)
+                camera_bucket.append(area)
         if len(sample.paired.frames) < 2:
             continue
         latest_poses.clear()
@@ -1320,9 +1632,19 @@ def run_multi_rigid_scenario(
         )
         rigid_last_ms_values.append(_latest_pipeline_stage_ms(pipeline, "rigid_ms"))
         snapshot = pipeline.get_latest_triangulation_snapshot()
-        wrong, confused = _ownership_confusion_from_snapshot(snapshot, sample.ownership_ledger)
+        wrong, confused, events = _ownership_confusion_from_snapshot(
+            snapshot,
+            sample.ownership_ledger,
+        )
+        frame_index = min(
+            (int(frame.frame_index) for frame in sample.paired.frames.values()),
+            default=int(processed_samples - 1),
+        )
+        for event in events:
+            event["frame_index"] = int(frame_index)
         wrong_ownership_count += wrong
         marker_source_confusion_count += confused
+        ownership_confusion_events.extend(events)
         for rigid_name, gt_pose in sample.gt_poses.items():
             pose = latest_poses.get(rigid_name)
             if pose is None or not getattr(pose, "valid", False):
@@ -1399,6 +1721,22 @@ def run_multi_rigid_scenario(
         name: float(valid_frames_by_rigid.get(name, 0)) / float(max(1, processed_samples))
         for name in config.rigid_names
     }
+    blob_diameter_values = [
+        float(np.sqrt(4.0 * area / np.pi)) for area in blob_area_values if area > 0.0
+    ]
+    blob_area_summary = {
+        "area_px2": _summary(blob_area_values),
+        "equivalent_diameter_px": _summary(blob_diameter_values),
+        "by_camera": {
+            camera_id: {
+                "area_px2": _summary(values),
+                "equivalent_diameter_px": _summary(
+                    [float(np.sqrt(4.0 * area / np.pi)) for area in values if area > 0.0]
+                ),
+            }
+            for camera_id, values in sorted(blob_area_values_by_camera.items())
+        },
+    }
     max_position_delta_error_m = max(
         (
             float(_summary(values).get("max", 0.0))
@@ -1428,7 +1766,10 @@ def run_multi_rigid_scenario(
         "scenario": config.scenario,
         "marker_layout": config.marker_layout,
         "camera_rig_source": config.camera_rig_source,
+        "pipeline_variant": config.pipeline_variant,
+        "subset_diagnostics_mode": config.subset_diagnostics_mode,
         "rigid_stabilization_profile": config.rigid_stabilization_profile,
+        "rigid_stabilization_overrides": dict(config.rigid_stabilization_overrides or {}),
         "camera_ids": list(camera_params),
         "rigid_names": list(config.rigid_names),
         "frames_requested": int(config.frames),
@@ -1441,6 +1782,11 @@ def run_multi_rigid_scenario(
         "ownership_ledger_entries": int(emitted_ledger_entries),
         "wrong_ownership_count": int(wrong_ownership_count),
         "marker_source_confusion_count": int(marker_source_confusion_count),
+        "ownership_confusion_summary": _ownership_confusion_summary(
+            ownership_confusion_events
+        ),
+        "blob_merge_summary": _blob_merge_summary(emitted_blob_owners),
+        "blob_area_summary": blob_area_summary,
         "position_error_m": {
             name: _summary(values) for name, values in position_errors_by_rigid.items()
         },
@@ -1907,6 +2253,17 @@ def _parse_realtime_flag(val: str) -> bool:
     return v in {"true", "1", "yes", "y"}
 
 
+def _parse_bool_override(val: str | None) -> bool | None:
+    if val is None:
+        return None
+    v = str(val).strip().lower()
+    if v in {"true", "1", "yes", "y", "on"}:
+        return True
+    if v in {"false", "0", "no", "n", "off"}:
+        return False
+    raise argparse.ArgumentTypeError("expected true/false")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m tools.sim")
     parser.add_argument("--frames", type=int, required=True, help="Number of frames (>0)")
@@ -1918,8 +2275,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--camera-rig-source",
         type=str,
-        default="real_2cam",
-        choices=["real_2cam", "generated_4cam_from_1_2_intrinsics", "dummy"],
+        default="auto",
+        choices=[
+            "auto",
+            "real_2cam",
+            "generated_4cam_from_1_2_intrinsics",
+            "cube_top_2_4m_aim_center",
+            "dummy",
+        ],
         help="Camera rig source for multi-rigid scenarios",
     )
     parser.add_argument("--false-blobs-per-camera", type=int, default=0)
@@ -1931,6 +2294,36 @@ def main(argv: list[str] | None = None) -> int:
         default="pipeline_default",
         choices=["pipeline_default", "gui_live"],
         help="Rigid stabilization preset to apply before running the scenario",
+    )
+    parser.add_argument(
+        "--object-gating-pixel-max-px",
+        type=float,
+        default=None,
+        help="Override rigid object-gating pixel radius for sim PDCA",
+    )
+    parser.add_argument(
+        "--object-conditioned-gating",
+        type=_parse_bool_override,
+        default=None,
+        help="Override object-conditioned gating true/false for sim PDCA",
+    )
+    parser.add_argument(
+        "--object-gating-enforced",
+        type=_parse_bool_override,
+        default=None,
+        help="Override object-gating enforcement true/false for sim PDCA",
+    )
+    parser.add_argument(
+        "--pose-continuity-guard",
+        type=_parse_bool_override,
+        default=None,
+        help="Override pose continuity guard enabled/enforced true/false for sim PDCA",
+    )
+    parser.add_argument(
+        "--position-continuity-guard",
+        type=_parse_bool_override,
+        default=None,
+        help="Override position continuity guard enabled/enforced true/false for sim PDCA",
     )
     parser.add_argument("--noise-px", type=float, default=0.0, help="Pixel noise stddev")
     parser.add_argument("--marker-dropout", type=float, default=0.0, help="Marker dropout probability [0,1]")
@@ -1971,6 +2364,11 @@ def main(argv: list[str] | None = None) -> int:
         return _err("--noise-px must be >= 0")
     if args.false_blobs_per_camera < 0:
         return _err("--false-blobs-per-camera must be >= 0")
+    if (
+        args.object_gating_pixel_max_px is not None
+        and args.object_gating_pixel_max_px <= 0.0
+    ):
+        return _err("--object-gating-pixel-max-px must be > 0")
     if args.trajectory not in {"static", "linear", "circle"}:
         return _err("--trajectory must be one of: static, linear, circle")
 
@@ -1979,14 +2377,46 @@ def main(argv: list[str] | None = None) -> int:
             args.scenario,
             str(args.marker_layout),
         )
+        camera_rig_source = _default_camera_rig_source_for_scenario(
+            args.scenario,
+            str(args.camera_rig_source),
+        )
         if (
-            args.camera_rig_source == "generated_4cam_from_1_2_intrinsics"
+            camera_rig_source
+            in {"generated_4cam_from_1_2_intrinsics", "cube_top_2_4m_aim_center"}
             or args.scenario in FIVE_RIGID_BODY_SCENARIOS
         ):
             camera_ids = DEFAULT_GENERATED_CAMERA_IDS
         else:
             camera_ids = DEFAULT_MVP_CAMERA_IDS
         rigid_names = _default_rigids_for_scenario(args.scenario)
+        rigid_stabilization_overrides: dict[str, Any] = {}
+        if args.object_gating_pixel_max_px is not None:
+            rigid_stabilization_overrides["object_gating_pixel_max_px"] = float(
+                args.object_gating_pixel_max_px
+            )
+        if args.object_conditioned_gating is not None:
+            rigid_stabilization_overrides["object_conditioned_gating"] = bool(
+                args.object_conditioned_gating
+            )
+        if args.object_gating_enforced is not None:
+            rigid_stabilization_overrides["object_gating_enforced"] = bool(
+                args.object_gating_enforced
+            )
+        if args.pose_continuity_guard is not None:
+            rigid_stabilization_overrides["pose_continuity_guard_enabled"] = bool(
+                args.pose_continuity_guard
+            )
+            rigid_stabilization_overrides["pose_continuity_guard_enforced"] = bool(
+                args.pose_continuity_guard
+            )
+        if args.position_continuity_guard is not None:
+            rigid_stabilization_overrides["position_continuity_guard_enabled"] = bool(
+                args.position_continuity_guard
+            )
+            rigid_stabilization_overrides["position_continuity_guard_enforced"] = bool(
+                args.position_continuity_guard
+            )
         try:
             summary = run_multi_rigid_scenario(
                 MultiRigidScenarioConfig(
@@ -2002,12 +2432,13 @@ def main(argv: list[str] | None = None) -> int:
                     marker_dropout_prob=float(args.marker_dropout),
                     camera_dropout_prob=float(args.camera_dropout),
                     marker_layout=marker_layout,
-                    camera_rig_source=str(args.camera_rig_source),
+                    camera_rig_source=camera_rig_source,
                     calibration_dir=str(args.calibration),
                     rigids_path=str(args.rigids),
                     pipeline_variant=str(args.pipeline_variant),
                     subset_diagnostics_mode=str(args.subset_diagnostics_mode),
                     rigid_stabilization_profile=str(args.rigid_stabilization_profile),
+                    rigid_stabilization_overrides=rigid_stabilization_overrides,
                 ),
                 out_dir=args.out_dir,
             )

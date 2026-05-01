@@ -1,0 +1,3626 @@
+{
+  "camera_ids": [
+    "pi-cam-01",
+    "pi-cam-02",
+    "pi-cam-03",
+    "pi-cam-04"
+  ],
+  "camera_rig_source": "generated_4cam_from_1_2_intrinsics",
+  "elapsed_wall_ms": 1153.459084,
+  "error_count": 0,
+  "errors": [],
+  "frames_processed": 240,
+  "frames_requested": 240,
+  "geometry_ms": {
+    "last": 1.25725,
+    "max": 3.716041,
+    "mean": 1.3231732333333333,
+    "p95": 1.578209
+  },
+  "marker_layout": "design_5marker_seed",
+  "marker_source_confusion_count": 0,
+  "ownership_ledger_entries": 23181,
+  "pairs_per_second": 208.06979920581213,
+  "performance_budget": {
+    "pipeline_pair_last_ms": {
+      "count": 240,
+      "max": 34.634958,
+      "mean": 3.9909376708333335,
+      "p95": 4.1914542
+    },
+    "pipeline_pair_over_8_475ms_count": 2,
+    "pipeline_pair_over_8_475ms_max_consecutive": 2,
+    "pipeline_pair_over_budget_threshold_ms": 8.475,
+    "rigid_last_ms": {
+      "count": 240,
+      "max": 30.704625,
+      "mean": 1.5794097333333332,
+      "p95": 1.6987398999999999
+    }
+  },
+  "pipeline_pair_ms": {
+    "last": 3.663792,
+    "max": 34.634958,
+    "mean": 3.990937670833333,
+    "p95": 4.190625
+  },
+  "pipeline_variant": "fast_ABCDHRF",
+  "poses_estimated": 1200,
+  "position_delta_error_m": {
+    "chest": {
+      "count": 239,
+      "max": 0.004915115290717796,
+      "mean": 0.001353445514881902,
+      "p95": 0.0032351560631036173
+    },
+    "head": {
+      "count": 239,
+      "max": 0.005983193743884214,
+      "mean": 0.0017585274139193803,
+      "p95": 0.004392285691253065
+    },
+    "left_foot": {
+      "count": 239,
+      "max": 0.004907512800531697,
+      "mean": 0.0012420078468028365,
+      "p95": 0.002788599959754962
+    },
+    "right_foot": {
+      "count": 239,
+      "max": 0.004134352644511629,
+      "mean": 0.0011994706859074365,
+      "p95": 0.002641306675463329
+    },
+    "waist": {
+      "count": 239,
+      "max": 0.004821743011835287,
+      "mean": 0.0013516008323408689,
+      "p95": 0.002879730537801121
+    }
+  },
+  "position_error_m": {
+    "chest": {
+      "count": 240,
+      "max": 0.004487340623568167,
+      "mean": 0.0009711000813629793,
+      "p95": 0.0022925847707716226
+    },
+    "head": {
+      "count": 240,
+      "max": 0.004329554613936,
+      "mean": 0.001264604411222009,
+      "p95": 0.0029576958697722605
+    },
+    "left_foot": {
+      "count": 240,
+      "max": 0.004073428207735011,
+      "mean": 0.0009369049041279646,
+      "p95": 0.002359129259938161
+    },
+    "right_foot": {
+      "count": 240,
+      "max": 0.003351949721152172,
+      "mean": 0.0008202248644390444,
+      "p95": 0.001849115893582457
+    },
+    "waist": {
+      "count": 240,
+      "max": 0.0031977913848232247,
+      "mean": 0.0009469410328294913,
+      "p95": 0.002133022900201947
+    }
+  },
+  "production_go_no_go": {
+    "passed": false,
+    "pipeline_pair_max_le_8_475ms": false,
+    "pipeline_pair_no_sustained_over_8_475ms": false,
+    "pipeline_pair_p95_le_6ms": true,
+    "rigid_p95_le_1_5ms": false
+  },
+  "rigid_ms": {
+    "last": 1.3445,
+    "max": 30.704625,
+    "mean": 1.5794097333333332,
+    "p95": 1.698292
+  },
+  "rigid_names": [
+    "head",
+    "waist",
+    "chest",
+    "left_foot",
+    "right_foot"
+  ],
+  "rigid_stabilization_overrides": {
+    "object_gating_pixel_max_px": 4.25
+  },
+  "rigid_stabilization_profile": "gui_live",
+  "rotation_delta_error_deg": {
+    "chest": {
+      "count": 239,
+      "max": 7.845725593149487,
+      "mean": 3.15949639798851,
+      "p95": 6.0132908102120535
+    },
+    "head": {
+      "count": 239,
+      "max": 10.142562386575811,
+      "mean": 3.7316812589321633,
+      "p95": 7.417477412302704
+    },
+    "left_foot": {
+      "count": 239,
+      "max": 7.054521546022255,
+      "mean": 2.652285659093654,
+      "p95": 5.247395098655096
+    },
+    "right_foot": {
+      "count": 239,
+      "max": 7.7442263985113495,
+      "mean": 2.8854317690820093,
+      "p95": 6.222954691487358
+    },
+    "waist": {
+      "count": 239,
+      "max": 6.938620202624,
+      "mean": 2.5177032380713533,
+      "p95": 5.127795838491398
+    }
+  },
+  "rotation_error_deg": {
+    "chest": {
+      "count": 240,
+      "max": 5.918029352677697,
+      "mean": 2.1677741727852577,
+      "p95": 4.345305481755319
+    },
+    "head": {
+      "count": 240,
+      "max": 7.127579392454583,
+      "mean": 2.587608914125602,
+      "p95": 5.58883516687591
+    },
+    "left_foot": {
+      "count": 240,
+      "max": 6.24442372571934,
+      "mean": 1.8926134303129052,
+      "p95": 3.5371372638331833
+    },
+    "right_foot": {
+      "count": 240,
+      "max": 5.561249560037704,
+      "mean": 2.037029513020004,
+      "p95": 4.243427305093826
+    },
+    "waist": {
+      "count": 240,
+      "max": 7.3300699407173555,
+      "mean": 1.7762185947693288,
+      "p95": 3.730270085886554
+    }
+  },
+  "scenario": "five_rigid_body_occlusion_v1",
+  "scenario_go_no_go": {
+    "marker_source_confusion_zero": true,
+    "passed": false,
+    "position_delta_error_max_le_2cm": true,
+    "production_go_no_go_passed": false,
+    "rotation_delta_error_max_le_5deg": false,
+    "valid_frame_ratio_ge_0_95": true,
+    "wrong_ownership_zero": true
+  },
+  "subset_diagnostics_mode": "off",
+  "tracking": {
+    "chest": {
+      "confidence": 1.0,
+      "current_lost_run_frames": 0,
+      "current_valid_run_frames": 240,
+      "hypothesis_margin": 0.0,
+      "invalid_reason": "",
+      "is_tracking": true,
+      "last_mode_reason": "continue_measurement_accepted",
+      "last_mode_transition": "boot->continue:boot_confirmed",
+      "last_pose_flip_deg": 0.0,
+      "last_pose_jump_m": 0.0,
+      "last_position_innovation_m": 0.0006328182336746234,
+      "last_rotation_innovation_deg": 6.165812628580183,
+      "lost_frames": 0,
+      "max_pose_flip_deg": 0.0,
+      "max_pose_jump_m": 0.0,
+      "max_position_innovation_m": 0.007563491792947335,
+      "max_rotation_innovation_deg": 13.74794915037974,
+      "max_valid_run_frames": 240,
+      "mean_lost_run_frames": 0.0,
+      "mean_valid_run_frames": 240.0,
+      "mode": "continue",
+      "mode_consecutive_accepts": 240,
+      "mode_consecutive_rejects": 0,
+      "mode_frame_count": 237,
+      "mode_transition_count": 1,
+      "object_gating": {
+        "allow_single_ray": true,
+        "assigned_marker_views": 20,
+        "camera_count": 4,
+        "candidate_window_count": 20,
+        "confidence": 0.9641480336727205,
+        "diagnostics_only": false,
+        "duplicate_assignment_count": 0,
+        "enabled": true,
+        "enforced": true,
+        "evaluated": true,
+        "generic_fallback_blob_count": 76,
+        "marker_count": 5,
+        "markers_with_one_ray": 0,
+        "markers_with_two_or_more_rays": 5,
+        "mode": "continue",
+        "per_camera": {
+          "pi-cam-01": {
+            "assigned_marker_views": 5,
+            "assignments": [
+              {
+                "blob_index": 9,
+                "distance_px": 0.4473787225101689,
+                "marker_idx": 0
+              },
+              {
+                "blob_index": 10,
+                "distance_px": 1.0511612713452378,
+                "marker_idx": 1
+              },
+              {
+                "blob_index": 11,
+                "distance_px": 0.8143560047130376,
+                "marker_idx": 2
+              },
+              {
+                "blob_index": 12,
+                "distance_px": 1.517306754315136,
+                "marker_idx": 3
+              },
+              {
+                "blob_index": 13,
+                "distance_px": 0.5878768418526272,
+                "marker_idx": 4
+              }
+            ],
+            "blob_count": 24,
+            "projected_marker_count": 5,
+            "unmatched_marker_views": 0
+          },
+          "pi-cam-02": {
+            "assigned_marker_views": 5,
+            "assignments": [
+              {
+                "blob_index": 9,
+                "distance_px": 0.21120544610610886,
+                "marker_idx": 0
+              },
+              {
+                "blob_index": 10,
+                "distance_px": 0.8436999835350378,
+                "marker_idx": 1
+              },
+              {
+                "blob_index": 11,
+                "distance_px": 0.7801341315466769,
+                "marker_idx": 2
+              },
+              {
+                "blob_index": 12,
+                "distance_px": 1.34897552716044,
+                "marker_idx": 3
+              },
+              {
+                "blob_index": 13,
+                "distance_px": 0.1468043324599294,
+                "marker_idx": 4
+              }
+            ],
+            "blob_count": 24,
+            "projected_marker_count": 5,
+            "unmatched_marker_views": 0
+          },
+          "pi-cam-03": {
+            "assigned_marker_views": 5,
+            "assignments": [
+              {
+                "blob_index": 9,
+                "distance_px": 0.2916503519434718,
+                "marker_idx": 0
+              },
+              {
+                "blob_index": 10,
+                "distance_px": 1.4597097162897605,
+                "marker_idx": 1
+              },
+              {
+                "blob_index": 11,
+                "distance_px": 0.7713857170117645,
+                "marker_idx": 2
+              },
+              {
+                "blob_index": 12,
+                "distance_px": 0.9559992191077945,
+                "marker_idx": 3
+              },
+              {
+                "blob_index": 13,
+                "distance_px": 0.5153230155898778,
+                "marker_idx": 4
+              }
+            ],
+            "blob_count": 24,
+            "projected_marker_count": 5,
+            "unmatched_marker_views": 0
+          },
+          "pi-cam-04": {
+            "assigned_marker_views": 5,
+            "assignments": [
+              {
+                "blob_index": 9,
+                "distance_px": 0.5804455575988575,
+                "marker_idx": 0
+              },
+              {
+                "blob_index": 10,
+                "distance_px": 0.9938198319715748,
+                "marker_idx": 1
+              },
+              {
+                "blob_index": 11,
+                "distance_px": 0.5567987519513607,
+                "marker_idx": 2
+              },
+              {
+                "blob_index": 12,
+                "distance_px": 1.2514751294687172,
+                "marker_idx": 3
+              },
+              {
+                "blob_index": 13,
+                "distance_px": 0.6160098936752361,
+                "marker_idx": 4
+              }
+            ],
+            "blob_count": 24,
+            "projected_marker_count": 5,
+            "unmatched_marker_views": 0
+          }
+        },
+        "per_marker_ray_count": [
+          4,
+          4,
+          4,
+          4,
+          4
+        ],
+        "pixel_gate_px": 4.25,
+        "prediction_valid": true,
+        "reason": "ok",
+        "single_ray_candidates": 0,
+        "thresholds": {
+          "activation_mode": "always",
+          "enforce": true,
+          "min_enforced_markers": 3,
+          "pixel_max": 4.25,
+          "pixel_min": 4.0,
+          "single_ray_confidence_min": 0.75
+        },
+        "unmatched_marker_views": 0
+      },
+      "observed_markers": 5,
+      "pose_continuity_guard": {
+        "angular_accel_deg_s2": 0.0,
+        "angular_velocity_deg_s": 0.0,
+        "enabled": true,
+        "enforced": true,
+        "evaluated": false,
+        "evaluated_count": 51,
+        "expected_marker_views": 0,
+        "expected_markers": 0,
+        "held_count": 0,
+        "held_prediction": false,
+        "held_rotation": false,
+        "matched_marker_views": 0,
+        "missing_marker_views": 0,
+        "observed_markers": 0,
+        "occluded": false,
+        "passed": true,
+        "position_innovation_m": 0.0,
+        "previous_angular_velocity_deg_s": 0.0,
+        "reason": "not_occluded",
+        "rotation_innovation_deg": 0.0,
+        "thresholds": {
+          "apply_to_occlusion_only": true,
+          "enabled": true,
+          "enforced": true,
+          "hold_prediction_on_reject": true,
+          "max_angular_accel_deg_s2": 200000.0,
+          "max_angular_velocity_deg_s": 2500.0,
+          "max_position_innovation_m": 0.08,
+          "max_rotation_innovation_deg": 90.0
+        },
+        "would_reject": false,
+        "would_reject_count": 0
+      },
+      "pose_jump_count": 0,
+      "position_continuity_guard": {
+        "clamped_count": 9,
+        "clamped_position": false,
+        "enabled": true,
+        "enforced": true,
+        "evaluated": false,
+        "evaluated_count": 51,
+        "expected_marker_views": 0,
+        "expected_markers": 0,
+        "matched_marker_views": 0,
+        "missing_marker_views": 0,
+        "observed_markers": 0,
+        "occluded": false,
+        "passed": true,
+        "position_accel_m_s2": 0.0,
+        "position_innovation_m": 0.0,
+        "position_velocity_m_s": 0.0,
+        "previous_velocity_m_s": 0.0,
+        "reason": "not_occluded",
+        "thresholds": {
+          "apply_to_occlusion_only": true,
+          "enabled": true,
+          "enforced": true,
+          "max_accel_m_s2": 60.0,
+          "max_velocity_m_s": 8.0
+        },
+        "would_reject": false,
+        "would_reject_count": 9
+      },
+      "prediction": {
+        "confidence": 0.9641480336727205,
+        "dt_s": 0.0,
+        "lost_frames": 0,
+        "position": [
+          0.17094631591026446,
+          -0.19933627047175465,
+          2.3202325079831003
+        ],
+        "position_sigma_m": 0.00371703932654559,
+        "quaternion": [
+          0.8350561581218203,
+          -0.011035493710197901,
+          0.015713704536945153,
+          0.5498295282641005
+        ],
+        "rotation_sigma_deg": 1.7170393265455899,
+        "timestamp": 2025525,
+        "valid": true,
+        "velocity": [
+          -0.1381741967518959,
+          -0.12458316109297063,
+          -0.11454102423481258
+        ]
+      },
+      "reacquire_count": 0,
+      "reacquire_guard": {
+        "enabled": false,
+        "enforced": true,
+        "evaluated": false,
+        "evaluated_count": 0,
+        "passed": true,
+        "position_innovation_m": 0.0,
+        "reason": "not_guarded_mode",
+        "rejected_count": 0,
+        "rotation_innovation_deg": 0.0,
+        "score": {},
+        "thresholds": {
+          "allow_duplicate_assignment": false,
+          "max_mean_reprojection_error_px": 4.0,
+          "max_missing_marker_views": 2,
+          "max_p95_reprojection_error_px": 8.0,
+          "max_position_innovation_m": 0.25,
+          "max_rotation_innovation_deg": 136.0,
+          "min_matched_marker_views": 6,
+          "post_reacquire_continue_frames": 0
+        },
+        "would_reject": false,
+        "would_reject_count": 0
+      },
+      "real_ray_count": 5,
+      "reprojection_score": {
+        "camera_count": 4,
+        "coordinate_space": "raw_pixel",
+        "duplicate_assignment_count": 0,
+        "expected_marker_views": 20,
+        "match_gate_px": 12.0,
+        "matched_marker_views": 20,
+        "matched_observations": [
+          {
+            "blob_index": 9,
+            "camera_id": "pi-cam-01",
+            "error_px": 0.12732624641959447,
+            "marker_idx": 0
+          },
+          {
+            "blob_index": 9,
+            "camera_id": "pi-cam-04",
+            "error_px": 0.12692353906042625,
+            "marker_idx": 0
+          },
+          {
+            "blob_index": 10,
+            "camera_id": "pi-cam-01",
+            "error_px": 0.005006586610331409,
+            "marker_idx": 1
+          },
+          {
+            "blob_index": 10,
+            "camera_id": "pi-cam-04",
+            "error_px": 0.005008944253512458,
+            "marker_idx": 1
+          },
+          {
+            "blob_index": 11,
+            "camera_id": "pi-cam-01",
+            "error_px": 0.003598824548219353,
+            "marker_idx": 2
+          },
+          {
+            "blob_index": 11,
+            "camera_id": "pi-cam-04",
+            "error_px": 0.0035920943764140402,
+            "marker_idx": 2
+          },
+          {
+            "blob_index": 12,
+            "camera_id": "pi-cam-01",
+            "error_px": 0.1679374135314685,
+            "marker_idx": 3
+          },
+          {
+            "blob_index": 12,
+            "camera_id": "pi-cam-04",
+            "error_px": 0.16766678953156441,
+            "marker_idx": 3
+          },
+          {
+            "blob_index": 13,
+            "camera_id": "pi-cam-01",
+            "error_px": 0.27734548436762996,
+            "marker_idx": 4
+          },
+          {
+            "blob_index": 13,
+            "camera_id": "pi-cam-04",
+            "error_px": 0.27690221416445016,
+            "marker_idx": 4
+          }
+        ],
+        "max_error_px": 0.27734548436762996,
+        "mean_error_px": 0.1161308136863611,
+        "missing_marker_views": 0,
+        "p95_error_px": 0.27714601277619905,
+        "reason": "ok",
+        "rigid_hint_marker_indices": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "rigid_hint_real_ray_count": 20,
+        "score": 0.984110732789907,
+        "score_source": "rigid_hint_quality",
+        "scored": true,
+        "unexpected_blob_count": 76
+      },
+      "rigid_hint_pose": {
+        "candidate_points": 5,
+        "diagnostics_only": false,
+        "enforced": true,
+        "evaluated": true,
+        "generic_rms_error_m": 0.0030712489767736897,
+        "generic_score": {
+          "camera_count": 4,
+          "coordinate_space": "raw_pixel",
+          "duplicate_assignment_count": 0,
+          "expected_marker_views": 20,
+          "match_gate_px": 12.0,
+          "matched_marker_views": 20,
+          "matched_observations": [
+            {
+              "blob_index": 9,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.12732624641959447,
+              "marker_idx": 0
+            },
+            {
+              "blob_index": 9,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.12692353906042625,
+              "marker_idx": 0
+            },
+            {
+              "blob_index": 10,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.005006586610331409,
+              "marker_idx": 1
+            },
+            {
+              "blob_index": 10,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.005008944253512458,
+              "marker_idx": 1
+            },
+            {
+              "blob_index": 11,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.003598824548219353,
+              "marker_idx": 2
+            },
+            {
+              "blob_index": 11,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.0035920943764140402,
+              "marker_idx": 2
+            },
+            {
+              "blob_index": 12,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.1679374135314685,
+              "marker_idx": 3
+            },
+            {
+              "blob_index": 12,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.16766678953156441,
+              "marker_idx": 3
+            },
+            {
+              "blob_index": 13,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.27734548436762996,
+              "marker_idx": 4
+            },
+            {
+              "blob_index": 13,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.27690221416445016,
+              "marker_idx": 4
+            }
+          ],
+          "max_error_px": 0.27734548436762996,
+          "mean_error_px": 0.1161308136863611,
+          "missing_marker_views": 0,
+          "p95_error_px": 0.27714601277619905,
+          "reason": "ok",
+          "rigid_hint_marker_indices": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "rigid_hint_real_ray_count": 20,
+          "score": 0.984110732789907,
+          "score_source": "rigid_hint_quality",
+          "scored": true,
+          "unexpected_blob_count": 76
+        },
+        "generic_valid": true,
+        "invalid_points": 0,
+        "marker_indices": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "observed_markers": 5,
+        "pose": {
+          "observed_markers": 5,
+          "position": [
+            0.17094631591026446,
+            -0.19933627047175465,
+            2.3202325079831003
+          ],
+          "quaternion": [
+            0.8350561581218202,
+            -0.0110354937101979,
+            0.01571370453694515,
+            0.5498295282641004
+          ],
+          "rms_error": 0.0030712489767736897,
+          "timestamp": 2025525,
+          "valid": true
+        },
+        "position_delta_m": 0.0,
+        "real_ray_count": 20,
+        "reason": "ok",
+        "rms_error_m": 0.0030712489767736897,
+        "rotation_delta_deg": 0.0,
+        "score": {
+          "camera_count": 4,
+          "coordinate_space": "raw_pixel",
+          "duplicate_assignment_count": 0,
+          "expected_marker_views": 20,
+          "match_gate_px": 12.0,
+          "matched_marker_views": 20,
+          "matched_observations": [
+            {
+              "blob_index": 9,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.12732624641959447,
+              "marker_idx": 0
+            },
+            {
+              "blob_index": 9,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.12692353906042625,
+              "marker_idx": 0
+            },
+            {
+              "blob_index": 10,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.005006586610331409,
+              "marker_idx": 1
+            },
+            {
+              "blob_index": 10,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.005008944253512458,
+              "marker_idx": 1
+            },
+            {
+              "blob_index": 11,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.003598824548219353,
+              "marker_idx": 2
+            },
+            {
+              "blob_index": 11,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.0035920943764140402,
+              "marker_idx": 2
+            },
+            {
+              "blob_index": 12,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.1679374135314685,
+              "marker_idx": 3
+            },
+            {
+              "blob_index": 12,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.16766678953156441,
+              "marker_idx": 3
+            },
+            {
+              "blob_index": 13,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.27734548436762996,
+              "marker_idx": 4
+            },
+            {
+              "blob_index": 13,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.27690221416445016,
+              "marker_idx": 4
+            }
+          ],
+          "max_error_px": 0.27734548436762996,
+          "mean_error_px": 0.1161308136863611,
+          "missing_marker_views": 0,
+          "p95_error_px": 0.27714601277619905,
+          "reason": "ok",
+          "rigid_hint_marker_indices": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "rigid_hint_real_ray_count": 20,
+          "score": 0.984110732789907,
+          "score_source": "rigid_hint_quality",
+          "scored": true,
+          "unexpected_blob_count": 76
+        },
+        "score_delta": 0.0,
+        "selected_for_pose": true,
+        "selection_reason": "object_gating_enforced",
+        "valid": true,
+        "virtual_marker_count": 0,
+        "would_improve_score": false
+      },
+      "rms_error_m": 0.0030712489767736897,
+      "rolling_confidence": 0.9641480336727205,
+      "short_valid_count": 0,
+      "short_valid_ratio": 0.0,
+      "subset_hypothesis": {
+        "best": {},
+        "best_combined_score": 0.0,
+        "best_score": 0.0,
+        "candidate_count": 0,
+        "combined_margin": 0.0,
+        "diagnostics_only": true,
+        "enabled": false,
+        "evaluated": false,
+        "flip_risk_count": 0,
+        "generic_score": 0.0,
+        "margin": 0.0,
+        "pruned_candidate_count": 0,
+        "reason": "disabled_by_mode",
+        "rejected_by_2d_score": 0,
+        "rejected_by_ambiguity": 0,
+        "rejected_by_rms": 0,
+        "sampled": false,
+        "score_delta": 0.0,
+        "second": {},
+        "second_combined_score": 0.0,
+        "second_score": 0.0,
+        "subset_adoption_ready": false,
+        "thresholds": {
+          "adoption_min_valid_ratio": 0.98,
+          "ambiguous_subset_delta_m": 0.005,
+          "coverage_weight": 0.08,
+          "diagnostics_only": true,
+          "enabled": false,
+          "flip_penalty": 0.25,
+          "max_generic_observed_subsets": 24,
+          "max_hypotheses": 4096,
+          "max_observed_points": 10,
+          "max_p95_error_px": 8.0,
+          "max_rotation_delta_deg": 90.0,
+          "min_margin": 0.02,
+          "min_score": 0.65,
+          "prediction_gate_m": 0.08,
+          "source_priority_bonus": 0.04,
+          "subset_sizes": [
+            3,
+            4
+          ],
+          "temporal_penalty_weight": 0.18
+        },
+        "truncated": false,
+        "valid_candidate_count": 0,
+        "weighted_solve": {}
+      },
+      "total_frames": 240,
+      "track_count": 240,
+      "valid": true,
+      "virtual_marker_count": 0
+    },
+    "head": {
+      "confidence": 1.0,
+      "current_lost_run_frames": 0,
+      "current_valid_run_frames": 240,
+      "hypothesis_margin": 0.0,
+      "invalid_reason": "",
+      "is_tracking": true,
+      "last_mode_reason": "continue_measurement_accepted",
+      "last_mode_transition": "boot->continue:boot_confirmed",
+      "last_pose_flip_deg": 0.0,
+      "last_pose_jump_m": 0.0,
+      "last_position_innovation_m": 0.0008150579387024831,
+      "last_rotation_innovation_deg": 3.0603237988381884,
+      "lost_frames": 0,
+      "max_pose_flip_deg": 0.0,
+      "max_pose_jump_m": 0.0,
+      "max_position_innovation_m": 0.010959278456199166,
+      "max_rotation_innovation_deg": 20.240850606275515,
+      "max_valid_run_frames": 240,
+      "mean_lost_run_frames": 0.0,
+      "mean_valid_run_frames": 240.0,
+      "mode": "continue",
+      "mode_consecutive_accepts": 240,
+      "mode_consecutive_rejects": 0,
+      "mode_frame_count": 237,
+      "mode_transition_count": 1,
+      "object_gating": {
+        "allow_single_ray": true,
+        "assigned_marker_views": 16,
+        "camera_count": 4,
+        "candidate_window_count": 20,
+        "confidence": 0.9600628540927422,
+        "diagnostics_only": false,
+        "duplicate_assignment_count": 0,
+        "enabled": true,
+        "enforced": true,
+        "evaluated": true,
+        "generic_fallback_blob_count": 80,
+        "marker_count": 5,
+        "markers_with_one_ray": 0,
+        "markers_with_two_or_more_rays": 5,
+        "mode": "continue",
+        "per_camera": {
+          "pi-cam-01": {
+            "assigned_marker_views": 4,
+            "assignments": [
+              {
+                "blob_index": 0,
+                "distance_px": 0.11838340390885418,
+                "marker_idx": 0
+              },
+              {
+                "blob_index": 1,
+                "distance_px": 0.15705704460120332,
+                "marker_idx": 1
+              },
+              {
+                "blob_index": 2,
+                "distance_px": 0.6499278283853336,
+                "marker_idx": 2
+              },
+              {
+                "blob_index": 3,
+                "distance_px": 0.11201288367495328,
+                "marker_idx": 4
+              }
+            ],
+            "blob_count": 24,
+            "projected_marker_count": 5,
+            "unmatched_marker_views": 1
+          },
+          "pi-cam-02": {
+            "assigned_marker_views": 4,
+            "assignments": [
+              {
+                "blob_index": 0,
+                "distance_px": 0.08264693604346424,
+                "marker_idx": 0
+              },
+              {
+                "blob_index": 1,
+                "distance_px": 0.6897788856892373,
+                "marker_idx": 1
+              },
+              {
+                "blob_index": 2,
+                "distance_px": 0.5577467824703587,
+                "marker_idx": 2
+              },
+              {
+                "blob_index": 3,
+                "distance_px": 0.3620002219080535,
+                "marker_idx": 3
+              }
+            ],
+            "blob_count": 24,
+            "projected_marker_count": 5,
+            "unmatched_marker_views": 1
+          },
+          "pi-cam-03": {
+            "assigned_marker_views": 4,
+            "assignments": [
+              {
+                "blob_index": 0,
+                "distance_px": 0.40756036552083724,
+                "marker_idx": 0
+              },
+              {
+                "blob_index": 1,
+                "distance_px": 0.7072144579346321,
+                "marker_idx": 1
+              },
+              {
+                "blob_index": 2,
+                "distance_px": 0.14230942646737701,
+                "marker_idx": 2
+              },
+              {
+                "blob_index": 3,
+                "distance_px": 0.44465784596989183,
+                "marker_idx": 4
+              }
+            ],
+            "blob_count": 24,
+            "projected_marker_count": 5,
+            "unmatched_marker_views": 1
+          },
+          "pi-cam-04": {
+            "assigned_marker_views": 4,
+            "assignments": [
+              {
+                "blob_index": 0,
+                "distance_px": 0.4545542445585662,
+                "marker_idx": 0
+              },
+              {
+                "blob_index": 1,
+                "distance_px": 0.6130297001216521,
+                "marker_idx": 1
+              },
+              {
+                "blob_index": 2,
+                "distance_px": 0.5621122549928467,
+                "marker_idx": 2
+              },
+              {
+                "blob_index": 3,
+                "distance_px": 0.45619633244827656,
+                "marker_idx": 3
+              }
+            ],
+            "blob_count": 24,
+            "projected_marker_count": 5,
+            "unmatched_marker_views": 1
+          }
+        },
+        "per_marker_ray_count": [
+          4,
+          4,
+          4,
+          2,
+          2
+        ],
+        "pixel_gate_px": 4.25,
+        "prediction_valid": true,
+        "reason": "ok",
+        "single_ray_candidates": 0,
+        "thresholds": {
+          "activation_mode": "always",
+          "enforce": true,
+          "min_enforced_markers": 3,
+          "pixel_max": 4.25,
+          "pixel_min": 4.0,
+          "single_ray_confidence_min": 0.75
+        },
+        "unmatched_marker_views": 4
+      },
+      "observed_markers": 5,
+      "pose_continuity_guard": {
+        "angular_accel_deg_s2": 14519.046151021252,
+        "angular_velocity_deg_s": 361.10015325524347,
+        "enabled": true,
+        "enforced": true,
+        "evaluated": true,
+        "evaluated_count": 22,
+        "expected_marker_views": 20,
+        "expected_markers": 5,
+        "held_count": 0,
+        "held_prediction": false,
+        "held_rotation": false,
+        "matched_marker_views": 16,
+        "missing_marker_views": 4,
+        "observed_markers": 5,
+        "occluded": true,
+        "passed": true,
+        "position_innovation_m": 0.0008150579387024831,
+        "prediction": {
+          "dt_s": 0.008475,
+          "position": [
+            -0.22527980320903085,
+            0.20826063669218353,
+            2.4547288753611394
+          ],
+          "quaternion": [
+            0.9983587134775912,
+            -0.017097517286236794,
+            -0.025541748586937415,
+            -0.04832362988370727
+          ],
+          "timestamp": 2025525,
+          "velocity": [
+            -0.21188629109876853,
+            0.008884159848351753,
+            0.18185326866847384
+          ]
+        },
+        "previous_angular_velocity_deg_s": 238.05123712533836,
+        "reason": "ok",
+        "rotation_innovation_deg": 3.0603237988381884,
+        "thresholds": {
+          "apply_to_occlusion_only": true,
+          "enabled": true,
+          "enforced": true,
+          "hold_prediction_on_reject": true,
+          "max_angular_accel_deg_s2": 200000.0,
+          "max_angular_velocity_deg_s": 2500.0,
+          "max_position_innovation_m": 0.08,
+          "max_rotation_innovation_deg": 90.0
+        },
+        "would_reject": false,
+        "would_reject_count": 0
+      },
+      "pose_jump_count": 0,
+      "position_continuity_guard": {
+        "clamped_count": 4,
+        "clamped_position": false,
+        "dt_s": 0.008475,
+        "enabled": true,
+        "enforced": true,
+        "evaluated": true,
+        "evaluated_count": 22,
+        "expected_marker_views": 20,
+        "expected_markers": 5,
+        "limited_position": [
+          -0.22534732665660479,
+          0.20768651475981886,
+          2.454154293744441
+        ],
+        "limited_velocity_m_s": 0.2545756709696201,
+        "matched_marker_views": 16,
+        "missing_marker_views": 4,
+        "observed_markers": 5,
+        "occluded": true,
+        "passed": true,
+        "position_accel_m_s2": 11.347731936930355,
+        "position_innovation_m": 0.0008150579387024831,
+        "position_velocity_m_s": 0.2545756709696201,
+        "previous_velocity_m_s": 0.2793659606630902,
+        "reason": "ok",
+        "thresholds": {
+          "apply_to_occlusion_only": true,
+          "enabled": true,
+          "enforced": true,
+          "max_accel_m_s2": 60.0,
+          "max_velocity_m_s": 8.0
+        },
+        "would_reject": false,
+        "would_reject_count": 4
+      },
+      "prediction": {
+        "confidence": 0.9603834553665039,
+        "dt_s": 0.0,
+        "lost_frames": 0,
+        "position": [
+          -0.22534732665660479,
+          0.20768651475981886,
+          2.454154293744441
+        ],
+        "position_sigma_m": 0.0037923308926699215,
+        "quaternion": [
+          0.9989530082379674,
+          0.007240770645491437,
+          -0.016548008614968763,
+          -0.04203120250068657
+        ],
+        "rotation_sigma_deg": 1.7923308926699213,
+        "timestamp": 2025525,
+        "valid": true,
+        "velocity": [
+          -0.21985365954407074,
+          -0.058858841020635676,
+          0.11405602776013035
+        ]
+      },
+      "reacquire_count": 0,
+      "reacquire_guard": {
+        "enabled": false,
+        "enforced": true,
+        "evaluated": false,
+        "evaluated_count": 0,
+        "passed": true,
+        "position_innovation_m": 0.0,
+        "reason": "not_guarded_mode",
+        "rejected_count": 0,
+        "rotation_innovation_deg": 0.0,
+        "score": {},
+        "thresholds": {
+          "allow_duplicate_assignment": false,
+          "max_mean_reprojection_error_px": 4.0,
+          "max_missing_marker_views": 2,
+          "max_p95_reprojection_error_px": 8.0,
+          "max_position_innovation_m": 0.25,
+          "max_rotation_innovation_deg": 136.0,
+          "min_matched_marker_views": 6,
+          "post_reacquire_continue_frames": 0
+        },
+        "would_reject": false,
+        "would_reject_count": 0
+      },
+      "real_ray_count": 5,
+      "reprojection_score": {
+        "camera_count": 4,
+        "coordinate_space": "raw_pixel",
+        "duplicate_assignment_count": 0,
+        "expected_marker_views": 20,
+        "match_gate_px": 12.0,
+        "matched_marker_views": 16,
+        "matched_observations": [
+          {
+            "blob_index": 0,
+            "camera_id": "pi-cam-01",
+            "error_px": 0.031960585515819886,
+            "marker_idx": 0
+          },
+          {
+            "blob_index": 0,
+            "camera_id": "pi-cam-04",
+            "error_px": 0.031738099424263866,
+            "marker_idx": 0
+          },
+          {
+            "blob_index": 1,
+            "camera_id": "pi-cam-01",
+            "error_px": 0.22938991993033855,
+            "marker_idx": 1
+          },
+          {
+            "blob_index": 1,
+            "camera_id": "pi-cam-04",
+            "error_px": 0.2281690119936157,
+            "marker_idx": 1
+          },
+          {
+            "blob_index": 2,
+            "camera_id": "pi-cam-01",
+            "error_px": 0.15402747614469708,
+            "marker_idx": 2
+          },
+          {
+            "blob_index": 2,
+            "camera_id": "pi-cam-04",
+            "error_px": 0.1530941686247845,
+            "marker_idx": 2
+          },
+          {
+            "blob_index": 3,
+            "camera_id": "pi-cam-02",
+            "error_px": 0.12028524571370487,
+            "marker_idx": 3
+          },
+          {
+            "blob_index": 3,
+            "camera_id": "pi-cam-04",
+            "error_px": 0.1202460710415894,
+            "marker_idx": 3
+          },
+          {
+            "blob_index": 3,
+            "camera_id": "pi-cam-01",
+            "error_px": 0.17263435672556862,
+            "marker_idx": 4
+          },
+          {
+            "blob_index": 3,
+            "camera_id": "pi-cam-03",
+            "error_px": 0.17240582642613256,
+            "marker_idx": 4
+          }
+        ],
+        "max_error_px": 0.22938991993033855,
+        "mean_error_px": 0.1413950761540515,
+        "missing_marker_views": 4,
+        "p95_error_px": 0.22884051135881328,
+        "reason": "ok",
+        "rigid_hint_marker_indices": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "rigid_hint_real_ray_count": 16,
+        "score": 0.9207490862223576,
+        "score_source": "rigid_hint_quality",
+        "scored": true,
+        "unexpected_blob_count": 80
+      },
+      "rigid_hint_pose": {
+        "candidate_points": 5,
+        "diagnostics_only": false,
+        "enforced": true,
+        "evaluated": true,
+        "generic_rms_error_m": 0.0010062560046618456,
+        "generic_score": {
+          "camera_count": 4,
+          "coordinate_space": "raw_pixel",
+          "duplicate_assignment_count": 0,
+          "expected_marker_views": 20,
+          "match_gate_px": 12.0,
+          "matched_marker_views": 16,
+          "matched_observations": [
+            {
+              "blob_index": 0,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.031960585515819886,
+              "marker_idx": 0
+            },
+            {
+              "blob_index": 0,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.031738099424263866,
+              "marker_idx": 0
+            },
+            {
+              "blob_index": 1,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.22938991993033855,
+              "marker_idx": 1
+            },
+            {
+              "blob_index": 1,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.2281690119936157,
+              "marker_idx": 1
+            },
+            {
+              "blob_index": 2,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.15402747614469708,
+              "marker_idx": 2
+            },
+            {
+              "blob_index": 2,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.1530941686247845,
+              "marker_idx": 2
+            },
+            {
+              "blob_index": 3,
+              "camera_id": "pi-cam-02",
+              "error_px": 0.12028524571370487,
+              "marker_idx": 3
+            },
+            {
+              "blob_index": 3,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.1202460710415894,
+              "marker_idx": 3
+            },
+            {
+              "blob_index": 3,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.17263435672556862,
+              "marker_idx": 4
+            },
+            {
+              "blob_index": 3,
+              "camera_id": "pi-cam-03",
+              "error_px": 0.17240582642613256,
+              "marker_idx": 4
+            }
+          ],
+          "max_error_px": 0.22938991993033855,
+          "mean_error_px": 0.1413950761540515,
+          "missing_marker_views": 4,
+          "p95_error_px": 0.22884051135881328,
+          "reason": "ok",
+          "rigid_hint_marker_indices": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "rigid_hint_real_ray_count": 16,
+          "score": 0.9207490862223576,
+          "score_source": "rigid_hint_quality",
+          "scored": true,
+          "unexpected_blob_count": 80
+        },
+        "generic_valid": true,
+        "invalid_points": 0,
+        "marker_indices": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "observed_markers": 5,
+        "pose": {
+          "observed_markers": 5,
+          "position": [
+            -0.22534732665660479,
+            0.20768651475981886,
+            2.454154293744441
+          ],
+          "quaternion": [
+            0.9989530082379674,
+            0.007240770645491437,
+            -0.016548008614968763,
+            -0.04203120250068657
+          ],
+          "rms_error": 0.0010062560046618456,
+          "timestamp": 2025525,
+          "valid": true
+        },
+        "position_delta_m": 0.0,
+        "real_ray_count": 16,
+        "reason": "ok",
+        "rms_error_m": 0.0010062560046618456,
+        "rotation_delta_deg": 0.0,
+        "score": {
+          "camera_count": 4,
+          "coordinate_space": "raw_pixel",
+          "duplicate_assignment_count": 0,
+          "expected_marker_views": 20,
+          "match_gate_px": 12.0,
+          "matched_marker_views": 16,
+          "matched_observations": [
+            {
+              "blob_index": 0,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.031960585515819886,
+              "marker_idx": 0
+            },
+            {
+              "blob_index": 0,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.031738099424263866,
+              "marker_idx": 0
+            },
+            {
+              "blob_index": 1,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.22938991993033855,
+              "marker_idx": 1
+            },
+            {
+              "blob_index": 1,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.2281690119936157,
+              "marker_idx": 1
+            },
+            {
+              "blob_index": 2,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.15402747614469708,
+              "marker_idx": 2
+            },
+            {
+              "blob_index": 2,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.1530941686247845,
+              "marker_idx": 2
+            },
+            {
+              "blob_index": 3,
+              "camera_id": "pi-cam-02",
+              "error_px": 0.12028524571370487,
+              "marker_idx": 3
+            },
+            {
+              "blob_index": 3,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.1202460710415894,
+              "marker_idx": 3
+            },
+            {
+              "blob_index": 3,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.17263435672556862,
+              "marker_idx": 4
+            },
+            {
+              "blob_index": 3,
+              "camera_id": "pi-cam-03",
+              "error_px": 0.17240582642613256,
+              "marker_idx": 4
+            }
+          ],
+          "max_error_px": 0.22938991993033855,
+          "mean_error_px": 0.1413950761540515,
+          "missing_marker_views": 4,
+          "p95_error_px": 0.22884051135881328,
+          "reason": "ok",
+          "rigid_hint_marker_indices": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "rigid_hint_real_ray_count": 16,
+          "score": 0.9207490862223576,
+          "score_source": "rigid_hint_quality",
+          "scored": true,
+          "unexpected_blob_count": 80
+        },
+        "score_delta": 0.0,
+        "selected_for_pose": true,
+        "selection_reason": "object_gating_enforced",
+        "valid": true,
+        "virtual_marker_count": 0,
+        "would_improve_score": false
+      },
+      "rms_error_m": 0.0010062560046618456,
+      "rolling_confidence": 0.9603834553665039,
+      "short_valid_count": 0,
+      "short_valid_ratio": 0.0,
+      "subset_hypothesis": {
+        "best": {},
+        "best_combined_score": 0.0,
+        "best_score": 0.0,
+        "candidate_count": 0,
+        "combined_margin": 0.0,
+        "diagnostics_only": true,
+        "enabled": false,
+        "evaluated": false,
+        "flip_risk_count": 0,
+        "generic_score": 0.0,
+        "margin": 0.0,
+        "pruned_candidate_count": 0,
+        "reason": "disabled_by_mode",
+        "rejected_by_2d_score": 0,
+        "rejected_by_ambiguity": 0,
+        "rejected_by_rms": 0,
+        "sampled": false,
+        "score_delta": 0.0,
+        "second": {},
+        "second_combined_score": 0.0,
+        "second_score": 0.0,
+        "subset_adoption_ready": false,
+        "thresholds": {
+          "adoption_min_valid_ratio": 0.98,
+          "ambiguous_subset_delta_m": 0.005,
+          "coverage_weight": 0.08,
+          "diagnostics_only": true,
+          "enabled": false,
+          "flip_penalty": 0.25,
+          "max_generic_observed_subsets": 24,
+          "max_hypotheses": 4096,
+          "max_observed_points": 10,
+          "max_p95_error_px": 8.0,
+          "max_rotation_delta_deg": 90.0,
+          "min_margin": 0.02,
+          "min_score": 0.65,
+          "prediction_gate_m": 0.08,
+          "source_priority_bonus": 0.04,
+          "subset_sizes": [
+            3,
+            4
+          ],
+          "temporal_penalty_weight": 0.18
+        },
+        "truncated": false,
+        "valid_candidate_count": 0,
+        "weighted_solve": {}
+      },
+      "total_frames": 240,
+      "track_count": 240,
+      "valid": true,
+      "virtual_marker_count": 0
+    },
+    "left_foot": {
+      "confidence": 1.0,
+      "current_lost_run_frames": 0,
+      "current_valid_run_frames": 240,
+      "hypothesis_margin": 0.0,
+      "invalid_reason": "",
+      "is_tracking": true,
+      "last_mode_reason": "continue_measurement_accepted",
+      "last_mode_transition": "boot->continue:boot_confirmed",
+      "last_pose_flip_deg": 0.0,
+      "last_pose_jump_m": 0.0,
+      "last_position_innovation_m": 0.004046267444483835,
+      "last_rotation_innovation_deg": 5.67436068695019,
+      "lost_frames": 0,
+      "max_pose_flip_deg": 0.0,
+      "max_pose_jump_m": 0.0,
+      "max_position_innovation_m": 0.008476600223989833,
+      "max_rotation_innovation_deg": 13.837204210045728,
+      "max_valid_run_frames": 240,
+      "mean_lost_run_frames": 0.0,
+      "mean_valid_run_frames": 240.0,
+      "mode": "continue",
+      "mode_consecutive_accepts": 240,
+      "mode_consecutive_rejects": 0,
+      "mode_frame_count": 237,
+      "mode_transition_count": 1,
+      "object_gating": {
+        "allow_single_ray": true,
+        "assigned_marker_views": 20,
+        "camera_count": 4,
+        "candidate_window_count": 20,
+        "confidence": 0.9664508808283983,
+        "diagnostics_only": false,
+        "duplicate_assignment_count": 0,
+        "enabled": true,
+        "enforced": true,
+        "evaluated": true,
+        "generic_fallback_blob_count": 76,
+        "marker_count": 5,
+        "markers_with_one_ray": 0,
+        "markers_with_two_or_more_rays": 5,
+        "mode": "continue",
+        "per_camera": {
+          "pi-cam-01": {
+            "assigned_marker_views": 5,
+            "assignments": [
+              {
+                "blob_index": 14,
+                "distance_px": 0.5960313782569634,
+                "marker_idx": 0
+              },
+              {
+                "blob_index": 15,
+                "distance_px": 0.6604566658375983,
+                "marker_idx": 1
+              },
+              {
+                "blob_index": 16,
+                "distance_px": 1.0583839691091346,
+                "marker_idx": 2
+              },
+              {
+                "blob_index": 17,
+                "distance_px": 0.9086160425297233,
+                "marker_idx": 3
+              },
+              {
+                "blob_index": 18,
+                "distance_px": 0.6909008225001636,
+                "marker_idx": 4
+              }
+            ],
+            "blob_count": 24,
+            "projected_marker_count": 5,
+            "unmatched_marker_views": 0
+          },
+          "pi-cam-02": {
+            "assigned_marker_views": 5,
+            "assignments": [
+              {
+                "blob_index": 14,
+                "distance_px": 1.0195700837490305,
+                "marker_idx": 0
+              },
+              {
+                "blob_index": 15,
+                "distance_px": 0.8771812796653543,
+                "marker_idx": 1
+              },
+              {
+                "blob_index": 16,
+                "distance_px": 1.116651283567674,
+                "marker_idx": 2
+              },
+              {
+                "blob_index": 17,
+                "distance_px": 0.07795417756377034,
+                "marker_idx": 3
+              },
+              {
+                "blob_index": 18,
+                "distance_px": 0.8713064855266631,
+                "marker_idx": 4
+              }
+            ],
+            "blob_count": 24,
+            "projected_marker_count": 5,
+            "unmatched_marker_views": 0
+          },
+          "pi-cam-03": {
+            "assigned_marker_views": 5,
+            "assignments": [
+              {
+                "blob_index": 14,
+                "distance_px": 0.4661640529476642,
+                "marker_idx": 0
+              },
+              {
+                "blob_index": 15,
+                "distance_px": 0.5879985999867552,
+                "marker_idx": 1
+              },
+              {
+                "blob_index": 16,
+                "distance_px": 1.221864018829587,
+                "marker_idx": 2
+              },
+              {
+                "blob_index": 17,
+                "distance_px": 0.790226762524256,
+                "marker_idx": 3
+              },
+              {
+                "blob_index": 18,
+                "distance_px": 0.6749912994059768,
+                "marker_idx": 4
+              }
+            ],
+            "blob_count": 24,
+            "projected_marker_count": 5,
+            "unmatched_marker_views": 0
+          },
+          "pi-cam-04": {
+            "assigned_marker_views": 5,
+            "assignments": [
+              {
+                "blob_index": 14,
+                "distance_px": 0.7129537748321308,
+                "marker_idx": 0
+              },
+              {
+                "blob_index": 15,
+                "distance_px": 1.2438852336723503,
+                "marker_idx": 1
+              },
+              {
+                "blob_index": 16,
+                "distance_px": 1.2405080720806703,
+                "marker_idx": 2
+              },
+              {
+                "blob_index": 17,
+                "distance_px": 0.15773195246420382,
+                "marker_idx": 3
+              },
+              {
+                "blob_index": 18,
+                "distance_px": 0.9851241166343762,
+                "marker_idx": 4
+              }
+            ],
+            "blob_count": 24,
+            "projected_marker_count": 5,
+            "unmatched_marker_views": 0
+          }
+        },
+        "per_marker_ray_count": [
+          4,
+          4,
+          4,
+          4,
+          4
+        ],
+        "pixel_gate_px": 4.25,
+        "prediction_valid": true,
+        "reason": "ok",
+        "single_ray_candidates": 0,
+        "thresholds": {
+          "activation_mode": "always",
+          "enforce": true,
+          "min_enforced_markers": 3,
+          "pixel_max": 4.25,
+          "pixel_min": 4.0,
+          "single_ray_confidence_min": 0.75
+        },
+        "unmatched_marker_views": 0
+      },
+      "observed_markers": 5,
+      "pose_continuity_guard": {
+        "angular_accel_deg_s2": 0.0,
+        "angular_velocity_deg_s": 0.0,
+        "enabled": true,
+        "enforced": true,
+        "evaluated": false,
+        "evaluated_count": 47,
+        "expected_marker_views": 0,
+        "expected_markers": 0,
+        "held_count": 0,
+        "held_prediction": false,
+        "held_rotation": false,
+        "matched_marker_views": 0,
+        "missing_marker_views": 0,
+        "observed_markers": 0,
+        "occluded": false,
+        "passed": true,
+        "position_innovation_m": 0.0,
+        "previous_angular_velocity_deg_s": 0.0,
+        "reason": "not_occluded",
+        "rotation_innovation_deg": 0.0,
+        "thresholds": {
+          "apply_to_occlusion_only": true,
+          "enabled": true,
+          "enforced": true,
+          "hold_prediction_on_reject": true,
+          "max_angular_accel_deg_s2": 200000.0,
+          "max_angular_velocity_deg_s": 2500.0,
+          "max_position_innovation_m": 0.08,
+          "max_rotation_innovation_deg": 90.0
+        },
+        "would_reject": false,
+        "would_reject_count": 0
+      },
+      "pose_jump_count": 0,
+      "position_continuity_guard": {
+        "clamped_count": 6,
+        "clamped_position": false,
+        "enabled": true,
+        "enforced": true,
+        "evaluated": false,
+        "evaluated_count": 47,
+        "expected_marker_views": 0,
+        "expected_markers": 0,
+        "matched_marker_views": 0,
+        "missing_marker_views": 0,
+        "observed_markers": 0,
+        "occluded": false,
+        "passed": true,
+        "position_accel_m_s2": 0.0,
+        "position_innovation_m": 0.0,
+        "position_velocity_m_s": 0.0,
+        "previous_velocity_m_s": 0.0,
+        "reason": "not_occluded",
+        "thresholds": {
+          "apply_to_occlusion_only": true,
+          "enabled": true,
+          "enforced": true,
+          "max_accel_m_s2": 60.0,
+          "max_velocity_m_s": 8.0
+        },
+        "would_reject": false,
+        "would_reject_count": 6
+      },
+      "prediction": {
+        "confidence": 0.9664508808283983,
+        "dt_s": 0.0,
+        "lost_frames": 0,
+        "position": [
+          -0.45162081072362986,
+          -0.25520105765298123,
+          2.049754778453151
+        ],
+        "position_sigma_m": 0.003670982383432035,
+        "quaternion": [
+          0.8682826777895687,
+          0.015509376303910846,
+          0.01087099436777362,
+          0.4957080513555289
+        ],
+        "rotation_sigma_deg": 1.670982383432035,
+        "timestamp": 2025525,
+        "valid": true,
+        "velocity": [
+          0.29950854406749866,
+          0.43430230417755333,
+          -0.13932410917767052
+        ]
+      },
+      "reacquire_count": 0,
+      "reacquire_guard": {
+        "enabled": false,
+        "enforced": true,
+        "evaluated": false,
+        "evaluated_count": 0,
+        "passed": true,
+        "position_innovation_m": 0.0,
+        "reason": "not_guarded_mode",
+        "rejected_count": 0,
+        "rotation_innovation_deg": 0.0,
+        "score": {},
+        "thresholds": {
+          "allow_duplicate_assignment": false,
+          "max_mean_reprojection_error_px": 4.0,
+          "max_missing_marker_views": 2,
+          "max_p95_reprojection_error_px": 8.0,
+          "max_position_innovation_m": 0.25,
+          "max_rotation_innovation_deg": 136.0,
+          "min_matched_marker_views": 6,
+          "post_reacquire_continue_frames": 0
+        },
+        "would_reject": false,
+        "would_reject_count": 0
+      },
+      "real_ray_count": 5,
+      "reprojection_score": {
+        "camera_count": 4,
+        "coordinate_space": "raw_pixel",
+        "duplicate_assignment_count": 0,
+        "expected_marker_views": 20,
+        "match_gate_px": 12.0,
+        "matched_marker_views": 20,
+        "matched_observations": [
+          {
+            "blob_index": 14,
+            "camera_id": "pi-cam-01",
+            "error_px": 0.048596613779316795,
+            "marker_idx": 0
+          },
+          {
+            "blob_index": 14,
+            "camera_id": "pi-cam-04",
+            "error_px": 0.04803617135880958,
+            "marker_idx": 0
+          },
+          {
+            "blob_index": 15,
+            "camera_id": "pi-cam-01",
+            "error_px": 0.4108387326878195,
+            "marker_idx": 1
+          },
+          {
+            "blob_index": 15,
+            "camera_id": "pi-cam-04",
+            "error_px": 0.40593541035139874,
+            "marker_idx": 1
+          },
+          {
+            "blob_index": 16,
+            "camera_id": "pi-cam-01",
+            "error_px": 0.05199779594577694,
+            "marker_idx": 2
+          },
+          {
+            "blob_index": 16,
+            "camera_id": "pi-cam-04",
+            "error_px": 0.051393955855615944,
+            "marker_idx": 2
+          },
+          {
+            "blob_index": 17,
+            "camera_id": "pi-cam-01",
+            "error_px": 0.1016652211491577,
+            "marker_idx": 3
+          },
+          {
+            "blob_index": 17,
+            "camera_id": "pi-cam-04",
+            "error_px": 0.10048446887942379,
+            "marker_idx": 3
+          },
+          {
+            "blob_index": 18,
+            "camera_id": "pi-cam-01",
+            "error_px": 0.1608696354437173,
+            "marker_idx": 4
+          },
+          {
+            "blob_index": 18,
+            "camera_id": "pi-cam-04",
+            "error_px": 0.15898253767971388,
+            "marker_idx": 4
+          }
+        ],
+        "max_error_px": 0.4108387326878195,
+        "mean_error_px": 0.15388005431307503,
+        "missing_marker_views": 0,
+        "p95_error_px": 0.4086322376364302,
+        "reason": "ok",
+        "rigid_hint_marker_indices": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "rigid_hint_real_ray_count": 20,
+        "score": 0.979100010694077,
+        "score_source": "rigid_hint_quality",
+        "scored": true,
+        "unexpected_blob_count": 76
+      },
+      "rigid_hint_pose": {
+        "candidate_points": 5,
+        "diagnostics_only": false,
+        "enforced": true,
+        "evaluated": true,
+        "generic_rms_error_m": 0.0014104506814985262,
+        "generic_score": {
+          "camera_count": 4,
+          "coordinate_space": "raw_pixel",
+          "duplicate_assignment_count": 0,
+          "expected_marker_views": 20,
+          "match_gate_px": 12.0,
+          "matched_marker_views": 20,
+          "matched_observations": [
+            {
+              "blob_index": 14,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.048596613779316795,
+              "marker_idx": 0
+            },
+            {
+              "blob_index": 14,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.04803617135880958,
+              "marker_idx": 0
+            },
+            {
+              "blob_index": 15,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.4108387326878195,
+              "marker_idx": 1
+            },
+            {
+              "blob_index": 15,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.40593541035139874,
+              "marker_idx": 1
+            },
+            {
+              "blob_index": 16,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.05199779594577694,
+              "marker_idx": 2
+            },
+            {
+              "blob_index": 16,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.051393955855615944,
+              "marker_idx": 2
+            },
+            {
+              "blob_index": 17,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.1016652211491577,
+              "marker_idx": 3
+            },
+            {
+              "blob_index": 17,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.10048446887942379,
+              "marker_idx": 3
+            },
+            {
+              "blob_index": 18,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.1608696354437173,
+              "marker_idx": 4
+            },
+            {
+              "blob_index": 18,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.15898253767971388,
+              "marker_idx": 4
+            }
+          ],
+          "max_error_px": 0.4108387326878195,
+          "mean_error_px": 0.15388005431307503,
+          "missing_marker_views": 0,
+          "p95_error_px": 0.4086322376364302,
+          "reason": "ok",
+          "rigid_hint_marker_indices": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "rigid_hint_real_ray_count": 20,
+          "score": 0.979100010694077,
+          "score_source": "rigid_hint_quality",
+          "scored": true,
+          "unexpected_blob_count": 76
+        },
+        "generic_valid": true,
+        "invalid_points": 0,
+        "marker_indices": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "observed_markers": 5,
+        "pose": {
+          "observed_markers": 5,
+          "position": [
+            -0.45162081072362986,
+            -0.25520105765298123,
+            2.049754778453151
+          ],
+          "quaternion": [
+            0.8682826777895687,
+            0.015509376303910846,
+            0.01087099436777362,
+            0.4957080513555289
+          ],
+          "rms_error": 0.0014104506814985262,
+          "timestamp": 2025525,
+          "valid": true
+        },
+        "position_delta_m": 0.0,
+        "real_ray_count": 20,
+        "reason": "ok",
+        "rms_error_m": 0.0014104506814985262,
+        "rotation_delta_deg": 0.0,
+        "score": {
+          "camera_count": 4,
+          "coordinate_space": "raw_pixel",
+          "duplicate_assignment_count": 0,
+          "expected_marker_views": 20,
+          "match_gate_px": 12.0,
+          "matched_marker_views": 20,
+          "matched_observations": [
+            {
+              "blob_index": 14,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.048596613779316795,
+              "marker_idx": 0
+            },
+            {
+              "blob_index": 14,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.04803617135880958,
+              "marker_idx": 0
+            },
+            {
+              "blob_index": 15,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.4108387326878195,
+              "marker_idx": 1
+            },
+            {
+              "blob_index": 15,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.40593541035139874,
+              "marker_idx": 1
+            },
+            {
+              "blob_index": 16,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.05199779594577694,
+              "marker_idx": 2
+            },
+            {
+              "blob_index": 16,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.051393955855615944,
+              "marker_idx": 2
+            },
+            {
+              "blob_index": 17,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.1016652211491577,
+              "marker_idx": 3
+            },
+            {
+              "blob_index": 17,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.10048446887942379,
+              "marker_idx": 3
+            },
+            {
+              "blob_index": 18,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.1608696354437173,
+              "marker_idx": 4
+            },
+            {
+              "blob_index": 18,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.15898253767971388,
+              "marker_idx": 4
+            }
+          ],
+          "max_error_px": 0.4108387326878195,
+          "mean_error_px": 0.15388005431307503,
+          "missing_marker_views": 0,
+          "p95_error_px": 0.4086322376364302,
+          "reason": "ok",
+          "rigid_hint_marker_indices": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "rigid_hint_real_ray_count": 20,
+          "score": 0.979100010694077,
+          "score_source": "rigid_hint_quality",
+          "scored": true,
+          "unexpected_blob_count": 76
+        },
+        "score_delta": 0.0,
+        "selected_for_pose": true,
+        "selection_reason": "object_gating_enforced",
+        "valid": true,
+        "virtual_marker_count": 0,
+        "would_improve_score": false
+      },
+      "rms_error_m": 0.0014104506814985262,
+      "rolling_confidence": 0.9664508808283983,
+      "short_valid_count": 0,
+      "short_valid_ratio": 0.0,
+      "subset_hypothesis": {
+        "best": {},
+        "best_combined_score": 0.0,
+        "best_score": 0.0,
+        "candidate_count": 0,
+        "combined_margin": 0.0,
+        "diagnostics_only": true,
+        "enabled": false,
+        "evaluated": false,
+        "flip_risk_count": 0,
+        "generic_score": 0.0,
+        "margin": 0.0,
+        "pruned_candidate_count": 0,
+        "reason": "disabled_by_mode",
+        "rejected_by_2d_score": 0,
+        "rejected_by_ambiguity": 0,
+        "rejected_by_rms": 0,
+        "sampled": false,
+        "score_delta": 0.0,
+        "second": {},
+        "second_combined_score": 0.0,
+        "second_score": 0.0,
+        "subset_adoption_ready": false,
+        "thresholds": {
+          "adoption_min_valid_ratio": 0.98,
+          "ambiguous_subset_delta_m": 0.005,
+          "coverage_weight": 0.08,
+          "diagnostics_only": true,
+          "enabled": false,
+          "flip_penalty": 0.25,
+          "max_generic_observed_subsets": 24,
+          "max_hypotheses": 4096,
+          "max_observed_points": 10,
+          "max_p95_error_px": 8.0,
+          "max_rotation_delta_deg": 90.0,
+          "min_margin": 0.02,
+          "min_score": 0.65,
+          "prediction_gate_m": 0.08,
+          "source_priority_bonus": 0.04,
+          "subset_sizes": [
+            3,
+            4
+          ],
+          "temporal_penalty_weight": 0.18
+        },
+        "truncated": false,
+        "valid_candidate_count": 0,
+        "weighted_solve": {}
+      },
+      "total_frames": 240,
+      "track_count": 240,
+      "valid": true,
+      "virtual_marker_count": 0
+    },
+    "right_foot": {
+      "confidence": 1.0,
+      "current_lost_run_frames": 0,
+      "current_valid_run_frames": 240,
+      "hypothesis_margin": 0.0,
+      "invalid_reason": "",
+      "is_tracking": true,
+      "last_mode_reason": "continue_measurement_accepted",
+      "last_mode_transition": "boot->continue:boot_confirmed",
+      "last_pose_flip_deg": 0.0,
+      "last_pose_jump_m": 0.0,
+      "last_position_innovation_m": 0.0012788558432748382,
+      "last_rotation_innovation_deg": 2.0268689694243753,
+      "lost_frames": 0,
+      "max_pose_flip_deg": 0.0,
+      "max_pose_jump_m": 0.0,
+      "max_position_innovation_m": 0.00808318601259063,
+      "max_rotation_innovation_deg": 13.62065899669385,
+      "max_valid_run_frames": 240,
+      "mean_lost_run_frames": 0.0,
+      "mean_valid_run_frames": 240.0,
+      "mode": "continue",
+      "mode_consecutive_accepts": 240,
+      "mode_consecutive_rejects": 0,
+      "mode_frame_count": 237,
+      "mode_transition_count": 1,
+      "object_gating": {
+        "allow_single_ray": true,
+        "assigned_marker_views": 20,
+        "camera_count": 4,
+        "candidate_window_count": 20,
+        "confidence": 0.9702417010040005,
+        "diagnostics_only": false,
+        "duplicate_assignment_count": 0,
+        "enabled": true,
+        "enforced": true,
+        "evaluated": true,
+        "generic_fallback_blob_count": 76,
+        "marker_count": 5,
+        "markers_with_one_ray": 0,
+        "markers_with_two_or_more_rays": 5,
+        "mode": "continue",
+        "per_camera": {
+          "pi-cam-01": {
+            "assigned_marker_views": 5,
+            "assignments": [
+              {
+                "blob_index": 19,
+                "distance_px": 0.26356483336990677,
+                "marker_idx": 0
+              },
+              {
+                "blob_index": 20,
+                "distance_px": 0.854794908682616,
+                "marker_idx": 1
+              },
+              {
+                "blob_index": 21,
+                "distance_px": 0.4079908577978176,
+                "marker_idx": 2
+              },
+              {
+                "blob_index": 22,
+                "distance_px": 0.5131846064033259,
+                "marker_idx": 3
+              },
+              {
+                "blob_index": 23,
+                "distance_px": 0.7834404373498449,
+                "marker_idx": 4
+              }
+            ],
+            "blob_count": 24,
+            "projected_marker_count": 5,
+            "unmatched_marker_views": 0
+          },
+          "pi-cam-02": {
+            "assigned_marker_views": 5,
+            "assignments": [
+              {
+                "blob_index": 19,
+                "distance_px": 0.17158127631751943,
+                "marker_idx": 0
+              },
+              {
+                "blob_index": 20,
+                "distance_px": 0.5608435220748833,
+                "marker_idx": 1
+              },
+              {
+                "blob_index": 21,
+                "distance_px": 0.41571150794405753,
+                "marker_idx": 2
+              },
+              {
+                "blob_index": 22,
+                "distance_px": 0.4517453508506635,
+                "marker_idx": 3
+              },
+              {
+                "blob_index": 23,
+                "distance_px": 0.08582091558819795,
+                "marker_idx": 4
+              }
+            ],
+            "blob_count": 24,
+            "projected_marker_count": 5,
+            "unmatched_marker_views": 0
+          },
+          "pi-cam-03": {
+            "assigned_marker_views": 5,
+            "assignments": [
+              {
+                "blob_index": 19,
+                "distance_px": 0.532733686741848,
+                "marker_idx": 0
+              },
+              {
+                "blob_index": 20,
+                "distance_px": 0.3861852201680831,
+                "marker_idx": 1
+              },
+              {
+                "blob_index": 21,
+                "distance_px": 0.49123401399158506,
+                "marker_idx": 2
+              },
+              {
+                "blob_index": 22,
+                "distance_px": 0.653617552885491,
+                "marker_idx": 3
+              },
+              {
+                "blob_index": 23,
+                "distance_px": 0.3650120709770233,
+                "marker_idx": 4
+              }
+            ],
+            "blob_count": 24,
+            "projected_marker_count": 5,
+            "unmatched_marker_views": 0
+          },
+          "pi-cam-04": {
+            "assigned_marker_views": 5,
+            "assignments": [
+              {
+                "blob_index": 19,
+                "distance_px": 0.4139343948383629,
+                "marker_idx": 0
+              },
+              {
+                "blob_index": 20,
+                "distance_px": 0.6549183764827717,
+                "marker_idx": 1
+              },
+              {
+                "blob_index": 21,
+                "distance_px": 0.3627148270575924,
+                "marker_idx": 2
+              },
+              {
+                "blob_index": 22,
+                "distance_px": 0.25550649208214543,
+                "marker_idx": 3
+              },
+              {
+                "blob_index": 23,
+                "distance_px": 0.46707988872066053,
+                "marker_idx": 4
+              }
+            ],
+            "blob_count": 24,
+            "projected_marker_count": 5,
+            "unmatched_marker_views": 0
+          }
+        },
+        "per_marker_ray_count": [
+          4,
+          4,
+          4,
+          4,
+          4
+        ],
+        "pixel_gate_px": 4.25,
+        "prediction_valid": true,
+        "reason": "ok",
+        "single_ray_candidates": 0,
+        "thresholds": {
+          "activation_mode": "always",
+          "enforce": true,
+          "min_enforced_markers": 3,
+          "pixel_max": 4.25,
+          "pixel_min": 4.0,
+          "single_ray_confidence_min": 0.75
+        },
+        "unmatched_marker_views": 0
+      },
+      "observed_markers": 5,
+      "pose_continuity_guard": {
+        "angular_accel_deg_s2": 0.0,
+        "angular_velocity_deg_s": 0.0,
+        "enabled": true,
+        "enforced": true,
+        "evaluated": false,
+        "evaluated_count": 46,
+        "expected_marker_views": 0,
+        "expected_markers": 0,
+        "held_count": 0,
+        "held_prediction": false,
+        "held_rotation": false,
+        "matched_marker_views": 0,
+        "missing_marker_views": 0,
+        "observed_markers": 0,
+        "occluded": false,
+        "passed": true,
+        "position_innovation_m": 0.0,
+        "previous_angular_velocity_deg_s": 0.0,
+        "reason": "not_occluded",
+        "rotation_innovation_deg": 0.0,
+        "thresholds": {
+          "apply_to_occlusion_only": true,
+          "enabled": true,
+          "enforced": true,
+          "hold_prediction_on_reject": true,
+          "max_angular_accel_deg_s2": 200000.0,
+          "max_angular_velocity_deg_s": 2500.0,
+          "max_position_innovation_m": 0.08,
+          "max_rotation_innovation_deg": 90.0
+        },
+        "would_reject": false,
+        "would_reject_count": 0
+      },
+      "pose_jump_count": 0,
+      "position_continuity_guard": {
+        "clamped_count": 3,
+        "clamped_position": false,
+        "enabled": true,
+        "enforced": true,
+        "evaluated": false,
+        "evaluated_count": 46,
+        "expected_marker_views": 0,
+        "expected_markers": 0,
+        "matched_marker_views": 0,
+        "missing_marker_views": 0,
+        "observed_markers": 0,
+        "occluded": false,
+        "passed": true,
+        "position_accel_m_s2": 0.0,
+        "position_innovation_m": 0.0,
+        "position_velocity_m_s": 0.0,
+        "previous_velocity_m_s": 0.0,
+        "reason": "not_occluded",
+        "thresholds": {
+          "apply_to_occlusion_only": true,
+          "enabled": true,
+          "enforced": true,
+          "max_accel_m_s2": 60.0,
+          "max_velocity_m_s": 8.0
+        },
+        "would_reject": false,
+        "would_reject_count": 3
+      },
+      "prediction": {
+        "confidence": 0.9702417010040005,
+        "dt_s": 0.0,
+        "lost_frames": 0,
+        "position": [
+          0.5520885921186838,
+          0.18609483937187338,
+          2.0504619333035805
+        ],
+        "position_sigma_m": 0.0035951659799199893,
+        "quaternion": [
+          0.9506232364376234,
+          0.021323815943317753,
+          0.00483517531591936,
+          -0.3095761268220443
+        ],
+        "rotation_sigma_deg": 1.5951659799199893,
+        "timestamp": 2025525,
+        "valid": true,
+        "velocity": [
+          -0.1898583722413716,
+          -0.5840028492219097,
+          0.08436652169045314
+        ]
+      },
+      "reacquire_count": 0,
+      "reacquire_guard": {
+        "enabled": false,
+        "enforced": true,
+        "evaluated": false,
+        "evaluated_count": 0,
+        "passed": true,
+        "position_innovation_m": 0.0,
+        "reason": "not_guarded_mode",
+        "rejected_count": 0,
+        "rotation_innovation_deg": 0.0,
+        "score": {},
+        "thresholds": {
+          "allow_duplicate_assignment": false,
+          "max_mean_reprojection_error_px": 4.0,
+          "max_missing_marker_views": 2,
+          "max_p95_reprojection_error_px": 8.0,
+          "max_position_innovation_m": 0.25,
+          "max_rotation_innovation_deg": 136.0,
+          "min_matched_marker_views": 6,
+          "post_reacquire_continue_frames": 0
+        },
+        "would_reject": false,
+        "would_reject_count": 0
+      },
+      "real_ray_count": 5,
+      "reprojection_score": {
+        "camera_count": 4,
+        "coordinate_space": "raw_pixel",
+        "duplicate_assignment_count": 0,
+        "expected_marker_views": 20,
+        "match_gate_px": 12.0,
+        "matched_marker_views": 20,
+        "matched_observations": [
+          {
+            "blob_index": 19,
+            "camera_id": "pi-cam-01",
+            "error_px": 0.0656446350403605,
+            "marker_idx": 0
+          },
+          {
+            "blob_index": 19,
+            "camera_id": "pi-cam-04",
+            "error_px": 0.0660413100515766,
+            "marker_idx": 0
+          },
+          {
+            "blob_index": 20,
+            "camera_id": "pi-cam-01",
+            "error_px": 0.009263031133023694,
+            "marker_idx": 1
+          },
+          {
+            "blob_index": 20,
+            "camera_id": "pi-cam-04",
+            "error_px": 0.009307947824760384,
+            "marker_idx": 1
+          },
+          {
+            "blob_index": 21,
+            "camera_id": "pi-cam-01",
+            "error_px": 0.029504138924418267,
+            "marker_idx": 2
+          },
+          {
+            "blob_index": 21,
+            "camera_id": "pi-cam-04",
+            "error_px": 0.02967083840621993,
+            "marker_idx": 2
+          },
+          {
+            "blob_index": 22,
+            "camera_id": "pi-cam-01",
+            "error_px": 0.132934519900503,
+            "marker_idx": 3
+          },
+          {
+            "blob_index": 22,
+            "camera_id": "pi-cam-04",
+            "error_px": 0.13368478570853687,
+            "marker_idx": 3
+          },
+          {
+            "blob_index": 23,
+            "camera_id": "pi-cam-01",
+            "error_px": 0.18351670083173982,
+            "marker_idx": 4
+          },
+          {
+            "blob_index": 23,
+            "camera_id": "pi-cam-04",
+            "error_px": 0.18458550448740688,
+            "marker_idx": 4
+          }
+        ],
+        "max_error_px": 0.18458550448740688,
+        "mean_error_px": 0.0844153412308546,
+        "missing_marker_views": 0,
+        "p95_error_px": 0.1841045428423567,
+        "reason": "ok",
+        "rigid_hint_marker_indices": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "rigid_hint_real_ray_count": 20,
+        "score": 0.9883780661303541,
+        "score_source": "rigid_hint_quality",
+        "scored": true,
+        "unexpected_blob_count": 76
+      },
+      "rigid_hint_pose": {
+        "candidate_points": 5,
+        "diagnostics_only": false,
+        "enforced": true,
+        "evaluated": true,
+        "generic_rms_error_m": 0.0017132538134934457,
+        "generic_score": {
+          "camera_count": 4,
+          "coordinate_space": "raw_pixel",
+          "duplicate_assignment_count": 0,
+          "expected_marker_views": 20,
+          "match_gate_px": 12.0,
+          "matched_marker_views": 20,
+          "matched_observations": [
+            {
+              "blob_index": 19,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.0656446350403605,
+              "marker_idx": 0
+            },
+            {
+              "blob_index": 19,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.0660413100515766,
+              "marker_idx": 0
+            },
+            {
+              "blob_index": 20,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.009263031133023694,
+              "marker_idx": 1
+            },
+            {
+              "blob_index": 20,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.009307947824760384,
+              "marker_idx": 1
+            },
+            {
+              "blob_index": 21,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.029504138924418267,
+              "marker_idx": 2
+            },
+            {
+              "blob_index": 21,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.02967083840621993,
+              "marker_idx": 2
+            },
+            {
+              "blob_index": 22,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.132934519900503,
+              "marker_idx": 3
+            },
+            {
+              "blob_index": 22,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.13368478570853687,
+              "marker_idx": 3
+            },
+            {
+              "blob_index": 23,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.18351670083173982,
+              "marker_idx": 4
+            },
+            {
+              "blob_index": 23,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.18458550448740688,
+              "marker_idx": 4
+            }
+          ],
+          "max_error_px": 0.18458550448740688,
+          "mean_error_px": 0.0844153412308546,
+          "missing_marker_views": 0,
+          "p95_error_px": 0.1841045428423567,
+          "reason": "ok",
+          "rigid_hint_marker_indices": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "rigid_hint_real_ray_count": 20,
+          "score": 0.9883780661303541,
+          "score_source": "rigid_hint_quality",
+          "scored": true,
+          "unexpected_blob_count": 76
+        },
+        "generic_valid": true,
+        "invalid_points": 0,
+        "marker_indices": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "observed_markers": 5,
+        "pose": {
+          "observed_markers": 5,
+          "position": [
+            0.5520885921186838,
+            0.18609483937187338,
+            2.0504619333035805
+          ],
+          "quaternion": [
+            0.9506232364376234,
+            0.021323815943317753,
+            0.00483517531591936,
+            -0.3095761268220443
+          ],
+          "rms_error": 0.0017132538134934457,
+          "timestamp": 2025525,
+          "valid": true
+        },
+        "position_delta_m": 0.0,
+        "real_ray_count": 20,
+        "reason": "ok",
+        "rms_error_m": 0.0017132538134934457,
+        "rotation_delta_deg": 0.0,
+        "score": {
+          "camera_count": 4,
+          "coordinate_space": "raw_pixel",
+          "duplicate_assignment_count": 0,
+          "expected_marker_views": 20,
+          "match_gate_px": 12.0,
+          "matched_marker_views": 20,
+          "matched_observations": [
+            {
+              "blob_index": 19,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.0656446350403605,
+              "marker_idx": 0
+            },
+            {
+              "blob_index": 19,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.0660413100515766,
+              "marker_idx": 0
+            },
+            {
+              "blob_index": 20,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.009263031133023694,
+              "marker_idx": 1
+            },
+            {
+              "blob_index": 20,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.009307947824760384,
+              "marker_idx": 1
+            },
+            {
+              "blob_index": 21,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.029504138924418267,
+              "marker_idx": 2
+            },
+            {
+              "blob_index": 21,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.02967083840621993,
+              "marker_idx": 2
+            },
+            {
+              "blob_index": 22,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.132934519900503,
+              "marker_idx": 3
+            },
+            {
+              "blob_index": 22,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.13368478570853687,
+              "marker_idx": 3
+            },
+            {
+              "blob_index": 23,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.18351670083173982,
+              "marker_idx": 4
+            },
+            {
+              "blob_index": 23,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.18458550448740688,
+              "marker_idx": 4
+            }
+          ],
+          "max_error_px": 0.18458550448740688,
+          "mean_error_px": 0.0844153412308546,
+          "missing_marker_views": 0,
+          "p95_error_px": 0.1841045428423567,
+          "reason": "ok",
+          "rigid_hint_marker_indices": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "rigid_hint_real_ray_count": 20,
+          "score": 0.9883780661303541,
+          "score_source": "rigid_hint_quality",
+          "scored": true,
+          "unexpected_blob_count": 76
+        },
+        "score_delta": 0.0,
+        "selected_for_pose": true,
+        "selection_reason": "object_gating_enforced",
+        "valid": true,
+        "virtual_marker_count": 0,
+        "would_improve_score": false
+      },
+      "rms_error_m": 0.0017132538134934457,
+      "rolling_confidence": 0.9702417010040005,
+      "short_valid_count": 0,
+      "short_valid_ratio": 0.0,
+      "subset_hypothesis": {
+        "best": {},
+        "best_combined_score": 0.0,
+        "best_score": 0.0,
+        "candidate_count": 0,
+        "combined_margin": 0.0,
+        "diagnostics_only": true,
+        "enabled": false,
+        "evaluated": false,
+        "flip_risk_count": 0,
+        "generic_score": 0.0,
+        "margin": 0.0,
+        "pruned_candidate_count": 0,
+        "reason": "disabled_by_mode",
+        "rejected_by_2d_score": 0,
+        "rejected_by_ambiguity": 0,
+        "rejected_by_rms": 0,
+        "sampled": false,
+        "score_delta": 0.0,
+        "second": {},
+        "second_combined_score": 0.0,
+        "second_score": 0.0,
+        "subset_adoption_ready": false,
+        "thresholds": {
+          "adoption_min_valid_ratio": 0.98,
+          "ambiguous_subset_delta_m": 0.005,
+          "coverage_weight": 0.08,
+          "diagnostics_only": true,
+          "enabled": false,
+          "flip_penalty": 0.25,
+          "max_generic_observed_subsets": 24,
+          "max_hypotheses": 4096,
+          "max_observed_points": 10,
+          "max_p95_error_px": 8.0,
+          "max_rotation_delta_deg": 90.0,
+          "min_margin": 0.02,
+          "min_score": 0.65,
+          "prediction_gate_m": 0.08,
+          "source_priority_bonus": 0.04,
+          "subset_sizes": [
+            3,
+            4
+          ],
+          "temporal_penalty_weight": 0.18
+        },
+        "truncated": false,
+        "valid_candidate_count": 0,
+        "weighted_solve": {}
+      },
+      "total_frames": 240,
+      "track_count": 240,
+      "valid": true,
+      "virtual_marker_count": 0
+    },
+    "waist": {
+      "confidence": 1.0,
+      "current_lost_run_frames": 0,
+      "current_valid_run_frames": 240,
+      "hypothesis_margin": 0.0,
+      "invalid_reason": "",
+      "is_tracking": true,
+      "last_mode_reason": "continue_measurement_accepted",
+      "last_mode_transition": "boot->continue:boot_confirmed",
+      "last_pose_flip_deg": 0.0,
+      "last_pose_jump_m": 0.0,
+      "last_position_innovation_m": 0.0029441626460143156,
+      "last_rotation_innovation_deg": 2.472838406413159,
+      "lost_frames": 0,
+      "max_pose_flip_deg": 0.0,
+      "max_pose_jump_m": 0.0,
+      "max_position_innovation_m": 0.00811462398340629,
+      "max_rotation_innovation_deg": 11.411706395182605,
+      "max_valid_run_frames": 240,
+      "mean_lost_run_frames": 0.0,
+      "mean_valid_run_frames": 240.0,
+      "mode": "continue",
+      "mode_consecutive_accepts": 240,
+      "mode_consecutive_rejects": 0,
+      "mode_frame_count": 237,
+      "mode_transition_count": 1,
+      "object_gating": {
+        "allow_single_ray": true,
+        "assigned_marker_views": 20,
+        "camera_count": 4,
+        "candidate_window_count": 20,
+        "confidence": 0.9607694143476663,
+        "diagnostics_only": false,
+        "duplicate_assignment_count": 0,
+        "enabled": true,
+        "enforced": true,
+        "evaluated": true,
+        "generic_fallback_blob_count": 76,
+        "marker_count": 5,
+        "markers_with_one_ray": 0,
+        "markers_with_two_or_more_rays": 5,
+        "mode": "continue",
+        "per_camera": {
+          "pi-cam-01": {
+            "assigned_marker_views": 5,
+            "assignments": [
+              {
+                "blob_index": 4,
+                "distance_px": 0.3372978459110981,
+                "marker_idx": 0
+              },
+              {
+                "blob_index": 5,
+                "distance_px": 0.5995073465896613,
+                "marker_idx": 1
+              },
+              {
+                "blob_index": 6,
+                "distance_px": 0.6293685496262077,
+                "marker_idx": 2
+              },
+              {
+                "blob_index": 7,
+                "distance_px": 0.34507801691142087,
+                "marker_idx": 3
+              },
+              {
+                "blob_index": 8,
+                "distance_px": 0.5717814232530715,
+                "marker_idx": 4
+              }
+            ],
+            "blob_count": 24,
+            "projected_marker_count": 5,
+            "unmatched_marker_views": 0
+          },
+          "pi-cam-02": {
+            "assigned_marker_views": 5,
+            "assignments": [
+              {
+                "blob_index": 4,
+                "distance_px": 0.45329274980746154,
+                "marker_idx": 0
+              },
+              {
+                "blob_index": 5,
+                "distance_px": 0.1264064380192466,
+                "marker_idx": 1
+              },
+              {
+                "blob_index": 6,
+                "distance_px": 0.4821011330829506,
+                "marker_idx": 2
+              },
+              {
+                "blob_index": 7,
+                "distance_px": 0.12497525802726323,
+                "marker_idx": 3
+              },
+              {
+                "blob_index": 8,
+                "distance_px": 0.650287682730529,
+                "marker_idx": 4
+              }
+            ],
+            "blob_count": 24,
+            "projected_marker_count": 5,
+            "unmatched_marker_views": 0
+          },
+          "pi-cam-03": {
+            "assigned_marker_views": 5,
+            "assignments": [
+              {
+                "blob_index": 4,
+                "distance_px": 0.5097997095654153,
+                "marker_idx": 0
+              },
+              {
+                "blob_index": 5,
+                "distance_px": 0.25101733532658393,
+                "marker_idx": 1
+              },
+              {
+                "blob_index": 6,
+                "distance_px": 0.2597271698984535,
+                "marker_idx": 2
+              },
+              {
+                "blob_index": 7,
+                "distance_px": 0.4245356327508354,
+                "marker_idx": 3
+              },
+              {
+                "blob_index": 8,
+                "distance_px": 0.7344388630658375,
+                "marker_idx": 4
+              }
+            ],
+            "blob_count": 24,
+            "projected_marker_count": 5,
+            "unmatched_marker_views": 0
+          },
+          "pi-cam-04": {
+            "assigned_marker_views": 5,
+            "assignments": [
+              {
+                "blob_index": 4,
+                "distance_px": 0.5563668958010646,
+                "marker_idx": 0
+              },
+              {
+                "blob_index": 5,
+                "distance_px": 0.4968192255124016,
+                "marker_idx": 1
+              },
+              {
+                "blob_index": 6,
+                "distance_px": 0.5789190025308596,
+                "marker_idx": 2
+              },
+              {
+                "blob_index": 7,
+                "distance_px": 0.4604916337196725,
+                "marker_idx": 3
+              },
+              {
+                "blob_index": 8,
+                "distance_px": 0.9812218762049681,
+                "marker_idx": 4
+              }
+            ],
+            "blob_count": 24,
+            "projected_marker_count": 5,
+            "unmatched_marker_views": 0
+          }
+        },
+        "per_marker_ray_count": [
+          4,
+          4,
+          4,
+          4,
+          4
+        ],
+        "pixel_gate_px": 4.25,
+        "prediction_valid": true,
+        "reason": "ok",
+        "single_ray_candidates": 0,
+        "thresholds": {
+          "activation_mode": "always",
+          "enforce": true,
+          "min_enforced_markers": 3,
+          "pixel_max": 4.25,
+          "pixel_min": 4.0,
+          "single_ray_confidence_min": 0.75
+        },
+        "unmatched_marker_views": 0
+      },
+      "observed_markers": 5,
+      "pose_continuity_guard": {
+        "angular_accel_deg_s2": 0.0,
+        "angular_velocity_deg_s": 0.0,
+        "enabled": true,
+        "enforced": true,
+        "evaluated": false,
+        "evaluated_count": 82,
+        "expected_marker_views": 0,
+        "expected_markers": 0,
+        "held_count": 0,
+        "held_prediction": false,
+        "held_rotation": false,
+        "matched_marker_views": 0,
+        "missing_marker_views": 0,
+        "observed_markers": 0,
+        "occluded": false,
+        "passed": true,
+        "position_innovation_m": 0.0,
+        "previous_angular_velocity_deg_s": 0.0,
+        "reason": "not_occluded",
+        "rotation_innovation_deg": 0.0,
+        "thresholds": {
+          "apply_to_occlusion_only": true,
+          "enabled": true,
+          "enforced": true,
+          "hold_prediction_on_reject": true,
+          "max_angular_accel_deg_s2": 200000.0,
+          "max_angular_velocity_deg_s": 2500.0,
+          "max_position_innovation_m": 0.08,
+          "max_rotation_innovation_deg": 90.0
+        },
+        "would_reject": false,
+        "would_reject_count": 0
+      },
+      "pose_jump_count": 0,
+      "position_continuity_guard": {
+        "clamped_count": 8,
+        "clamped_position": false,
+        "enabled": true,
+        "enforced": true,
+        "evaluated": false,
+        "evaluated_count": 82,
+        "expected_marker_views": 0,
+        "expected_markers": 0,
+        "matched_marker_views": 0,
+        "missing_marker_views": 0,
+        "observed_markers": 0,
+        "occluded": false,
+        "passed": true,
+        "position_accel_m_s2": 0.0,
+        "position_innovation_m": 0.0,
+        "position_velocity_m_s": 0.0,
+        "previous_velocity_m_s": 0.0,
+        "reason": "not_occluded",
+        "thresholds": {
+          "apply_to_occlusion_only": true,
+          "enabled": true,
+          "enforced": true,
+          "max_accel_m_s2": 60.0,
+          "max_velocity_m_s": 8.0
+        },
+        "would_reject": false,
+        "would_reject_count": 8
+      },
+      "prediction": {
+        "confidence": 0.9599683141375968,
+        "dt_s": 0.0,
+        "lost_frames": 0,
+        "position": [
+          0.11340351435431387,
+          0.0727651778016039,
+          2.2192072636226636
+        ],
+        "position_sigma_m": 0.003800633717248065,
+        "quaternion": [
+          0.877035356497613,
+          0.0187685696596768,
+          -0.0010746350764571956,
+          0.4800578813075432
+        ],
+        "rotation_sigma_deg": 1.8006337172480649,
+        "timestamp": 2025525,
+        "valid": true,
+        "velocity": [
+          0.04171137144309064,
+          -0.20982205159601797,
+          0.2022645322733483
+        ]
+      },
+      "reacquire_count": 0,
+      "reacquire_guard": {
+        "enabled": false,
+        "enforced": true,
+        "evaluated": false,
+        "evaluated_count": 0,
+        "passed": true,
+        "position_innovation_m": 0.0,
+        "reason": "not_guarded_mode",
+        "rejected_count": 0,
+        "rotation_innovation_deg": 0.0,
+        "score": {},
+        "thresholds": {
+          "allow_duplicate_assignment": false,
+          "max_mean_reprojection_error_px": 4.0,
+          "max_missing_marker_views": 2,
+          "max_p95_reprojection_error_px": 8.0,
+          "max_position_innovation_m": 0.25,
+          "max_rotation_innovation_deg": 136.0,
+          "min_matched_marker_views": 6,
+          "post_reacquire_continue_frames": 0
+        },
+        "would_reject": false,
+        "would_reject_count": 0
+      },
+      "real_ray_count": 5,
+      "reprojection_score": {
+        "camera_count": 4,
+        "coordinate_space": "raw_pixel",
+        "duplicate_assignment_count": 0,
+        "expected_marker_views": 20,
+        "match_gate_px": 12.0,
+        "matched_marker_views": 20,
+        "matched_observations": [
+          {
+            "blob_index": 4,
+            "camera_id": "pi-cam-01",
+            "error_px": 0.09388188868529954,
+            "marker_idx": 0
+          },
+          {
+            "blob_index": 4,
+            "camera_id": "pi-cam-04",
+            "error_px": 0.09359484796889762,
+            "marker_idx": 0
+          },
+          {
+            "blob_index": 5,
+            "camera_id": "pi-cam-01",
+            "error_px": 0.25019055606223456,
+            "marker_idx": 1
+          },
+          {
+            "blob_index": 5,
+            "camera_id": "pi-cam-04",
+            "error_px": 0.2489906453226307,
+            "marker_idx": 1
+          },
+          {
+            "blob_index": 6,
+            "camera_id": "pi-cam-01",
+            "error_px": 0.10548546470850799,
+            "marker_idx": 2
+          },
+          {
+            "blob_index": 6,
+            "camera_id": "pi-cam-04",
+            "error_px": 0.10507957368722982,
+            "marker_idx": 2
+          },
+          {
+            "blob_index": 7,
+            "camera_id": "pi-cam-01",
+            "error_px": 0.1000274501982065,
+            "marker_idx": 3
+          },
+          {
+            "blob_index": 7,
+            "camera_id": "pi-cam-04",
+            "error_px": 0.09970046282138911,
+            "marker_idx": 3
+          },
+          {
+            "blob_index": 8,
+            "camera_id": "pi-cam-01",
+            "error_px": 0.16022029364136034,
+            "marker_idx": 4
+          },
+          {
+            "blob_index": 8,
+            "camera_id": "pi-cam-04",
+            "error_px": 0.15979871529700457,
+            "marker_idx": 4
+          }
+        ],
+        "max_error_px": 0.25019055606223456,
+        "mean_error_px": 0.1416969898392761,
+        "missing_marker_views": 0,
+        "p95_error_px": 0.24965059622941282,
+        "reason": "ok",
+        "rigid_hint_marker_indices": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "rigid_hint_real_ray_count": 20,
+        "score": 0.9807091135312906,
+        "score_source": "rigid_hint_quality",
+        "scored": true,
+        "unexpected_blob_count": 76
+      },
+      "rigid_hint_pose": {
+        "candidate_points": 5,
+        "diagnostics_only": false,
+        "enforced": true,
+        "evaluated": true,
+        "generic_rms_error_m": 0.0027469248586297046,
+        "generic_score": {
+          "camera_count": 4,
+          "coordinate_space": "raw_pixel",
+          "duplicate_assignment_count": 0,
+          "expected_marker_views": 20,
+          "match_gate_px": 12.0,
+          "matched_marker_views": 20,
+          "matched_observations": [
+            {
+              "blob_index": 4,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.09388188868529954,
+              "marker_idx": 0
+            },
+            {
+              "blob_index": 4,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.09359484796889762,
+              "marker_idx": 0
+            },
+            {
+              "blob_index": 5,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.25019055606223456,
+              "marker_idx": 1
+            },
+            {
+              "blob_index": 5,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.2489906453226307,
+              "marker_idx": 1
+            },
+            {
+              "blob_index": 6,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.10548546470850799,
+              "marker_idx": 2
+            },
+            {
+              "blob_index": 6,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.10507957368722982,
+              "marker_idx": 2
+            },
+            {
+              "blob_index": 7,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.1000274501982065,
+              "marker_idx": 3
+            },
+            {
+              "blob_index": 7,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.09970046282138911,
+              "marker_idx": 3
+            },
+            {
+              "blob_index": 8,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.16022029364136034,
+              "marker_idx": 4
+            },
+            {
+              "blob_index": 8,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.15979871529700457,
+              "marker_idx": 4
+            }
+          ],
+          "max_error_px": 0.25019055606223456,
+          "mean_error_px": 0.1416969898392761,
+          "missing_marker_views": 0,
+          "p95_error_px": 0.24965059622941282,
+          "reason": "ok",
+          "rigid_hint_marker_indices": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "rigid_hint_real_ray_count": 20,
+          "score": 0.9807091135312906,
+          "score_source": "rigid_hint_quality",
+          "scored": true,
+          "unexpected_blob_count": 76
+        },
+        "generic_valid": true,
+        "invalid_points": 0,
+        "marker_indices": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "observed_markers": 5,
+        "pose": {
+          "observed_markers": 5,
+          "position": [
+            0.11340351435431387,
+            0.0727651778016039,
+            2.2192072636226636
+          ],
+          "quaternion": [
+            0.8770353564976129,
+            0.018768569659676798,
+            -0.0010746350764571954,
+            0.4800578813075431
+          ],
+          "rms_error": 0.0027469248586297046,
+          "timestamp": 2025525,
+          "valid": true
+        },
+        "position_delta_m": 0.0,
+        "real_ray_count": 20,
+        "reason": "ok",
+        "rms_error_m": 0.0027469248586297046,
+        "rotation_delta_deg": 0.0,
+        "score": {
+          "camera_count": 4,
+          "coordinate_space": "raw_pixel",
+          "duplicate_assignment_count": 0,
+          "expected_marker_views": 20,
+          "match_gate_px": 12.0,
+          "matched_marker_views": 20,
+          "matched_observations": [
+            {
+              "blob_index": 4,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.09388188868529954,
+              "marker_idx": 0
+            },
+            {
+              "blob_index": 4,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.09359484796889762,
+              "marker_idx": 0
+            },
+            {
+              "blob_index": 5,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.25019055606223456,
+              "marker_idx": 1
+            },
+            {
+              "blob_index": 5,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.2489906453226307,
+              "marker_idx": 1
+            },
+            {
+              "blob_index": 6,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.10548546470850799,
+              "marker_idx": 2
+            },
+            {
+              "blob_index": 6,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.10507957368722982,
+              "marker_idx": 2
+            },
+            {
+              "blob_index": 7,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.1000274501982065,
+              "marker_idx": 3
+            },
+            {
+              "blob_index": 7,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.09970046282138911,
+              "marker_idx": 3
+            },
+            {
+              "blob_index": 8,
+              "camera_id": "pi-cam-01",
+              "error_px": 0.16022029364136034,
+              "marker_idx": 4
+            },
+            {
+              "blob_index": 8,
+              "camera_id": "pi-cam-04",
+              "error_px": 0.15979871529700457,
+              "marker_idx": 4
+            }
+          ],
+          "max_error_px": 0.25019055606223456,
+          "mean_error_px": 0.1416969898392761,
+          "missing_marker_views": 0,
+          "p95_error_px": 0.24965059622941282,
+          "reason": "ok",
+          "rigid_hint_marker_indices": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "rigid_hint_real_ray_count": 20,
+          "score": 0.9807091135312906,
+          "score_source": "rigid_hint_quality",
+          "scored": true,
+          "unexpected_blob_count": 76
+        },
+        "score_delta": 0.0,
+        "selected_for_pose": true,
+        "selection_reason": "object_gating_enforced",
+        "valid": true,
+        "virtual_marker_count": 0,
+        "would_improve_score": false
+      },
+      "rms_error_m": 0.0027469248586297046,
+      "rolling_confidence": 0.9599683141375968,
+      "short_valid_count": 0,
+      "short_valid_ratio": 0.0,
+      "subset_hypothesis": {
+        "best": {},
+        "best_combined_score": 0.0,
+        "best_score": 0.0,
+        "candidate_count": 0,
+        "combined_margin": 0.0,
+        "diagnostics_only": true,
+        "enabled": false,
+        "evaluated": false,
+        "flip_risk_count": 0,
+        "generic_score": 0.0,
+        "margin": 0.0,
+        "pruned_candidate_count": 0,
+        "reason": "disabled_by_mode",
+        "rejected_by_2d_score": 0,
+        "rejected_by_ambiguity": 0,
+        "rejected_by_rms": 0,
+        "sampled": false,
+        "score_delta": 0.0,
+        "second": {},
+        "second_combined_score": 0.0,
+        "second_score": 0.0,
+        "subset_adoption_ready": false,
+        "thresholds": {
+          "adoption_min_valid_ratio": 0.98,
+          "ambiguous_subset_delta_m": 0.005,
+          "coverage_weight": 0.08,
+          "diagnostics_only": true,
+          "enabled": false,
+          "flip_penalty": 0.25,
+          "max_generic_observed_subsets": 24,
+          "max_hypotheses": 4096,
+          "max_observed_points": 10,
+          "max_p95_error_px": 8.0,
+          "max_rotation_delta_deg": 90.0,
+          "min_margin": 0.02,
+          "min_score": 0.65,
+          "prediction_gate_m": 0.08,
+          "source_priority_bonus": 0.04,
+          "subset_sizes": [
+            3,
+            4
+          ],
+          "temporal_penalty_weight": 0.18
+        },
+        "truncated": false,
+        "valid_candidate_count": 0,
+        "weighted_solve": {}
+      },
+      "total_frames": 240,
+      "track_count": 240,
+      "valid": true,
+      "virtual_marker_count": 0
+    }
+  },
+  "valid_frame_ratio": {
+    "chest": 1.0,
+    "head": 1.0,
+    "left_foot": 1.0,
+    "right_foot": 1.0,
+    "waist": 1.0
+  },
+  "variant_metrics": {
+    "rigid_candidate_fallback_count": 0,
+    "rigid_candidate_fallback_reason_counts": {},
+    "rigid_candidate_separated_count": 1190,
+    "rigid_candidate_separation_enabled": true,
+    "subset_budget_exceeded_count": 0,
+    "subset_diagnostics_mode": "off",
+    "subset_max_hypotheses": 512,
+    "subset_sampled_count": 0,
+    "subset_skipped_count": 1200,
+    "subset_time_budget_ms": 6.0
+  },
+  "wrong_ownership_count": 0
+}

@@ -1,7 +1,19 @@
+- `docs/10_in_progress/sim_performance_upgrade_log_v2.md` now replaces old V2 PDCA tables with a restarted 10-cycle body-mounted PDCA using depth-scaled true blob sizes.
+- `tools/sim` now keeps body-mounted true blob areas camera-specific while gently scaling equivalent diameter by camera depth for closer marker views.
+- `docs/10_in_progress/sim_performance_upgrade_log_v2.md` now records a real-log blob area generation check and rejects the oversized first-pass distance/merge observation model.
+- `tools/sim` summaries now include `ownership_confusion_summary` for camera- and marker-level failure diagnosis.
+- `docs/10_in_progress/sim_performance_upgrade_log_v2.md` now defines the real-operation-like body-mounted sim premises and PDCA entry points before further optimization.
+- `tools/sim` now defaults body-mounted scenarios to the `cube_top_2_4m_aim_center` camera rig through `camera_rig_source=auto`.
+- `tools/sim` now adds a `cube_top_2_4m_aim_center` camera rig source for four cameras on a 2.4m cube top face aiming at the cube center.
+- `docs/10_in_progress/sim_performance_upgrade_log.md` now records a 5-cycle real-log-like body-mounted PDCA showing pose-guard speed tradeoffs and centroid-jitter failure boundaries.
+- `tools/sim` now makes `five_rigid_body_occlusion_v1` use real-log-like camera-specific true blob sizes, keeps random false blobs out of that scenario, and reports blob area summaries.
+- `docs/10_in_progress/sim_performance_upgrade_log.md` now records the current body-mounted PDCA 20 rerun against the GUI baseline, with aggregate sim results under `logs/sim/five_rigid_body_occlusion_v1/20260501_pdca20_body_mount_current/`.
+- `AGENTS.md` now defines PDCA as a fully sequential measure-read-decide loop instead of a preplanned AB batch.
+- `tools/sim` now accepts sim-only rigid-stabilization overrides and reports variant settings during PDCA runs.
 - `tools/cad/README.md` now documents the CadQuery fixture generator behavior, hole auto-placement, presets, custom JSON input, and key geometry options.
 - `tools/cad` base-hole auto-rotation now accounts for stem radius and hex-hole outer radius to avoid hole/stem overlap.
 - `tools/cad` now lifts generated marker centers by 7 mm so marker spheres stay above the base bottom for FDM printing.
-- `tools/sim` now makes `five_rigid_dance_swap_red_v1` stress cross-rigid mixing plus occlusion and motion without injecting false blobs, while GUI/live object gating keeps a 6 px spatial cap without rigid-side area filtering.
+- `tools/sim` now adds `five_rigid_body_occlusion_v1` for body-mounted 5-rigid stress and documents body-mounted PDCA results without changing the guarded GUI live path.
 - `tools/cad` now includes all five exploratory rigid-body presets and can export them as STL files in one command.
 - `tools/cad` now auto-rotates the paired base holes toward the clearest direction away from generated stems.
 - `tools/cad` now cuts a hexagonal base hole and an opposite round through-hole into the rigid fixture base.

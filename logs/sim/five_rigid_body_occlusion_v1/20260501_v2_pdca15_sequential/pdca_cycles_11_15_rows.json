@@ -1,0 +1,355 @@
+[
+  {
+    "cycle": 11,
+    "run": "cycle11_confusion_diag_noise0153125",
+    "change": "add ownership_confusion_summary, noise 0.153125px",
+    "hypothesis": "前回nextに従い、confusionのframe/rigid/marker/cameraをsummaryに出す",
+    "wrong_ownership_count": 0,
+    "marker_source_confusion_count": 2,
+    "min_valid_frame_ratio": 0.9958333333333333,
+    "valid_frame_ratio": {
+      "chest": 1.0,
+      "head": 1.0,
+      "left_foot": 1.0,
+      "right_foot": 1.0,
+      "waist": 0.9958333333333333
+    },
+    "pipeline_pair_p95_ms": 7.57925,
+    "rigid_p95_ms": 2.864416,
+    "geometry_p95_ms": 2.827416,
+    "ownership_confusion_summary": {
+      "by_camera": {
+        "pi-cam-04": 2
+      },
+      "by_expected_rigid": {
+        "left_foot": 2
+      },
+      "by_marker_pair": {
+        "left_foot:0<-left_foot:2": 1,
+        "left_foot:2<-left_foot:0": 1
+      },
+      "by_owner_rigid": {
+        "left_foot": 2
+      },
+      "by_type": {
+        "marker_confusion": 2
+      },
+      "count": 2,
+      "frames": [
+        72
+      ],
+      "sample_event_limit": 50,
+      "sample_events": [
+        {
+          "blob_index": 15,
+          "camera_id": "pi-cam-04",
+          "expected_marker": 0,
+          "expected_rigid": "left_foot",
+          "frame_index": 72,
+          "owner_marker": 2,
+          "owner_rigid": "left_foot",
+          "synthetic_blob_id": "610200:pi-cam-04:left_foot:2",
+          "timestamp": 610200,
+          "type": "marker_confusion"
+        },
+        {
+          "blob_index": 13,
+          "camera_id": "pi-cam-04",
+          "expected_marker": 2,
+          "expected_rigid": "left_foot",
+          "frame_index": 72,
+          "owner_marker": 0,
+          "owner_rigid": "left_foot",
+          "synthetic_blob_id": "610200:pi-cam-04:left_foot:0",
+          "timestamp": 610200,
+          "type": "marker_confusion"
+        }
+      ]
+    }
+  },
+  {
+    "cycle": 12,
+    "run": "projection_spacing_frame72",
+    "change": "inspect frame 72 pi-cam-04 left_foot projection spacing",
+    "hypothesis": "cycle 11で特定したleft_foot marker 0/2入れ替わりが投影近接なのか測る",
+    "result": "frame 72 pi-cam-04 left_foot marker 0/2 centers are 1.746px apart; small-blob p95 diameter is about 4.5px",
+    "decision": "confusion is a projected-marker degeneracy, but dropping close blobs needs validation",
+    "next": "try close-blob merge as a scenario realism experiment"
+  },
+  {
+    "cycle": 13,
+    "run": "cycle13_close_blob_merge_noise0153125",
+    "change": "body scenario close same-rigid blob merge, noise 0.153125px",
+    "hypothesis": "1.75px間隔の2 blobは実運用では別blobになりにくいので後続blobを落とす",
+    "wrong_ownership_count": 4,
+    "marker_source_confusion_count": 3,
+    "min_valid_frame_ratio": 0.8166666666666667,
+    "valid_frame_ratio": {
+      "chest": 1.0,
+      "head": 1.0,
+      "left_foot": 0.8166666666666667,
+      "right_foot": 1.0,
+      "waist": 0.9958333333333333
+    },
+    "pipeline_pair_p95_ms": 5.267334,
+    "rigid_p95_ms": 2.278792,
+    "geometry_p95_ms": 1.766959,
+    "ownership_confusion_summary": {
+      "by_camera": {
+        "pi-cam-04": 7
+      },
+      "by_expected_rigid": {
+        "left_foot": 6,
+        "waist": 1
+      },
+      "by_marker_pair": {
+        "left_foot:0<-waist:1": 3,
+        "left_foot:2<-left_foot:0": 3,
+        "waist:1<-left_foot:0": 1
+      },
+      "by_owner_rigid": {
+        "left_foot": 4,
+        "waist": 3
+      },
+      "by_type": {
+        "marker_confusion": 3,
+        "wrong_owner": 4
+      },
+      "count": 7,
+      "frames": [
+        196,
+        197,
+        198,
+        199
+      ],
+      "sample_event_limit": 50,
+      "sample_events": [
+        {
+          "blob_index": 6,
+          "camera_id": "pi-cam-04",
+          "expected_marker": 0,
+          "expected_rigid": "left_foot",
+          "frame_index": 196,
+          "owner_marker": 1,
+          "owner_rigid": "waist",
+          "synthetic_blob_id": "1661100:pi-cam-04:waist:1",
+          "timestamp": 1661100,
+          "type": "wrong_owner"
+        },
+        {
+          "blob_index": 15,
+          "camera_id": "pi-cam-04",
+          "expected_marker": 2,
+          "expected_rigid": "left_foot",
+          "frame_index": 196,
+          "owner_marker": 0,
+          "owner_rigid": "left_foot",
+          "synthetic_blob_id": "1661100:pi-cam-04:left_foot:0",
+          "timestamp": 1661100,
+          "type": "marker_confusion"
+        },
+        {
+          "blob_index": 6,
+          "camera_id": "pi-cam-04",
+          "expected_marker": 0,
+          "expected_rigid": "left_foot",
+          "frame_index": 197,
+          "owner_marker": 1,
+          "owner_rigid": "waist",
+          "synthetic_blob_id": "1669575:pi-cam-04:waist:1",
+          "timestamp": 1669575,
+          "type": "wrong_owner"
+        },
+        {
+          "blob_index": 15,
+          "camera_id": "pi-cam-04",
+          "expected_marker": 2,
+          "expected_rigid": "left_foot",
+          "frame_index": 197,
+          "owner_marker": 0,
+          "owner_rigid": "left_foot",
+          "synthetic_blob_id": "1669575:pi-cam-04:left_foot:0",
+          "timestamp": 1669575,
+          "type": "marker_confusion"
+        },
+        {
+          "blob_index": 6,
+          "camera_id": "pi-cam-04",
+          "expected_marker": 0,
+          "expected_rigid": "left_foot",
+          "frame_index": 198,
+          "owner_marker": 1,
+          "owner_rigid": "waist",
+          "synthetic_blob_id": "1678050:pi-cam-04:waist:1",
+          "timestamp": 1678050,
+          "type": "wrong_owner"
+        },
+        {
+          "blob_index": 15,
+          "camera_id": "pi-cam-04",
+          "expected_marker": 2,
+          "expected_rigid": "left_foot",
+          "frame_index": 198,
+          "owner_marker": 0,
+          "owner_rigid": "left_foot",
+          "synthetic_blob_id": "1678050:pi-cam-04:left_foot:0",
+          "timestamp": 1678050,
+          "type": "marker_confusion"
+        },
+        {
+          "blob_index": 15,
+          "camera_id": "pi-cam-04",
+          "expected_marker": 1,
+          "expected_rigid": "waist",
+          "frame_index": 199,
+          "owner_marker": 0,
+          "owner_rigid": "left_foot",
+          "synthetic_blob_id": "1686525:pi-cam-04:left_foot:0",
+          "timestamp": 1686525,
+          "type": "wrong_owner"
+        }
+      ]
+    }
+  },
+  {
+    "cycle": 14,
+    "run": "cycle14_revert_merge_noise0153125",
+    "change": "revert close blob merge, keep diagnostics, noise 0.153125px",
+    "hypothesis": "cycle 13が悪化したため変更を戻して元のfailureに戻るか確認する",
+    "wrong_ownership_count": 0,
+    "marker_source_confusion_count": 2,
+    "min_valid_frame_ratio": 0.9958333333333333,
+    "valid_frame_ratio": {
+      "chest": 1.0,
+      "head": 1.0,
+      "left_foot": 1.0,
+      "right_foot": 1.0,
+      "waist": 0.9958333333333333
+    },
+    "pipeline_pair_p95_ms": 4.958667,
+    "rigid_p95_ms": 1.83475,
+    "geometry_p95_ms": 1.805584,
+    "ownership_confusion_summary": {
+      "by_camera": {
+        "pi-cam-04": 2
+      },
+      "by_expected_rigid": {
+        "left_foot": 2
+      },
+      "by_marker_pair": {
+        "left_foot:0<-left_foot:2": 1,
+        "left_foot:2<-left_foot:0": 1
+      },
+      "by_owner_rigid": {
+        "left_foot": 2
+      },
+      "by_type": {
+        "marker_confusion": 2
+      },
+      "count": 2,
+      "frames": [
+        72
+      ],
+      "sample_event_limit": 50,
+      "sample_events": [
+        {
+          "blob_index": 15,
+          "camera_id": "pi-cam-04",
+          "expected_marker": 0,
+          "expected_rigid": "left_foot",
+          "frame_index": 72,
+          "owner_marker": 2,
+          "owner_rigid": "left_foot",
+          "synthetic_blob_id": "610200:pi-cam-04:left_foot:2",
+          "timestamp": 610200,
+          "type": "marker_confusion"
+        },
+        {
+          "blob_index": 13,
+          "camera_id": "pi-cam-04",
+          "expected_marker": 2,
+          "expected_rigid": "left_foot",
+          "frame_index": 72,
+          "owner_marker": 0,
+          "owner_rigid": "left_foot",
+          "synthetic_blob_id": "610200:pi-cam-04:left_foot:0",
+          "timestamp": 610200,
+          "type": "marker_confusion"
+        }
+      ]
+    }
+  },
+  {
+    "cycle": 15,
+    "run": "cycle15_seed46_noise0153125",
+    "change": "seed 46, noise 0.153125px",
+    "hypothesis": "境界がseed 45固有のnoise引きか確認する",
+    "wrong_ownership_count": 1,
+    "marker_source_confusion_count": 1,
+    "min_valid_frame_ratio": 0.8291666666666667,
+    "valid_frame_ratio": {
+      "chest": 1.0,
+      "head": 1.0,
+      "left_foot": 0.8291666666666667,
+      "right_foot": 1.0,
+      "waist": 0.9958333333333333
+    },
+    "pipeline_pair_p95_ms": 4.275584,
+    "rigid_p95_ms": 1.652042,
+    "geometry_p95_ms": 1.527542,
+    "ownership_confusion_summary": {
+      "by_camera": {
+        "pi-cam-02": 1,
+        "pi-cam-04": 1
+      },
+      "by_expected_rigid": {
+        "chest": 1,
+        "left_foot": 1
+      },
+      "by_marker_pair": {
+        "chest:4<-chest:0": 1,
+        "left_foot:0<-waist:1": 1
+      },
+      "by_owner_rigid": {
+        "chest": 1,
+        "waist": 1
+      },
+      "by_type": {
+        "marker_confusion": 1,
+        "wrong_owner": 1
+      },
+      "count": 2,
+      "frames": [
+        59,
+        199
+      ],
+      "sample_event_limit": 50,
+      "sample_events": [
+        {
+          "blob_index": 9,
+          "camera_id": "pi-cam-02",
+          "expected_marker": 4,
+          "expected_rigid": "chest",
+          "frame_index": 59,
+          "owner_marker": 0,
+          "owner_rigid": "chest",
+          "synthetic_blob_id": "500025:pi-cam-02:chest:0",
+          "timestamp": 500025,
+          "type": "marker_confusion"
+        },
+        {
+          "blob_index": 6,
+          "camera_id": "pi-cam-04",
+          "expected_marker": 0,
+          "expected_rigid": "left_foot",
+          "frame_index": 199,
+          "owner_marker": 1,
+          "owner_rigid": "waist",
+          "synthetic_blob_id": "1686525:pi-cam-04:waist:1",
+          "timestamp": 1686525,
+          "type": "wrong_owner"
+        }
+      ]
+    }
+  }
+]

@@ -10,3 +10,7 @@
 3. when adding or updating tests, do not leave overlapping temporary tests or stale duplicate test coverage; consolidate similar tests and remove leftovers in the same change
 4. Pi / GUI startup and shutdown procedure lives at `docs/30_procedure/pi_gui_start_stop.md`
 5. Multi-rigid simulator "sim" is a development tool under `tools/sim/`; usage and validation steps live at `docs/40_tools/multi_rigid_simulator.md`.
+6. "PDCA" means a fully sequential loop, not a preplanned batch AB run.
+   - Measure one baseline first.
+   - For each cycle, state the hypothesis, make the change, measure, read the result, and decide the next move from that result before starting the next cycle.
+   - Record per-cycle hypothesis, result, decision, and next action when producing PDCA logs.

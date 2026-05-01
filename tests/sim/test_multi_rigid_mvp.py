@@ -3,6 +3,8 @@ import math
 import sys
 from pathlib import Path
 
+import numpy as np
+
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
 assert SRC.exists(), f"Source path not found: {SRC}"
@@ -246,6 +248,171 @@ def test_five_rigid_hard_occlusion_adds_phase_false_blob_burst():
         for camera_id in DEFAULT_GENERATED_CAMERA_IDS
     }
     assert false_counts == {camera_id: 8 for camera_id in DEFAULT_GENERATED_CAMERA_IDS}
+
+
+def test_five_rigid_body_occlusion_models_body_mount_without_false_blobs():
+    config = MultiRigidScenarioConfig(
+        seed=35,
+        camera_ids=DEFAULT_GENERATED_CAMERA_IDS,
+        frames=260,
+        fps=118.0,
+        rigid_names=DEFAULT_BODY_RIGIDS,
+        scenario="five_rigid_body_occlusion_v1",
+        camera_rig_source="generated_4cam_from_1_2_intrinsics",
+        marker_layout=DESIGN_5MARKER_LAYOUT,
+        rigids_path="missing-test-rigids.json",
+        false_blobs_per_camera=4,
+    )
+    generator = MultiRigidFrameGenerator(
+        config,
+        patterns=load_mvp_patterns(config.rigids_path, marker_layout=config.marker_layout),
+        camera_params=load_camera_rig(config),
+    )
+
+    waist_frame = int(round((0.25 + 0.95) * config.fps))
+    foot_frame = int(round((0.25 + 1.24) * config.fps))
+    samples = {}
+    sample = None
+    for frame_index in range(foot_frame + 1):
+        sample = generator.next_sample()
+        if frame_index in {waist_frame, foot_frame}:
+            samples[frame_index] = sample
+
+    assert sample is not None
+    assert set(samples) == {waist_frame, foot_frame}
+    for checked_sample in samples.values():
+        owners = {entry.rigid_name for entry in checked_sample.ownership_ledger.values()}
+        assert owners <= set(DEFAULT_BODY_RIGIDS)
+        assert "__false__" not in owners
+        areas_by_camera = {
+            camera_id: [
+                float(blob["area"])
+                for blob in checked_sample.paired.frames[camera_id].blobs
+            ]
+            for camera_id in DEFAULT_GENERATED_CAMERA_IDS
+        }
+        assert all(min(values) > 0.0 for values in areas_by_camera.values())
+        assert max(areas_by_camera["pi-cam-02"]) > min(areas_by_camera["pi-cam-02"])
+        assert max(areas_by_camera["pi-cam-04"]) > min(areas_by_camera["pi-cam-04"])
+        assert sum(areas_by_camera["pi-cam-01"]) / len(areas_by_camera["pi-cam-01"]) > 26.0
+        assert sum(areas_by_camera["pi-cam-03"]) / len(areas_by_camera["pi-cam-03"]) > 26.0
+
+    waist_markers_by_camera = {
+        camera_id: {
+            int(marker_index)
+            for entry in samples[waist_frame].ownership_ledger.values()
+            if entry.camera_id == camera_id and entry.rigid_name == "waist"
+            for marker_index in (
+                [entry.marker_index]
+                if entry.marker_index is not None
+                else [
+                    merged_marker
+                    for merged_rigid, merged_marker in entry.merged_owners
+                    if merged_rigid == "waist"
+                ]
+            )
+        }
+        for camera_id in DEFAULT_GENERATED_CAMERA_IDS
+    }
+    waist_counts = [len(markers) for markers in waist_markers_by_camera.values()]
+    assert min(waist_counts) <= 3
+    assert max(waist_counts) >= 4
+
+    foot_counts_by_camera = {
+        camera_id: {
+            rigid_name: sum(
+                1
+                for entry in samples[foot_frame].ownership_ledger.values()
+                if entry.camera_id == camera_id
+                and (
+                    entry.rigid_name == rigid_name
+                    or any(
+                        merged_rigid == rigid_name
+                        for merged_rigid, _ in entry.merged_owners
+                    )
+                )
+            )
+            for rigid_name in ("left_foot", "right_foot")
+        }
+        for camera_id in DEFAULT_GENERATED_CAMERA_IDS
+    }
+    assert any(counts["left_foot"] < 5 for counts in foot_counts_by_camera.values())
+    assert any(counts["right_foot"] < 5 for counts in foot_counts_by_camera.values())
+    assert all(
+        counts["left_foot"] >= 3 or counts["right_foot"] >= 3
+        for counts in foot_counts_by_camera.values()
+    )
+
+
+def test_cube_top_camera_rig_aims_four_corners_at_center():
+    config = MultiRigidScenarioConfig(
+        seed=36,
+        camera_ids=DEFAULT_GENERATED_CAMERA_IDS,
+        frames=1,
+        rigid_names=DEFAULT_BODY_RIGIDS,
+        scenario="five_rigid_body_occlusion_v1",
+        camera_rig_source="cube_top_2_4m_aim_center",
+        marker_layout=DESIGN_5MARKER_LAYOUT,
+        rigids_path="missing-test-rigids.json",
+    )
+
+    camera_params = load_camera_rig(config)
+    target = [0.0, 0.0, 1.2]
+
+    assert set(camera_params) == set(DEFAULT_GENERATED_CAMERA_IDS)
+    for camera in camera_params.values():
+        center = -camera.rotation.T @ camera.translation
+        assert math.isclose(float(center[2]), 2.4, abs_tol=1e-9)
+        assert math.isclose(abs(float(center[0])), 1.2, abs_tol=1e-9)
+        assert math.isclose(abs(float(center[1])), 1.2, abs_tol=1e-9)
+        target_camera = camera.rotation @ target + camera.translation
+        assert math.isclose(float(target_camera[0]), 0.0, abs_tol=1e-9)
+        assert math.isclose(float(target_camera[1]), 0.0, abs_tol=1e-9)
+        assert float(target_camera[2]) > 0.0
+
+
+def test_body_occlusion_blob_area_gently_scales_with_camera_depth():
+    config = MultiRigidScenarioConfig(
+        seed=38,
+        camera_ids=DEFAULT_GENERATED_CAMERA_IDS,
+        frames=1,
+        rigid_names=DEFAULT_BODY_RIGIDS,
+        scenario="five_rigid_body_occlusion_v1",
+        camera_rig_source="cube_top_2_4m_aim_center",
+        marker_layout=DESIGN_5MARKER_LAYOUT,
+        rigids_path="missing-test-rigids.json",
+    )
+    camera_params = load_camera_rig(config)
+    generator = MultiRigidFrameGenerator(
+        config,
+        patterns=load_mvp_patterns(config.rigids_path, marker_layout=config.marker_layout),
+        camera_params=camera_params,
+    )
+
+    camera_id = "pi-cam-02"
+    reference_depth = generator._blob_reference_depth_by_camera[camera_id]
+    camera = camera_params[camera_id]
+
+    def world_point_at_depth(depth):
+        point_camera = np.array([0.0, 0.0, depth], dtype=np.float64)
+        return camera.rotation.T @ (point_camera - camera.translation)
+
+    near_area = generator._depth_adjusted_blob_area(
+        camera_id,
+        11.0,
+        world_point_at_depth(reference_depth * 0.70),
+    )
+    far_area = generator._depth_adjusted_blob_area(
+        camera_id,
+        11.0,
+        world_point_at_depth(reference_depth * 1.30),
+    )
+
+    assert near_area > 11.0
+    assert far_area < 11.0
+    assert near_area > far_area
+    assert near_area <= math.pi * (6.4 * 0.5) ** 2
+    assert far_area >= math.pi * (2.2 * 0.5) ** 2
 
 
 def test_five_rigid_swap_red_adds_cross_rigid_alias_blobs():
