@@ -111,6 +111,7 @@ PYTHONPATH=src .venv/bin/python -m tools.sim \
 - `position_error_m` / `rotation_error_deg`: GT pose との誤差 summary。
 - `position_delta_error_m` / `rotation_delta_error_deg`: 連続 valid pose の移動量 / 回転量が GT とどれだけずれたか。軽い jump の検出に使う。
 - `pipeline_pair_ms` / `rigid_ms` / `geometry_ms`: 処理時間 summary。
+- `performance_budget.warmup_trimmed`: 先頭 warmup samples を除いた `pipeline_pair_ms` / `rigid_ms` / `geometry_ms`。startup spike と sustained 性能を分けて読む。
 - `production_go_no_go`: 118fps budget の機械判定。
 - `scenario_go_no_go`: ownership、marker index、valid ratio、jump、118fps budget を合わせた scenario 判定。
 
@@ -168,6 +169,8 @@ PYTHONPATH=src .venv/bin/python -m tools.sim \
 `five_rigid_body_occlusion_v1` は既存 5-rigid anatomical spacing を保ちつつ、false blob ではなく人体側の遮蔽で camera 別 visibility を変える。座り気味の waist、torso yaw による胸・腰の片側遮蔽、足交差時の left / right foot visibility 変化を deterministic に入れるが、alias blob 注入や full body mesh は使わない。`--false-blobs-per-camera` を渡してもこの scenario では random false blob を追加しない。実ログに合わせて true blob area は camera 別に偏らせ、`pi-cam-02` / `pi-cam-04` 相当は等価 diameter 約 4px 前後の小さい blob を出す。body-mounted scenario では各 camera の初期 body depth 中央値を基準にし、近い marker ほど等価 diameter を緩やかに大きくする。red stress より現実ログ寄りの hard regression 入口として扱う。
 この scenario は pixel gate 定数の最適化には使わない。gate tuning は合成投影と seed に自己最適化しやすいため、実ログ replay を主評価にする。
 
+`five_rigid_body_occlusion_relaxed_v1` は同じ camera rig、body motion、camera-specific blob area を使う少し緩い兄弟 scenario。feet の遮蔽 camera 数と waist/head の遮蔽時間を減らし、hard fixture ではなく green regression / PDCA 入口として使う。
+
 body-mounted PDCA で GUI profile の一部だけを振る場合は、profile は `gui_live` のまま、sim 専用 override を付ける。
 
 ```bash
@@ -184,6 +187,12 @@ PYTHONPATH=src .venv/bin/python -m tools.sim \
 ```
 
 使える override は `--object-gating-pixel-max-px`、`--object-conditioned-gating`、`--object-gating-enforced`、`--pose-continuity-guard`、`--position-continuity-guard`。`summary.json` には `pipeline_variant`、`subset_diagnostics_mode`、`rigid_stabilization_overrides` が残る。
+
+body-mounted observation model の診断では、任意で `--body-mount-blob-merge-factor` を指定できる。`0.0` が既定で、近接 true blobs を merge しない。`0.25` などを指定すると、projected distance が `factor * average equivalent diameter` 以下の true blobs を area-weighted centroid の merged blob として出し、ledger の `merged_owners` に元 marker を残す。これは tracker 採用候補ではなく、近接 contour merge が valid / ownership に与える影響を見る PDCA 用 knob として扱う。
+
+GUI live の object gating は、同一 camera 内で近接している blob assignment を曖昧として落とす。既定の `object_gating_ambiguous_blob_min_separation_px` は `0.60px`、`object_gating_ambiguous_blob_diameter_overlap_ratio` は `0.30`。これは close marker / cross-rigid 近接時に marker swap や wrong owner を triangulation 入力へ入れないための guard で、`rigid_stabilization_overrides` から PDCA 用に変更できる。
+
+実ログ replay でも同じ guard は `--object-gating-ambiguous-blob-min-separation-px` と `--object-gating-ambiguous-blob-diameter-overlap-ratio` で変更できる。min separation に `0` を指定すると close-blob ambiguity drop を無効にできるため、採用前確認では OFF/ON 比較に使う。
 
 より厳しい deterministic stress をかける場合:
 

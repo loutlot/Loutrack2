@@ -142,6 +142,9 @@ def replay_tracking_log(
     reacquire_guard_max_rotation_deg: float = 136.0,
     object_gating_enforced: bool = False,
     object_gating_activation_mode: str = "always",
+    object_gating_ambiguous_blob_min_separation_px: float = 0.60,
+    object_gating_ambiguous_blob_diameter_overlap_ratio: float = 0.30,
+    object_gating_ambiguous_marker_assignment_min_margin_px: float = 0.35,
     pose_continuity_guard_enabled: bool = False,
     pose_continuity_guard_enforced: bool = False,
     pose_continuity_max_rotation_deg: float = 90.0,
@@ -185,6 +188,15 @@ def replay_tracking_log(
         object_gating_config=ObjectGatingConfig(
             enforce=bool(object_gating_enforced),
             activation_mode=str(object_gating_activation_mode),
+            ambiguous_blob_min_separation_px=float(
+                object_gating_ambiguous_blob_min_separation_px
+            ),
+            ambiguous_blob_diameter_overlap_ratio=float(
+                object_gating_ambiguous_blob_diameter_overlap_ratio
+            ),
+            ambiguous_marker_assignment_min_margin_px=float(
+                object_gating_ambiguous_marker_assignment_min_margin_px
+            ),
         ),
         pose_continuity_guard_config=PoseContinuityGuardConfig(
             enabled=bool(pose_continuity_guard_enabled),
@@ -554,6 +566,9 @@ def compare_object_gating_enforcement(
     end_received_at: Optional[str] = None,
     max_frames: Optional[int] = None,
     object_gating_activation_mode: str = "always",
+    object_gating_ambiguous_blob_min_separation_px: float = 0.60,
+    object_gating_ambiguous_blob_diameter_overlap_ratio: float = 0.30,
+    object_gating_ambiguous_marker_assignment_min_margin_px: float = 0.35,
 ) -> Dict[str, Any]:
     """Run diagnostics-only and enforced object-gating replays side by side."""
     diagnostics_only = replay_tracking_log(
@@ -564,6 +579,15 @@ def compare_object_gating_enforcement(
         epipolar_threshold_px=epipolar_threshold_px,
         object_gating_enforced=False,
         object_gating_activation_mode=object_gating_activation_mode,
+        object_gating_ambiguous_blob_min_separation_px=(
+            object_gating_ambiguous_blob_min_separation_px
+        ),
+        object_gating_ambiguous_blob_diameter_overlap_ratio=(
+            object_gating_ambiguous_blob_diameter_overlap_ratio
+        ),
+        object_gating_ambiguous_marker_assignment_min_margin_px=(
+            object_gating_ambiguous_marker_assignment_min_margin_px
+        ),
         start_timestamp_us=start_timestamp_us,
         end_timestamp_us=end_timestamp_us,
         start_received_at=start_received_at,
@@ -578,6 +602,15 @@ def compare_object_gating_enforcement(
         epipolar_threshold_px=epipolar_threshold_px,
         object_gating_enforced=True,
         object_gating_activation_mode=object_gating_activation_mode,
+        object_gating_ambiguous_blob_min_separation_px=(
+            object_gating_ambiguous_blob_min_separation_px
+        ),
+        object_gating_ambiguous_blob_diameter_overlap_ratio=(
+            object_gating_ambiguous_blob_diameter_overlap_ratio
+        ),
+        object_gating_ambiguous_marker_assignment_min_margin_px=(
+            object_gating_ambiguous_marker_assignment_min_margin_px
+        ),
         start_timestamp_us=start_timestamp_us,
         end_timestamp_us=end_timestamp_us,
         start_received_at=start_received_at,
@@ -1944,6 +1977,33 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--reacquire-guard-max-rotation-deg", type=float, default=136.0, help="Rotation innovation threshold used by the guard.")
     parser.add_argument("--object-gating-enforced", action="store_true", help="Replay with Phase 5 object-gating rigid-hint pose enforcement enabled.")
     parser.add_argument("--object-gating-activation-mode", default="always", choices=["always", "reacquire_only", "boot_or_reacquire"], help="Limit object-gating evaluation to selected tracker modes.")
+    parser.add_argument(
+        "--object-gating-ambiguous-blob-min-separation-px",
+        type=float,
+        default=0.60,
+        help=(
+            "Drop object-gating assignments whose blob is this close to another "
+            "same-camera blob; set 0 to disable."
+        ),
+    )
+    parser.add_argument(
+        "--object-gating-ambiguous-blob-diameter-overlap-ratio",
+        type=float,
+        default=0.30,
+        help=(
+            "Also drop assignments when blob centers are closer than this fraction "
+            "of their average equivalent diameter."
+        ),
+    )
+    parser.add_argument(
+        "--object-gating-ambiguous-marker-assignment-min-margin-px",
+        type=float,
+        default=0.35,
+        help=(
+            "Drop object-gating assignments when a blob is nearly as close to a "
+            "different marker projection."
+        ),
+    )
     parser.add_argument("--pose-continuity-guard-enabled", action="store_true", help="Evaluate low-marker temporal pose continuity guard diagnostics.")
     parser.add_argument("--pose-continuity-guard-enforced", action="store_true", help="Hold predicted pose when the low-marker continuity guard rejects a candidate.")
     parser.add_argument("--pose-continuity-max-rotation-deg", type=float, default=90.0, help="Maximum low-marker rotation innovation before continuity guard rejection.")
@@ -2102,6 +2162,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             end_received_at=args.end_received_at,
             max_frames=args.max_frames,
             object_gating_activation_mode=args.object_gating_activation_mode,
+            object_gating_ambiguous_blob_min_separation_px=args.object_gating_ambiguous_blob_min_separation_px,
+            object_gating_ambiguous_blob_diameter_overlap_ratio=args.object_gating_ambiguous_blob_diameter_overlap_ratio,
+            object_gating_ambiguous_marker_assignment_min_margin_px=args.object_gating_ambiguous_marker_assignment_min_margin_px,
         )
     else:
         summary = replay_tracking_log(
@@ -2117,6 +2180,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             reacquire_guard_max_rotation_deg=args.reacquire_guard_max_rotation_deg,
             object_gating_enforced=bool(args.object_gating_enforced),
             object_gating_activation_mode=args.object_gating_activation_mode,
+            object_gating_ambiguous_blob_min_separation_px=args.object_gating_ambiguous_blob_min_separation_px,
+            object_gating_ambiguous_blob_diameter_overlap_ratio=args.object_gating_ambiguous_blob_diameter_overlap_ratio,
+            object_gating_ambiguous_marker_assignment_min_margin_px=args.object_gating_ambiguous_marker_assignment_min_margin_px,
             pose_continuity_guard_enabled=bool(args.pose_continuity_guard_enabled),
             pose_continuity_guard_enforced=bool(args.pose_continuity_guard_enforced),
             pose_continuity_max_rotation_deg=args.pose_continuity_max_rotation_deg,

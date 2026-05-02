@@ -448,6 +448,25 @@ def test_compare_object_gating_enforcement_returns_go_no_go(
     assert comparison["object_gating_go_no_go"]["decision"] == "go_candidate"
 
 
+def test_replay_tracking_log_passes_ambiguous_blob_threshold(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(harness, "FrameReplay", _FakeReplay)
+    monkeypatch.setattr(harness, "TrackingPipeline", _FakePipeline)
+
+    harness.replay_tracking_log(
+        log_path=tmp_path / "tracking_gui.jsonl",
+        calibration_path=tmp_path,
+        patterns=["waist"],
+        object_gating_ambiguous_blob_min_separation_px=0.35,
+        object_gating_ambiguous_blob_diameter_overlap_ratio=0.40,
+    )
+
+    config = _FakePipeline.last_kwargs["object_gating_config"]
+    assert config.ambiguous_blob_min_separation_px == 0.35
+    assert config.ambiguous_blob_diameter_overlap_ratio == 0.40
+
+
 def test_compare_pipeline_variants_returns_ab_report(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(harness, "FrameReplay", _FakeReplay)
     monkeypatch.setattr(harness, "TrackingPipeline", _FakePipeline)

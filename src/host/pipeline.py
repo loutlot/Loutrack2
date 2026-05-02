@@ -171,6 +171,24 @@ def _empty_triangulation_quality() -> Dict[str, Any]:
 
 def _rigid_stabilization_configs(settings: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     payload = settings if isinstance(settings, dict) else {}
+    ambiguous_blob_min_separation_px = payload.get(
+        "object_gating_ambiguous_blob_min_separation_px",
+        0.60,
+    )
+    if ambiguous_blob_min_separation_px is None:
+        ambiguous_blob_min_separation_px = 0.60
+    ambiguous_blob_diameter_overlap_ratio = payload.get(
+        "object_gating_ambiguous_blob_diameter_overlap_ratio",
+        0.30,
+    )
+    if ambiguous_blob_diameter_overlap_ratio is None:
+        ambiguous_blob_diameter_overlap_ratio = 0.30
+    ambiguous_marker_assignment_min_margin_px = payload.get(
+        "object_gating_ambiguous_marker_assignment_min_margin_px",
+        0.35,
+    )
+    if ambiguous_marker_assignment_min_margin_px is None:
+        ambiguous_marker_assignment_min_margin_px = 0.35
     return {
         "reacquire_guard_config": ReacquireGuardConfig(
             shadow_enabled=bool(payload.get("reacquire_guard_shadow_enabled", True)),
@@ -188,6 +206,13 @@ def _rigid_stabilization_configs(settings: Optional[Dict[str, Any]]) -> Dict[str
             activation_mode=str(payload.get("object_gating_activation_mode", "always")),
             pixel_min=float(payload.get("object_gating_pixel_min_px", 4.0) or 4.0),
             pixel_max=float(payload.get("object_gating_pixel_max_px", 16.0) or 16.0),
+            ambiguous_blob_min_separation_px=float(ambiguous_blob_min_separation_px),
+            ambiguous_blob_diameter_overlap_ratio=float(
+                ambiguous_blob_diameter_overlap_ratio
+            ),
+            ambiguous_marker_assignment_min_margin_px=float(
+                ambiguous_marker_assignment_min_margin_px
+            ),
         ),
         "pose_continuity_guard_config": PoseContinuityGuardConfig(
             enabled=bool(payload.get("pose_continuity_guard_enabled", False)),

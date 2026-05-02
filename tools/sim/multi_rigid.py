@@ -45,11 +45,15 @@ DEFAULT_GENERATED_CAMERA_IDS = ("pi-cam-01", "pi-cam-02", "pi-cam-03", "pi-cam-0
 DEFAULT_MVP_RIGIDS = ("waist", "wand")
 DEFAULT_BODY_RIGIDS = ("head", "waist", "chest", "left_foot", "right_foot")
 DESIGN_5MARKER_LAYOUT = "design_5marker_seed"
+BODY_MOUNT_SCENARIOS = {
+    "five_rigid_body_occlusion_v1",
+    "five_rigid_body_occlusion_relaxed_v1",
+}
 FIVE_RIGID_BODY_SCENARIOS = {
     "five_rigid_dance_occlusion",
     "five_rigid_dance_hard_occlusion_v1",
     "five_rigid_dance_swap_red_v1",
-    "five_rigid_body_occlusion_v1",
+    *BODY_MOUNT_SCENARIOS,
 }
 
 
@@ -299,6 +303,18 @@ def _max_consecutive_over(values: list[float], threshold: float) -> int:
     return int(longest)
 
 
+def _warmup_trimmed_summary(
+    values: list[float],
+    *,
+    warmup_samples: int,
+) -> dict[str, Any]:
+    warmup = min(max(0, int(warmup_samples)), len(values))
+    trimmed = list(values[warmup:])
+    summary = _summary(trimmed)
+    summary["warmup_samples"] = int(warmup)
+    return summary
+
+
 def _gui_live_rigid_stabilization() -> dict[str, Any]:
     return {
         "object_conditioned_gating": True,
@@ -414,6 +430,7 @@ class MultiRigidScenarioConfig:
     body_interaction_profile: str = "waist_wand"
     max_velocity_mps: float = 0.8
     max_angular_velocity_deg_s: float = 180.0
+    body_mount_blob_merge_factor: float = 0.0
     marker_layout: str = "current_4marker"
     camera_rig_source: str = "auto"
     calibration_dir: str = "calibration"
@@ -739,7 +756,7 @@ class SimulatedRigidInstance:
                 "five_rigid_dance_swap_red_v1",
             }
             is_red = self.trajectory == "five_rigid_dance_swap_red_v1"
-            is_body_mount = self.trajectory == "five_rigid_body_occlusion_v1"
+            is_body_mount = self.trajectory in BODY_MOUNT_SCENARIOS
             omega = 2.0 * np.pi * (
                 0.90 if is_red else 0.82 if is_hard else 0.75
             )
@@ -825,6 +842,8 @@ class MultiRigidFrameGenerator:
             raise ValueError("noise_px must be >= 0")
         if config.false_blobs_per_camera < 0:
             raise ValueError("false_blobs_per_camera must be >= 0")
+        if config.body_mount_blob_merge_factor < 0.0:
+            raise ValueError("body_mount_blob_merge_factor must be >= 0")
         if not (0.0 <= config.marker_dropout_prob <= 1.0):
             raise ValueError("marker_dropout_prob must be in [0, 1]")
         if not (0.0 <= config.camera_dropout_prob <= 1.0):
@@ -877,7 +896,7 @@ class MultiRigidFrameGenerator:
                     "left_foot": np.array([0.00, -0.05, 2.05], dtype=np.float64),
                     "right_foot": np.array([0.10, 0.05, 2.05], dtype=np.float64),
                 }
-            elif self.config.scenario == "five_rigid_body_occlusion_v1":
+            elif self.config.scenario in BODY_MOUNT_SCENARIOS:
                 base_positions = {
                     "head": np.array([-0.22, 0.18, 2.46], dtype=np.float64),
                     "chest": np.array([0.20, -0.16, 2.34], dtype=np.float64),
@@ -922,6 +941,7 @@ class MultiRigidFrameGenerator:
                         "five_rigid_dance_hard_occlusion_v1",
                         "five_rigid_dance_swap_red_v1",
                         "five_rigid_body_occlusion_v1",
+                        "five_rigid_body_occlusion_relaxed_v1",
                     }
                     else self.config.trajectory_name
                 ),
@@ -956,7 +976,7 @@ class MultiRigidFrameGenerator:
 
     def _build_blob_reference_depths(self) -> dict[str, float]:
         if self.config.scenario not in {
-            "five_rigid_body_occlusion_v1",
+            *BODY_MOUNT_SCENARIOS,
             "five_rigid_dance_swap_red_v1",
         }:
             return {}
@@ -1001,7 +1021,7 @@ class MultiRigidFrameGenerator:
         marker_world: np.ndarray | None = None,
     ) -> float:
         if self.config.scenario in {
-            "five_rigid_body_occlusion_v1",
+            *BODY_MOUNT_SCENARIOS,
             "five_rigid_dance_swap_red_v1",
         }:
             return self._depth_adjusted_blob_area(
@@ -1011,6 +1031,141 @@ class MultiRigidFrameGenerator:
             )
         return float(max(4.0, pattern.marker_diameter * 3600.0))
 
+    def _merge_nearby_body_mount_blobs(
+        self,
+        *,
+        timestamp_us: int,
+        camera_id: str,
+        blobs: list[dict[str, float]],
+        ledger: dict[tuple[int, str, int], SyntheticBlobOwner],
+    ) -> tuple[list[dict[str, float]], dict[tuple[int, str, int], SyntheticBlobOwner]]:
+        merge_factor = float(self.config.body_mount_blob_merge_factor)
+        if (
+            self.config.scenario not in BODY_MOUNT_SCENARIOS
+            or merge_factor <= 0.0
+            or len(blobs) < 2
+        ):
+            return blobs, ledger
+
+        parent = list(range(len(blobs)))
+
+        def find(index: int) -> int:
+            while parent[index] != index:
+                parent[index] = parent[parent[index]]
+                index = parent[index]
+            return index
+
+        def union(left: int, right: int) -> None:
+            root_left = find(left)
+            root_right = find(right)
+            if root_left != root_right:
+                parent[root_right] = root_left
+
+        for left_index in range(len(blobs)):
+            left_owner = ledger.get((timestamp_us, camera_id, left_index))
+            if left_owner is None or left_owner.marker_index is None:
+                continue
+            left_blob = blobs[left_index]
+            left_diameter = float(
+                np.sqrt(max(0.0, 4.0 * float(left_blob.get("area", 0.0)) / np.pi))
+            )
+            for right_index in range(left_index + 1, len(blobs)):
+                right_owner = ledger.get((timestamp_us, camera_id, right_index))
+                if right_owner is None or right_owner.marker_index is None:
+                    continue
+                right_blob = blobs[right_index]
+                right_diameter = float(
+                    np.sqrt(max(0.0, 4.0 * float(right_blob.get("area", 0.0)) / np.pi))
+                )
+                dx = float(left_blob.get("x", 0.0)) - float(right_blob.get("x", 0.0))
+                dy = float(left_blob.get("y", 0.0)) - float(right_blob.get("y", 0.0))
+                distance_px = float(np.hypot(dx, dy))
+                merge_distance_px = merge_factor * 0.5 * (left_diameter + right_diameter)
+                if distance_px <= merge_distance_px:
+                    union(left_index, right_index)
+
+        groups: dict[int, list[int]] = {}
+        for index in range(len(blobs)):
+            groups.setdefault(find(index), []).append(index)
+
+        if all(len(indices) == 1 for indices in groups.values()):
+            return blobs, ledger
+
+        merged_blobs: list[dict[str, float]] = []
+        merged_ledger: dict[tuple[int, str, int], SyntheticBlobOwner] = {
+            key: owner
+            for key, owner in ledger.items()
+            if not (key[0] == timestamp_us and key[1] == camera_id)
+        }
+        for indices in groups.values():
+            new_index = len(merged_blobs)
+            if len(indices) == 1:
+                old_index = indices[0]
+                blob = dict(blobs[old_index])
+                owner = ledger.get((timestamp_us, camera_id, old_index))
+                merged_blobs.append(blob)
+                if owner is not None:
+                    merged_ledger[(timestamp_us, camera_id, new_index)] = replace(
+                        owner,
+                        emitted_blob_index=new_index,
+                    )
+                continue
+
+            area_values = np.asarray(
+                [max(0.0, float(blobs[index].get("area", 0.0))) for index in indices],
+                dtype=np.float64,
+            )
+            weight_sum = float(np.sum(area_values))
+            if weight_sum <= 0.0:
+                area_values = np.ones(len(indices), dtype=np.float64)
+                weight_sum = float(len(indices))
+            xs = np.asarray([float(blobs[index].get("x", 0.0)) for index in indices])
+            ys = np.asarray([float(blobs[index].get("y", 0.0)) for index in indices])
+            merged_blob = {
+                "x": float(np.sum(xs * area_values) / weight_sum),
+                "y": float(np.sum(ys * area_values) / weight_sum),
+                "area": float(weight_sum),
+            }
+            merged_blobs.append(merged_blob)
+
+            owners = [
+                ledger[(timestamp_us, camera_id, index)]
+                for index in indices
+                if (timestamp_us, camera_id, index) in ledger
+            ]
+            primary = max(
+                owners,
+                key=lambda owner: float(blobs[owner.emitted_blob_index].get("area", 0.0)),
+            )
+            merged_owner_pairs = {
+                (str(owner.rigid_name), int(owner.marker_index))
+                for owner in owners
+                if owner.marker_index is not None
+            }
+            for owner in owners:
+                merged_owner_pairs.update(
+                    (str(rigid_name), int(marker_index))
+                    for rigid_name, marker_index in owner.merged_owners
+                )
+            merged_ledger[(timestamp_us, camera_id, new_index)] = SyntheticBlobOwner(
+                timestamp=timestamp_us,
+                camera_id=camera_id,
+                emitted_blob_index=new_index,
+                rigid_name=str(primary.rigid_name),
+                marker_index=(
+                    None
+                    if primary.marker_index is None
+                    else int(primary.marker_index)
+                ),
+                synthetic_blob_id=(
+                    f"{timestamp_us}:{camera_id}:merged:"
+                    + "+".join(str(index) for index in indices)
+                ),
+                merged_owners=tuple(sorted(merged_owner_pairs)),
+            )
+
+        return merged_blobs, merged_ledger
+
     def _hard_scenario_false_blobs_per_camera(
         self,
         frame_index: int,
@@ -1019,13 +1174,13 @@ class MultiRigidFrameGenerator:
         if self.config.scenario not in {
             "five_rigid_dance_hard_occlusion_v1",
             "five_rigid_dance_swap_red_v1",
-            "five_rigid_body_occlusion_v1",
+            *BODY_MOUNT_SCENARIOS,
         }:
             return int(self.config.false_blobs_per_camera)
         _, cycle_t = self._hard_occlusion_cycle_time(frame_index)
         if self.config.scenario in {
             "five_rigid_dance_swap_red_v1",
-            "five_rigid_body_occlusion_v1",
+            *BODY_MOUNT_SCENARIOS,
         }:
             return 0
         else:
@@ -1039,34 +1194,49 @@ class MultiRigidFrameGenerator:
         frame_index: int,
         camera_id: str,
     ) -> bool:
-        if self.config.scenario == "five_rigid_body_occlusion_v1":
+        if self.config.scenario in BODY_MOUNT_SCENARIOS:
             cycle_index, cycle_t = self._hard_occlusion_cycle_time(frame_index)
             if cycle_t < 0.0:
                 return False
             rank = self._camera_rank(camera_id)
             even_cycle = cycle_index % 2 == 0
+            relaxed = self.config.scenario == "five_rigid_body_occlusion_relaxed_v1"
 
             # Approximate body-mounted optics without a full body mesh: front
             # markers stay plausible, while body-side markers disappear from
             # camera groups as torso yaw, sitting, and leg crossing change.
-            if rigid_name in {"chest", "waist"} and 0.22 <= cycle_t < 0.64:
+            torso_start = 0.24 if relaxed else 0.22
+            torso_end = 0.60 if relaxed else 0.64
+            if rigid_name in {"chest", "waist"} and torso_start <= cycle_t < torso_end:
                 offset = 0 if rigid_name == "waist" else 1
                 return marker_index == ((rank + offset + cycle_index) % 5)
 
-            if rigid_name == "waist" and 0.88 <= cycle_t < 1.14:
+            waist_start = 0.92 if relaxed else 0.88
+            waist_end = 1.10 if relaxed else 1.14
+            if rigid_name == "waist" and waist_start <= cycle_t < waist_end:
                 if rank == 0:
                     return marker_index in ({1, 4} if even_cycle else {0, 3})
                 if rank == 1:
+                    if relaxed:
+                        return marker_index == (4 if even_cycle else 3)
                     return marker_index in ({0, 4} if even_cycle else {1, 3})
-                if rank == 2:
+                if rank == 2 and not relaxed:
                     return marker_index == (4 if even_cycle else 0)
 
-            if rigid_name in {"left_foot", "right_foot"} and 1.06 <= cycle_t < 1.44:
+            foot_start = 1.10 if relaxed else 1.06
+            foot_end = 1.36 if relaxed else 1.44
+            if rigid_name in {"left_foot", "right_foot"} and foot_start <= cycle_t < foot_end:
                 if rigid_name == "left_foot":
+                    if relaxed:
+                        return rank == 0 and marker_index == (1 if even_cycle else 4)
                     return rank in {0, 1} and marker_index == (1 if even_cycle else 4)
+                if relaxed:
+                    return rank == 3 and marker_index == (3 if even_cycle else 0)
                 return rank in {2, 3} and marker_index == (3 if even_cycle else 0)
 
-            if rigid_name == "head" and 1.60 <= cycle_t < 1.84:
+            head_start = 1.64 if relaxed else 1.60
+            head_end = 1.80 if relaxed else 1.84
+            if rigid_name == "head" and head_start <= cycle_t < head_end:
                 if rank in {1, 3}:
                     return marker_index == (4 if even_cycle else 3)
                 return marker_index == (3 if even_cycle else 2)
@@ -1405,6 +1575,12 @@ class MultiRigidFrameGenerator:
                     synthetic_blob_id=f"{timestamp_us}:{camera_id}:false:{false_index}",
                 )
 
+            blobs, ledger = self._merge_nearby_body_mount_blobs(
+                timestamp_us=timestamp_us,
+                camera_id=camera_id,
+                blobs=blobs,
+                ledger=ledger,
+            )
             frames[camera_id] = Frame(
                 camera_id=camera_id,
                 timestamp=timestamp_us,
@@ -1597,6 +1773,7 @@ def run_multi_rigid_scenario(
     processed_samples = 0
     pipeline_pair_last_ms_values: list[float] = []
     rigid_last_ms_values: list[float] = []
+    geometry_last_ms_values: list[float] = []
     ownership_confusion_events: list[dict[str, Any]] = []
     emitted_blob_owners: list[SyntheticBlobOwner] = []
     blob_area_values: list[float] = []
@@ -1631,6 +1808,7 @@ def run_multi_rigid_scenario(
             _latest_pipeline_stage_ms(pipeline, "pipeline_pair_ms")
         )
         rigid_last_ms_values.append(_latest_pipeline_stage_ms(pipeline, "rigid_ms"))
+        geometry_last_ms_values.append(_latest_pipeline_stage_ms(pipeline, "triangulation_ms"))
         snapshot = pipeline.get_latest_triangulation_snapshot()
         wrong, confused, events = _ownership_confusion_from_snapshot(
             snapshot,
@@ -1703,6 +1881,23 @@ def run_multi_rigid_scenario(
         pipeline_pair_last_ms_values,
         pipeline_pair_over_budget_threshold_ms,
     )
+    warmup_trim_samples = min(30, max(0, processed_samples // 8))
+    warmup_trimmed_pipeline_pair_ms = _warmup_trimmed_summary(
+        pipeline_pair_last_ms_values,
+        warmup_samples=warmup_trim_samples,
+    )
+    warmup_trimmed_rigid_ms = _warmup_trimmed_summary(
+        rigid_last_ms_values,
+        warmup_samples=warmup_trim_samples,
+    )
+    warmup_trimmed_geometry_ms = _warmup_trimmed_summary(
+        geometry_last_ms_values,
+        warmup_samples=warmup_trim_samples,
+    )
+    warmup_trimmed_pipeline_pair_over_budget_max_run = _max_consecutive_over(
+        pipeline_pair_last_ms_values[warmup_trim_samples:],
+        pipeline_pair_over_budget_threshold_ms,
+    )
     production_go_no_go = {
         "pipeline_pair_p95_le_6ms": float(pipeline_pair_ms.get("p95", 0.0) or 0.0) <= 6.0,
         "pipeline_pair_max_le_8_475ms": (
@@ -1772,6 +1967,7 @@ def run_multi_rigid_scenario(
         "rigid_stabilization_overrides": dict(config.rigid_stabilization_overrides or {}),
         "camera_ids": list(camera_params),
         "rigid_names": list(config.rigid_names),
+        "body_mount_blob_merge_factor": float(config.body_mount_blob_merge_factor),
         "frames_requested": int(config.frames),
         "frames_processed": int(status.get("frames_processed", processed_samples) or 0),
         "poses_estimated": int(status.get("poses_estimated", 0) or 0),
@@ -1816,6 +2012,16 @@ def run_multi_rigid_scenario(
             ),
             "pipeline_pair_last_ms": _summary(pipeline_pair_last_ms_values),
             "rigid_last_ms": _summary(rigid_last_ms_values),
+            "geometry_last_ms": _summary(geometry_last_ms_values),
+            "warmup_trim_samples": int(warmup_trim_samples),
+            "warmup_trimmed": {
+                "pipeline_pair_ms": warmup_trimmed_pipeline_pair_ms,
+                "rigid_ms": warmup_trimmed_rigid_ms,
+                "geometry_ms": warmup_trimmed_geometry_ms,
+                "pipeline_pair_over_8_475ms_max_consecutive": int(
+                    warmup_trimmed_pipeline_pair_over_budget_max_run
+                ),
+            },
         },
         "production_go_no_go": production_go_no_go,
         "scenario_go_no_go": scenario_go_no_go,
@@ -2314,6 +2520,24 @@ def main(argv: list[str] | None = None) -> int:
         help="Override object-gating enforcement true/false for sim PDCA",
     )
     parser.add_argument(
+        "--object-gating-ambiguous-blob-min-separation-px",
+        type=float,
+        default=None,
+        help="Override object-gating ambiguous nearby-blob rejection distance for sim PDCA",
+    )
+    parser.add_argument(
+        "--object-gating-ambiguous-blob-diameter-overlap-ratio",
+        type=float,
+        default=None,
+        help="Override object-gating close-blob rejection as a fraction of average blob diameter",
+    )
+    parser.add_argument(
+        "--object-gating-ambiguous-marker-assignment-min-margin-px",
+        type=float,
+        default=None,
+        help="Override object-gating marker-vs-marker assignment margin for sim PDCA",
+    )
+    parser.add_argument(
         "--pose-continuity-guard",
         type=_parse_bool_override,
         default=None,
@@ -2326,6 +2550,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Override position continuity guard enabled/enforced true/false for sim PDCA",
     )
     parser.add_argument("--noise-px", type=float, default=0.0, help="Pixel noise stddev")
+    parser.add_argument(
+        "--body-mount-blob-merge-factor",
+        type=float,
+        default=0.0,
+        help="Merge close true blobs in body-mounted sim when distance <= factor * average equivalent diameter",
+    )
     parser.add_argument("--marker-dropout", type=float, default=0.0, help="Marker dropout probability [0,1]")
     parser.add_argument("--camera-dropout", type=float, default=0.0, help="Camera dropout probability [0,1]")
     parser.add_argument("--mode", type=str, default="inprocess", choices=["inprocess", "udp"], help="Execution mode: inprocess or udp")
@@ -2362,6 +2592,8 @@ def main(argv: list[str] | None = None) -> int:
         return _err("--camera-dropout must be in [0, 1]")
     if args.noise_px < 0.0:
         return _err("--noise-px must be >= 0")
+    if args.body_mount_blob_merge_factor < 0.0:
+        return _err("--body-mount-blob-merge-factor must be >= 0")
     if args.false_blobs_per_camera < 0:
         return _err("--false-blobs-per-camera must be >= 0")
     if (
@@ -2369,6 +2601,21 @@ def main(argv: list[str] | None = None) -> int:
         and args.object_gating_pixel_max_px <= 0.0
     ):
         return _err("--object-gating-pixel-max-px must be > 0")
+    if (
+        args.object_gating_ambiguous_blob_min_separation_px is not None
+        and args.object_gating_ambiguous_blob_min_separation_px < 0.0
+    ):
+        return _err("--object-gating-ambiguous-blob-min-separation-px must be >= 0")
+    if (
+        args.object_gating_ambiguous_blob_diameter_overlap_ratio is not None
+        and args.object_gating_ambiguous_blob_diameter_overlap_ratio < 0.0
+    ):
+        return _err("--object-gating-ambiguous-blob-diameter-overlap-ratio must be >= 0")
+    if (
+        args.object_gating_ambiguous_marker_assignment_min_margin_px is not None
+        and args.object_gating_ambiguous_marker_assignment_min_margin_px < 0.0
+    ):
+        return _err("--object-gating-ambiguous-marker-assignment-min-margin-px must be >= 0")
     if args.trajectory not in {"static", "linear", "circle"}:
         return _err("--trajectory must be one of: static, linear, circle")
 
@@ -2403,6 +2650,18 @@ def main(argv: list[str] | None = None) -> int:
             rigid_stabilization_overrides["object_gating_enforced"] = bool(
                 args.object_gating_enforced
             )
+        if args.object_gating_ambiguous_blob_min_separation_px is not None:
+            rigid_stabilization_overrides[
+                "object_gating_ambiguous_blob_min_separation_px"
+            ] = float(args.object_gating_ambiguous_blob_min_separation_px)
+        if args.object_gating_ambiguous_blob_diameter_overlap_ratio is not None:
+            rigid_stabilization_overrides[
+                "object_gating_ambiguous_blob_diameter_overlap_ratio"
+            ] = float(args.object_gating_ambiguous_blob_diameter_overlap_ratio)
+        if args.object_gating_ambiguous_marker_assignment_min_margin_px is not None:
+            rigid_stabilization_overrides[
+                "object_gating_ambiguous_marker_assignment_min_margin_px"
+            ] = float(args.object_gating_ambiguous_marker_assignment_min_margin_px)
         if args.pose_continuity_guard is not None:
             rigid_stabilization_overrides["pose_continuity_guard_enabled"] = bool(
                 args.pose_continuity_guard
@@ -2428,6 +2687,9 @@ def main(argv: list[str] | None = None) -> int:
                     scenario=str(args.scenario),
                     trajectory_name=str(args.trajectory),
                     noise_px=float(args.noise_px),
+                    body_mount_blob_merge_factor=float(
+                        args.body_mount_blob_merge_factor
+                    ),
                     false_blobs_per_camera=int(args.false_blobs_per_camera),
                     marker_dropout_prob=float(args.marker_dropout),
                     camera_dropout_prob=float(args.camera_dropout),

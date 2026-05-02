@@ -344,6 +344,50 @@ def test_five_rigid_body_occlusion_models_body_mount_without_false_blobs():
     )
 
 
+def test_relaxed_body_occlusion_keeps_foot_markers_visible_in_more_cameras():
+    hard_config = MultiRigidScenarioConfig(
+        seed=35,
+        camera_ids=DEFAULT_GENERATED_CAMERA_IDS,
+        frames=260,
+        fps=118.0,
+        rigid_names=DEFAULT_BODY_RIGIDS,
+        scenario="five_rigid_body_occlusion_v1",
+        camera_rig_source="cube_top_2_4m_aim_center",
+        marker_layout=DESIGN_5MARKER_LAYOUT,
+        rigids_path="missing-test-rigids.json",
+    )
+    relaxed_config = MultiRigidScenarioConfig(
+        seed=35,
+        camera_ids=DEFAULT_GENERATED_CAMERA_IDS,
+        frames=260,
+        fps=118.0,
+        rigid_names=DEFAULT_BODY_RIGIDS,
+        scenario="five_rigid_body_occlusion_relaxed_v1",
+        camera_rig_source="cube_top_2_4m_aim_center",
+        marker_layout=DESIGN_5MARKER_LAYOUT,
+        rigids_path="missing-test-rigids.json",
+    )
+
+    def foot_visible_count(config):
+        generator = MultiRigidFrameGenerator(
+            config,
+            patterns=load_mvp_patterns(config.rigids_path, marker_layout=config.marker_layout),
+            camera_params=load_camera_rig(config),
+        )
+        target_frame = int(round((0.25 + 1.24) * config.fps))
+        sample = None
+        for _ in range(target_frame + 1):
+            sample = generator.next_sample()
+        assert sample is not None
+        return sum(
+            1
+            for entry in sample.ownership_ledger.values()
+            if entry.rigid_name in {"left_foot", "right_foot"}
+        )
+
+    assert foot_visible_count(relaxed_config) > foot_visible_count(hard_config)
+
+
 def test_cube_top_camera_rig_aims_four_corners_at_center():
     config = MultiRigidScenarioConfig(
         seed=36,
@@ -413,6 +457,40 @@ def test_body_occlusion_blob_area_gently_scales_with_camera_depth():
     assert near_area > far_area
     assert near_area <= math.pi * (6.4 * 0.5) ** 2
     assert far_area >= math.pi * (2.2 * 0.5) ** 2
+
+
+def test_body_occlusion_merges_close_projected_blobs():
+    config = MultiRigidScenarioConfig(
+        seed=47,
+        camera_ids=DEFAULT_GENERATED_CAMERA_IDS,
+        frames=20,
+        fps=118.0,
+        rigid_names=DEFAULT_BODY_RIGIDS,
+        scenario="five_rigid_body_occlusion_v1",
+        camera_rig_source="cube_top_2_4m_aim_center",
+        marker_layout=DESIGN_5MARKER_LAYOUT,
+        rigids_path="missing-test-rigids.json",
+        noise_px=0.05,
+        body_mount_blob_merge_factor=0.25,
+    )
+    generator = MultiRigidFrameGenerator(
+        config,
+        patterns=load_mvp_patterns(config.rigids_path, marker_layout=config.marker_layout),
+        camera_params=load_camera_rig(config),
+    )
+
+    merged_entries = []
+    for _ in range(config.frames):
+        sample = generator.next_sample()
+        assert sample is not None
+        merged_entries.extend(
+            entry
+            for entry in sample.ownership_ledger.values()
+            if len(entry.merged_owners) > 1
+        )
+
+    assert merged_entries
+    assert any(":merged:" in entry.synthetic_blob_id for entry in merged_entries)
 
 
 def test_five_rigid_swap_red_adds_cross_rigid_alias_blobs():

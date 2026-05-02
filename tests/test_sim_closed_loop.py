@@ -53,6 +53,8 @@ def test_multi_rigid_summary_includes_mvp_metadata(tmp_path):
     assert metadata["marker_layout"] == "current_4marker"
     assert tuple(metadata["rigid_names"]) == ("waist", "wand")
     assert "performance_budget" in summary
+    assert "warmup_trimmed" in summary["performance_budget"]
+    assert "pipeline_pair_ms" in summary["performance_budget"]["warmup_trimmed"]
     assert "variant_metrics" in summary
     assert "position_delta_error_m" in summary
     assert "scenario_go_no_go" in summary

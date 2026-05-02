@@ -1,3 +1,11 @@
+- Object-gated rigid tracking now treats blob-center overlap relative to blob diameter as ambiguous, catching close-marker swaps that are wider than the fixed sub-pixel guard.
+- `src/host/tracking_replay_harness.py` now exposes the object-gating ambiguous blob threshold so replay checks can compare the new close-blob guard against disabled baselines.
+- Object-gated rigid tracking now drops sub-pixel ambiguous blob assignments before triangulation, reducing marker swaps and cross-rigid ownership at close projections.
+- `tools/sim` now adds `five_rigid_body_occlusion_relaxed_v1`, a slightly softer body-mounted scenario for green-regression PDCA without replacing the hard fixture.
+- `tools/sim` can now optionally merge near-overlapping true blobs in `five_rigid_body_occlusion_v1` for body-mounted observation-model PDCA.
+- `tools/sim` summaries now include warmup-trimmed pair, rigid, and geometry timing for body-mounted PDCA performance reads.
+- `docs/10_in_progress/sim_performance_upgrade_log_v2.md` now removes the superseded real-log distance/merge check section after adopting the depth-scaled blob-size premise.
+- `docs/10_in_progress/sim_performance_upgrade_log_v2.md` now simplifies V2 goals and methods around GT pose accuracy, 118fps budget, and observation-led PDCA decisions.
 - `docs/10_in_progress/sim_performance_upgrade_log_v2.md` now replaces old V2 PDCA tables with a restarted 10-cycle body-mounted PDCA using depth-scaled true blob sizes.
 - `tools/sim` now keeps body-mounted true blob areas camera-specific while gently scaling equivalent diameter by camera depth for closer marker views.
 - `docs/10_in_progress/sim_performance_upgrade_log_v2.md` now records a real-log blob area generation check and rejects the oversized first-pass distance/merge observation model.

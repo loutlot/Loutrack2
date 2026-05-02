@@ -576,6 +576,8 @@ def test_tracking_pipeline_maps_rigid_stabilization_flags_to_configs() -> None:
             "object_conditioned_gating": False,
             "object_gating_enforced": True,
             "object_gating_activation_mode": "reacquire_only",
+            "object_gating_ambiguous_blob_min_separation_px": 0.45,
+            "object_gating_ambiguous_blob_diameter_overlap_ratio": 0.25,
             "pose_continuity_guard_enabled": True,
             "pose_continuity_guard_enforced": True,
             "pose_continuity_max_rotation_deg": 45.0,
@@ -598,6 +600,8 @@ def test_tracking_pipeline_maps_rigid_stabilization_flags_to_configs() -> None:
     assert pipeline.rigid_estimator.object_gating_config.enabled is False
     assert pipeline.rigid_estimator.object_gating_config.enforce is True
     assert pipeline.rigid_estimator.object_gating_config.activation_mode == "reacquire_only"
+    assert pipeline.rigid_estimator.object_gating_config.ambiguous_blob_min_separation_px == 0.45
+    assert pipeline.rigid_estimator.object_gating_config.ambiguous_blob_diameter_overlap_ratio == 0.25
     assert pipeline.rigid_estimator.pose_continuity_guard_config.enabled is True
     assert pipeline.rigid_estimator.pose_continuity_guard_config.enforced is True
     assert pipeline.rigid_estimator.pose_continuity_guard_config.max_rotation_innovation_deg == 45.0
@@ -608,6 +612,17 @@ def test_tracking_pipeline_maps_rigid_stabilization_flags_to_configs() -> None:
     assert pipeline.rigid_estimator.position_continuity_guard_config.max_accel_m_s2 == 25.0
     assert pipeline.rigid_estimator.position_continuity_guard_config.max_velocity_m_s == 4.0
     assert pipeline.rigid_estimator.subset_solve_config.enabled is False
+
+    disabled_ambiguous_guard = TrackingPipeline(
+        enable_logging=False,
+        rigid_stabilization={
+            "object_gating_ambiguous_blob_min_separation_px": 0.0,
+        },
+    )
+    disabled_config = disabled_ambiguous_guard.rigid_estimator.object_gating_config
+    assert (
+        disabled_config.ambiguous_blob_min_separation_px == 0.0
+    )
 
 
 def test_tracking_pipeline_keeps_fixed_pair_window_and_omits_sync_status() -> None:

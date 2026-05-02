@@ -249,12 +249,24 @@ class ObjectGatingConfig:
     pixel_min: float = 4.0
     pixel_max: float = 16.0
     single_ray_confidence_min: float = 0.75
+    ambiguous_blob_min_separation_px: float = 0.60
+    ambiguous_blob_diameter_overlap_ratio: float = 0.30
+    ambiguous_marker_assignment_min_margin_px: float = 0.35
 
     def thresholds_dict(self) -> Dict[str, Any]:
         return {
             "pixel_min": float(self.pixel_min),
             "pixel_max": float(self.pixel_max),
             "single_ray_confidence_min": float(self.single_ray_confidence_min),
+            "ambiguous_blob_min_separation_px": float(
+                self.ambiguous_blob_min_separation_px
+            ),
+            "ambiguous_blob_diameter_overlap_ratio": float(
+                self.ambiguous_blob_diameter_overlap_ratio
+            ),
+            "ambiguous_marker_assignment_min_margin_px": float(
+                self.ambiguous_marker_assignment_min_margin_px
+            ),
             "enforce": bool(self.enforce),
             "activation_mode": str(self.activation_mode),
             "min_enforced_markers": int(self.min_enforced_markers),
@@ -396,6 +408,8 @@ def _empty_object_gating(
         "assigned_marker_views": 0,
         "unmatched_marker_views": 0,
         "duplicate_assignment_count": 0,
+        "ambiguous_assignment_count": 0,
+        "marker_margin_assignment_count": 0,
         "markers_with_two_or_more_rays": 0,
         "markers_with_one_ray": 0,
         "single_ray_candidates": 0,
@@ -2463,6 +2477,8 @@ class RigidBodyEstimator:
         assigned_marker_views = 0
         unmatched_marker_views = 0
         duplicate_assignment_count = 0
+        ambiguous_assignment_count = 0
+        marker_margin_assignment_count = 0
         candidate_window_count = 0
         per_camera: Dict[str, Any] = {}
         total_blobs = 0
@@ -2489,7 +2505,7 @@ class RigidBodyEstimator:
             distances = np.sqrt(np.sum(delta * delta, axis=2))
             cost = np.where(distances <= pixel_gate_px, distances, 1e9)
 
-            assignments: List[Dict[str, Any]] = []
+            raw_assignments: List[Dict[str, Any]] = []
             used_blobs: set[int] = set()
             if cost.size:
                 row_ind, col_ind = linear_sum_assignment(cost)
@@ -2502,22 +2518,108 @@ class RigidBodyEstimator:
                         duplicate_assignment_count += 1
                         continue
                     used_blobs.add(blob_idx)
-                    marker_ray_counts[marker_idx] += 1
-                    assigned_marker_views += 1
-                    assignments.append(
+                    raw_assignments.append(
                         {
                             "marker_idx": marker_idx,
                             "blob_index": blob_idx,
                             "distance_px": float(cost[row, col]),
                         }
                     )
+            ambiguous_indices: set[int] = set()
+            min_blob_separation = float(config.ambiguous_blob_min_separation_px)
+            diameter_overlap_ratio = float(config.ambiguous_blob_diameter_overlap_ratio)
+            min_marker_assignment_margin = float(
+                config.ambiguous_marker_assignment_min_margin_px
+            )
+            marker_margin_indices: set[int] = set()
+            if min_marker_assignment_margin > 0.0 and len(raw_assignments) >= 2:
+                for assignment_idx, assignment in enumerate(raw_assignments):
+                    marker_idx = int(assignment.get("marker_idx", -1))
+                    assigned_blob = int(assignment.get("blob_index", -1))
+                    if (
+                        marker_idx < 0
+                        or marker_idx >= distances.shape[0]
+                        or assigned_blob < 0
+                        or assigned_blob >= distances.shape[1]
+                    ):
+                        continue
+                    assigned_distance = float(distances[marker_idx, assigned_blob])
+                    marker_distances = distances[:, assigned_blob].astype(np.float64)
+                    marker_distances[marker_idx] = np.inf
+                    alternative_distance = float(np.min(marker_distances))
+                    if not np.isfinite(alternative_distance):
+                        continue
+                    if alternative_distance - assigned_distance <= min_marker_assignment_margin:
+                        marker_margin_indices.add(assignment_idx)
+                ambiguous_indices.update(marker_margin_indices)
+            if min_blob_separation > 0.0 and len(raw_assignments) >= 2:
+                assigned_by_blob = {
+                    int(assignment.get("blob_index", -1)): assignment_idx
+                    for assignment_idx, assignment in enumerate(raw_assignments)
+                }
+                blob_uv_array = np.asarray(blob_uvs, dtype=np.float64).reshape(-1, 2)
+                blobs = list(getattr(frame, "blobs", []) or [])
+                blob_diameters = np.zeros(len(blob_uv_array), dtype=np.float64)
+                for blob_idx, blob in enumerate(blobs[: len(blob_diameters)]):
+                    try:
+                        area = float(blob.get("area", 0.0) or 0.0)
+                    except Exception:
+                        area = 0.0
+                    if area > 0.0:
+                        blob_diameters[blob_idx] = float(np.sqrt(4.0 * area / np.pi))
+                for assignment_idx, assignment in enumerate(raw_assignments):
+                    assigned_blob = int(assignment.get("blob_index", -1))
+                    if assigned_blob < 0 or assigned_blob >= len(blob_uv_array):
+                        continue
+                    deltas = blob_uv_array - blob_uv_array[assigned_blob]
+                    distances_to_blob = np.sqrt(np.sum(deltas * deltas, axis=1))
+                    ambiguous_distance_px = np.full(
+                        len(blob_uv_array),
+                        min_blob_separation,
+                        dtype=np.float64,
+                    )
+                    if diameter_overlap_ratio > 0.0 and assigned_blob < len(blob_diameters):
+                        average_diameters = 0.5 * (
+                            blob_diameters + float(blob_diameters[assigned_blob])
+                        )
+                        ambiguous_distance_px = np.maximum(
+                            ambiguous_distance_px,
+                            diameter_overlap_ratio * average_diameters,
+                        )
+                    nearby_blobs = np.flatnonzero(
+                        (distances_to_blob <= ambiguous_distance_px)
+                        & (np.arange(len(blob_uv_array)) != assigned_blob)
+                    )
+                    if nearby_blobs.size <= 0:
+                        continue
+                    ambiguous_indices.add(assignment_idx)
+                    for other_blob_value in nearby_blobs:
+                        other_blob = int(other_blob_value)
+                        other_assignment_idx = assigned_by_blob.get(int(other_blob))
+                        if other_assignment_idx is not None:
+                            ambiguous_indices.add(other_assignment_idx)
+
+            assignments: List[Dict[str, Any]] = []
+            for assignment_idx, assignment in enumerate(raw_assignments):
+                if assignment_idx in ambiguous_indices:
+                    ambiguous_assignment_count += 1
+                    if assignment_idx in marker_margin_indices:
+                        marker_margin_assignment_count += 1
+                    continue
+                marker_idx = int(assignment["marker_idx"])
+                marker_ray_counts[marker_idx] += 1
+                assigned_marker_views += 1
+                assignments.append(assignment)
+
             unmatched_marker_views += max(0, len(projected) - len(assignments))
-            total_assigned_blobs += len(used_blobs)
+            total_assigned_blobs += len(assignments)
             per_camera[str(camera_id)] = {
                 "blob_count": int(len(blob_uvs)),
                 "projected_marker_count": int(len(projected)),
                 "assigned_marker_views": int(len(assignments)),
                 "unmatched_marker_views": int(max(0, len(projected) - len(assignments))),
+                "ambiguous_assignment_count": int(len(ambiguous_indices)),
+                "marker_margin_assignment_count": int(len(marker_margin_indices)),
                 "assignments": assignments,
             }
 
@@ -2540,6 +2642,8 @@ class RigidBodyEstimator:
             "assigned_marker_views": int(assigned_marker_views),
             "unmatched_marker_views": int(unmatched_marker_views),
             "duplicate_assignment_count": int(duplicate_assignment_count),
+            "ambiguous_assignment_count": int(ambiguous_assignment_count),
+            "marker_margin_assignment_count": int(marker_margin_assignment_count),
             "markers_with_two_or_more_rays": int(markers_with_two_or_more),
             "markers_with_one_ray": int(markers_with_one),
             "single_ray_candidates": int(markers_with_one if allow_single_ray else 0),
