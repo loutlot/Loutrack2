@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from host.pattern_evaluator import (
     BUILTIN_PATTERNS,
     PatternEvaluationConfig,
+    evaluate_subset_design,
     evaluate_patterns,
     format_markdown_report,
     load_patterns_from_rigids_file,
@@ -71,9 +72,25 @@ def test_evaluate_patterns_and_markdown_report_include_sections() -> None:
 
     assert len(evaluation["patterns"]) == 2
     assert len(evaluation["cross_pattern"]) == 1
+    assert "subset_design" in evaluation
     assert "Self Symmetry" in report
     assert "Cross Pattern" in report
     assert "waist" in report
+
+
+def test_evaluate_subset_design_emits_tracking_policy_metadata() -> None:
+    evaluation = evaluate_subset_design([WAIST_PATTERN, _symmetric_square_pattern()])
+
+    assert evaluation["gate"] == "geometry"
+    assert set(evaluation["tracking_policy"]) == {"waist", "square"}
+    waist_policy = evaluation["tracking_policy"]["waist"]
+    assert waist_policy["boot_min_markers"] == 4
+    assert isinstance(waist_policy["strong_4_subsets"], list)
+    assert isinstance(waist_policy["strong_3_subsets"], list)
+    body = next(item for item in evaluation["bodies"] if item["name"] == "waist")
+    assert body["subsets_4"]
+    assert body["subsets_3"]
+    assert body["subsets_4"][0]["rejection_reasons"] is not None
 
 
 def test_load_patterns_from_rigids_file(tmp_path: Path) -> None:
@@ -86,6 +103,7 @@ def test_load_patterns_from_rigids_file(tmp_path: Path) -> None:
                         "name": "custom",
                         "marker_positions": [[0, 0, 0], [0.1, 0, 0], [0, 0.1, 0]],
                         "marker_diameter_m": 0.012,
+                        "tracking_policy": {"strong_3_subsets": [[0, 1, 2]]},
                     }
                 ]
             }
@@ -97,6 +115,7 @@ def test_load_patterns_from_rigids_file(tmp_path: Path) -> None:
 
     assert set(patterns) == {"custom"}
     assert patterns["custom"].marker_diameter == 0.012
+    assert patterns["custom"].metadata["tracking_policy"]["strong_3_subsets"] == [[0, 1, 2]]
 
 
 def test_cli_json_output_for_builtin_pattern(capsys) -> None:

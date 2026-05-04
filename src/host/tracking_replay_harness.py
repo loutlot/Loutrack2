@@ -144,7 +144,7 @@ def replay_tracking_log(
     object_gating_activation_mode: str = "always",
     object_gating_ambiguous_blob_min_separation_px: float = 0.60,
     object_gating_ambiguous_blob_diameter_overlap_ratio: float = 0.30,
-    object_gating_ambiguous_marker_assignment_min_margin_px: float = 0.35,
+    object_gating_ambiguous_marker_assignment_min_margin_px: float = 0.29,
     pose_continuity_guard_enabled: bool = False,
     pose_continuity_guard_enforced: bool = False,
     pose_continuity_max_rotation_deg: float = 90.0,
@@ -568,7 +568,7 @@ def compare_object_gating_enforcement(
     object_gating_activation_mode: str = "always",
     object_gating_ambiguous_blob_min_separation_px: float = 0.60,
     object_gating_ambiguous_blob_diameter_overlap_ratio: float = 0.30,
-    object_gating_ambiguous_marker_assignment_min_margin_px: float = 0.35,
+    object_gating_ambiguous_marker_assignment_min_margin_px: float = 0.29,
 ) -> Dict[str, Any]:
     """Run diagnostics-only and enforced object-gating replays side by side."""
     diagnostics_only = replay_tracking_log(
@@ -1998,7 +1998,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument(
         "--object-gating-ambiguous-marker-assignment-min-margin-px",
         type=float,
-        default=0.35,
+        default=0.29,
         help=(
             "Drop object-gating assignments when a blob is nearly as close to a "
             "different marker projection."

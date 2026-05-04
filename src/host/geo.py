@@ -384,6 +384,23 @@ class BlobObservation2D:
         }
 
 
+def _blob_diameter_px(area: float) -> float:
+    try:
+        value = float(area)
+    except (TypeError, ValueError):
+        return 0.0
+    if value <= 0.0 or not np.isfinite(value):
+        return 0.0
+    return float(np.sqrt(4.0 * value / np.pi))
+
+
+def _centroid_uncertainty_px_from_area(area: float) -> float:
+    diameter = _blob_diameter_px(area)
+    if diameter <= 0.0:
+        return 1.0
+    return float(max(1.0, 4.0 / diameter))
+
+
 @dataclass(frozen=True)
 class TriangulatedPoint:
     """A 3D point plus the 2D observations and quality metrics that created it."""
@@ -561,6 +578,7 @@ class Triangulator:
             self._last_assignment_diagnostics
         )
         self._last_observations_by_camera: Dict[str, List[BlobObservation2D]] = {}
+        self._last_observations_by_blob_by_camera: Dict[str, Dict[int, BlobObservation2D]] = {}
         self._last_triangulated_points: List[TriangulatedPoint] = []
         self._refresh_cached_matrices()
 
@@ -1197,13 +1215,24 @@ class Triangulator:
             detail_started_ns = time.perf_counter_ns()
             ref_points = [obs.undistorted_uv for obs in ref_observations]
             other_points = [obs.undistorted_uv for obs in other_observations]
+            ref_uncertainty = np.asarray(
+                [_centroid_uncertainty_px_from_area(obs.area) for obs in ref_observations],
+                dtype=np.float64,
+            ).reshape(-1, 1)
+            other_uncertainty = np.asarray(
+                [
+                    _centroid_uncertainty_px_from_area(obs.area)
+                    for obs in other_observations
+                ],
+                dtype=np.float64,
+            ).reshape(1, -1)
             forward_matrix = self._epipolar_distance_matrix(
                 F_ref_to_other,
                 ref_points,
                 other_points,
             )
             if self.geo_hotpath_optimizations:
-                forward_mask = forward_matrix <= gate_px
+                forward_mask = forward_matrix <= gate_px * other_uncertainty
                 candidate_rows, candidate_cols = np.nonzero(forward_mask)
                 full_size = int(forward_matrix.size)
                 if len(candidate_rows) < int(full_size * 0.5):
@@ -1227,7 +1256,9 @@ class Triangulator:
                     ref_points,
                 ).T
             symmetric_errors = np.maximum(forward_matrix, backward_matrix)
-            accepted_mask = symmetric_errors <= gate_px
+            accepted_mask = (forward_matrix <= gate_px * other_uncertainty) & (
+                backward_matrix <= gate_px * ref_uncertainty
+            )
             rejected_count = int(accepted_mask.size - int(np.count_nonzero(accepted_mask)))
             if rejected_count:
                 _increment_diagnostic(
@@ -1238,7 +1269,8 @@ class Triangulator:
                 )
             cost = np.where(
                 accepted_mask,
-                forward_matrix + backward_matrix,
+                forward_matrix / np.maximum(other_uncertainty, 1e-6)
+                + backward_matrix / np.maximum(ref_uncertainty, 1e-6),
                 _INVALID_ASSIGNMENT_COST,
             )
             self._record_stage_detail("epipolar_match_ms", detail_started_ns)
@@ -1263,14 +1295,22 @@ class Triangulator:
                     )
                     symmetric_error = max(forward, backward)
                     symmetric_errors[i, j] = float(symmetric_error)
-                    if symmetric_error > gate_px:
+                    ref_uncertainty = _centroid_uncertainty_px_from_area(ref_obs.area)
+                    other_uncertainty = _centroid_uncertainty_px_from_area(other_obs.area)
+                    if (
+                        forward > gate_px * max(1.0, other_uncertainty)
+                        or backward > gate_px * max(1.0, ref_uncertainty)
+                    ):
                         _increment_diagnostic(
                             diagnostics,
                             "assignment_rejected_epipolar",
                             "rejected_epipolar",
                         )
                         continue
-                    cost[i, j] = forward + backward
+                    cost[i, j] = forward / max(other_uncertainty, 1e-6) + backward / max(
+                        ref_uncertainty,
+                        1e-6,
+                    )
         _increment_diagnostic(
             diagnostics,
             "pruned_candidate_pair_count",
@@ -1312,6 +1352,14 @@ class Triangulator:
         detail_started_ns = time.perf_counter_ns()
         ref_points = [obs.undistorted_uv for obs in ref_observations]
         other_points = [obs.undistorted_uv for obs in other_observations]
+        ref_uncertainty = np.asarray(
+            [_centroid_uncertainty_px_from_area(obs.area) for obs in ref_observations],
+            dtype=np.float64,
+        ).reshape(-1, 1)
+        other_uncertainty = np.asarray(
+            [_centroid_uncertainty_px_from_area(obs.area) for obs in other_observations],
+            dtype=np.float64,
+        ).reshape(1, -1)
         forward_matrix = self._epipolar_distance_matrix(
             F_ref_to_other,
             ref_points,
@@ -1323,7 +1371,9 @@ class Triangulator:
             ref_points,
         ).T
         symmetric_errors = np.maximum(forward_matrix, backward_matrix)
-        accepted_mask = symmetric_errors <= gate_px
+        accepted_mask = (forward_matrix <= gate_px * other_uncertainty) & (
+            backward_matrix <= gate_px * ref_uncertainty
+        )
         rows, cols = np.nonzero(accepted_mask)
         candidate_pairs = {(int(row), int(col)) for row, col in zip(rows, cols)}
         if not candidate_pairs:
@@ -1346,7 +1396,10 @@ class Triangulator:
         edges: Dict[Tuple[int, int], Tuple[float, float, float]] = {}
         for row, col in sorted(candidate_pairs):
             edges[(int(row), int(col))] = (
-                float(forward_matrix[row, col] + backward_matrix[row, col]),
+                float(
+                    forward_matrix[row, col] / max(float(other_uncertainty[0, col]), 1e-6)
+                    + backward_matrix[row, col] / max(float(ref_uncertainty[row, 0]), 1e-6)
+                ),
                 float(symmetric_errors[row, col]),
                 float(backward_matrix[row, col]),
             )
@@ -1636,7 +1689,7 @@ class Triangulator:
         )
         if not residuals:
             return None
-        residual_summary = _metric_summary(residuals)
+        residual_summary = _small_metric_summary(residuals)
         if (
             residual_summary["max"] > _MAX_REPROJECTION_ERROR_PX
             or residual_summary["p90"] > _P90_REPROJECTION_ERROR_PX
@@ -1684,6 +1737,7 @@ class Triangulator:
         self._last_assignment_diagnostics = dict(diagnostics)
         self._last_quality_metrics = self._empty_quality_metrics(diagnostics)
         self._last_observations_by_camera = {}
+        self._last_observations_by_blob_by_camera = {}
         self._last_triangulated_points = []
 
         camera_ids = [cid for cid in paired_frames.camera_ids if cid in self.camera_params]
@@ -1707,6 +1761,13 @@ class Triangulator:
                 )
         self._last_observations_by_camera = {
             camera_id: list(observations)
+            for camera_id, observations in observations_by_camera.items()
+        }
+        self._last_observations_by_blob_by_camera = {
+            camera_id: {
+                int(observation.blob_index): observation
+                for observation in observations
+            }
             for camera_id, observations in observations_by_camera.items()
         }
 
@@ -1809,6 +1870,7 @@ class Triangulator:
     ) -> Dict[str, List[_BlobObservation]]:
         """Build per-camera observations without running generic matching."""
         self._last_observations_by_camera = {}
+        self._last_observations_by_blob_by_camera = {}
         camera_ids = [cid for cid in paired_frames.camera_ids if cid in self.camera_params]
         observations_by_camera: Dict[str, List[_BlobObservation]] = {}
         for cam_id in camera_ids:
@@ -1825,6 +1887,13 @@ class Triangulator:
             )
         self._last_observations_by_camera = {
             camera_id: list(observations)
+            for camera_id, observations in observations_by_camera.items()
+        }
+        self._last_observations_by_blob_by_camera = {
+            camera_id: {
+                int(observation.blob_index): observation
+                for observation in observations
+            }
             for camera_id, observations in observations_by_camera.items()
         }
         return observations_by_camera
@@ -1861,13 +1930,9 @@ class Triangulator:
         total_single_ray = 0
         total_rejected = 0
         total_invalid = 0
-        observations_by_blob_by_camera: Dict[str, Dict[int, _BlobObservation]] = {
-            str(camera_id): {
-                int(observation.blob_index): observation
-                for observation in camera_observations
-            }
-            for camera_id, camera_observations in self._last_observations_by_camera.items()
-        }
+        observations_by_blob_by_camera: Dict[str, Dict[int, _BlobObservation]] = (
+            self._last_observations_by_blob_by_camera
+        )
 
         for rigid_name, gating in object_gating.items():
             if not isinstance(gating, dict) or not gating.get("evaluated"):

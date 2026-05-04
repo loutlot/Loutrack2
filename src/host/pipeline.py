@@ -185,10 +185,10 @@ def _rigid_stabilization_configs(settings: Optional[Dict[str, Any]]) -> Dict[str
         ambiguous_blob_diameter_overlap_ratio = 0.30
     ambiguous_marker_assignment_min_margin_px = payload.get(
         "object_gating_ambiguous_marker_assignment_min_margin_px",
-        0.35,
+        0.29,
     )
     if ambiguous_marker_assignment_min_margin_px is None:
-        ambiguous_marker_assignment_min_margin_px = 0.35
+        ambiguous_marker_assignment_min_margin_px = 0.29
     return {
         "reacquire_guard_config": ReacquireGuardConfig(
             shadow_enabled=bool(payload.get("reacquire_guard_shadow_enabled", True)),
@@ -243,6 +243,12 @@ def _rigid_stabilization_configs(settings: Optional[Dict[str, Any]]) -> Dict[str
         "subset_solve_config": SubsetSolveConfig(
             enabled=bool(payload.get("subset_ransac", True)),
             diagnostics_only=True,
+        ),
+        "anchor_guided_body_nbest_enabled": bool(
+            payload.get("anchor_guided_body_nbest", False)
+        ),
+        "temporal_body_nbest_enabled": bool(
+            payload.get("temporal_body_nbest", False)
         ),
     }
 
@@ -368,6 +374,12 @@ class TrackingPipeline:
             subset_max_hypotheses=subset_max_hypotheses_for_variant(self.pipeline_variant),
             rigid_candidate_separation_enabled=_variant_has_rigid_candidate_separation(
                 self.pipeline_variant
+            ),
+            anchor_guided_body_nbest_enabled=bool(
+                stabilization_configs.get("anchor_guided_body_nbest_enabled", False)
+            ),
+            temporal_body_nbest_enabled=bool(
+                stabilization_configs.get("temporal_body_nbest_enabled", False)
             ),
             stage_callback=self._record_stage,
         )

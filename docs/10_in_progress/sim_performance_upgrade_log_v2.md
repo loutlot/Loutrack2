@@ -328,3 +328,69 @@ Green repeat with default `0.30`:
 | `0.05px` | `47` | `0/0`, `1.000` | `5.22/1.68/1.56ms` |
 
 結論: `object_gating_ambiguous_blob_diameter_overlap_ratio = 0.30` を追加し、固定 `0.60px` だけでは拾えない明確な blob重なりを観測側で落とす。これで hard seed45/noise0.10 の head close-marker swap は消える。seed46/noise0.15 の chest frame59 は残す。これを観測側で無理に消すと head frame85 の pose/temporal identity 失敗を誘発するため、次は pose側の marker identity continuity / temporal assignment margin を扱う。性能は pair p95 は 6ms 内だが rigid p95 はまだ `1.5ms` 境界を超えるため、精度改善と性能改善は分けて扱う。
+
+## Temporal Assignment Margin PDCA 1-10
+
+残った `chest` frame `59` は、blob中心同士の重なりではなく、同じ blob が別 marker projection にもほぼ同じ距離で説明できる marker identity ambiguity だった。pre-update 診断では、seed `46` / noise `0.15px` / frame `59` の `pi-cam-02` で、`marker 4 -> blob 9` の competing marker margin が `0.285px`、`marker 0 -> blob 12` は `-0.154px` だった。一方、強すぎる観測棄却で出た head frame `85` は正しい assignment margin が `3.7px` 以上あり、別問題だった。
+
+変更:
+
+- object-gating assignment 後、assigned blob が別 marker projection にも `object_gating_ambiguous_marker_assignment_min_margin_px` 以内で説明できる場合、その view を曖昧として落とす。
+- default 候補は `0.29px`。`0.25/0.28px` は chest frame59 を取り逃がし、`0.30/0.35px` は correctness は良いが余分に重く出やすかった。
+
+| cycle | change | hypothesis | correctness | performance | read | decision | next |
+|---|---|---|---|---|---|---|---|
+| 1 | margin `0.35px`, seed46/noise0.15 | chest frame59 は marker-vs-marker margin不足として消せる。 | wrong/confusion `0/0`, min valid `0.996`。 | pair/rigid/geometry p95 `6.30/1.85/1.67ms`。 | chest は消えるが少し重い。 | 方向は有効。 | head側副作用を見る。 |
+| 2 | margin `0.35px`, seed45/noise0.10 | head close-marker改善を維持できる。 | `0/0`, min valid `1.000`。 | `6.15/1.79/1.69ms`。 | correctness OK、性能は境界。 | threshold を下げる。 | `0.25px` を測る。 |
+| 3 | margin `0.25px`, seed46/noise0.15 | 低めでも chest を落とせるか確認。 | `0/1`, min valid `0.996`。 | `5.54/1.57/1.48ms`。 | chest frame59 を取り逃がす。 | 低すぎ。 | 中間 `0.30px`。 |
+| 4 | margin `0.30px`, seed46/noise0.15 | `0.30px` なら chest を落とせる。 | `0/0`, min valid `0.996`。 | `6.44/1.77/1.67ms`。 | correctness OK、性能は重い。 | もう少し下げる。 | `0.28px`。 |
+| 5 | margin `0.28px`, seed46/noise0.15 | chest margin境界の下限を確認。 | `0/1`, min valid `0.996`。 | `5.51/1.65/1.57ms`。 | chestを取り逃がす。 | 下限は `0.28` と `0.30` の間。 | `0.30px` head側。 |
+| 6 | margin `0.30px`, seed45/noise0.10 | head側の副作用を確認。 | `0/0`, min valid `1.000`。 | `15.27/5.06/3.77ms`。 | correctness OKだが性能外乱が大きい。 | repeat。 | 同条件 repeat。 |
+| 7 | margin `0.30px`, seed45/noise0.10 repeat | cycle6 が外乱なら戻る。 | `0/0`, min valid `1.000`。 | raw `7.26/2.43/1.89ms`, trimmed `7.02/2.25/1.88ms`。 | 外乱だけではなく少し重い傾向。 | threshold最小側へ。 | green repeatで副作用を見る。 |
+| 8 | margin `0.30px`, seed45/46/47 noise0.05 | green repeat を壊さないか確認。 | all wrong/confusion `0/0`, min valid `1.000`。 | raw pair p95 `6.17/6.05/6.62ms`, raw rigid p95 `1.97/1.85/2.02ms`。 | correctnessは維持、性能は境界超え。 | 最小閾値を探す。 | `0.29px`。 |
+| 9 | margin `0.29px`, seed46/noise0.15 | chestを消す最小側として成立するか確認。 | `0/0`, min valid `0.996`。 | raw `5.81/1.82/1.66ms`, trimmed `5.78/1.80/1.65ms`。 | chestは消え、pair p95は6ms内。 | `0.29px` が候補。 | head側確認。 |
+| 10 | margin `0.29px`, seed45/noise0.10 | head側もcleanなら default候補。 | `0/0`, min valid `1.000`。 | raw `6.09/1.81/1.78ms`, trimmed `6.06/1.78/1.72ms`。 | correctness OK、pair p95はほぼ境界。 | default候補として採用。 | 実ログ replay / performance最適化は別課題。 |
+
+結論: `object_gating_ambiguous_marker_assignment_min_margin_px = 0.29px` を追加する。これで、前節で残した seed46/noise0.15 の `chest` frame59 marker confusion は消える。seed45/noise0.10 の head close-marker改善も維持する。green repeat も correctness は維持した。一方、rigid p95 はまだ `1.5ms` 境界を超えるため、このPDCAは correctness改善として採用候補、性能改善は次フェーズで別に扱う。
+
+## Object-Gating Lightweight PDCA 1-10
+
+correctness guard を保ったまま、object-gating の追加コストを軽くするPDCAを回した。logs は `logs/sim/five_rigid_body_occlusion_v1/20260502_lightweight_pdca/` に残す。
+
+baseline は seed `46` / noise `0.15px` / 240 frames。wrong/confusion は `0/0` だが、pair/rigid/geometry raw p95 は `16.03/4.91/4.36ms`、warmup-trimmed p95 は `15.37/4.83/4.22ms` で、118fps運用には重すぎた。
+
+| cycle | change | hypothesis | correctness | performance | read | decision | next |
+|---|---|---|---|---|---|---|---|
+| 1 | baseline, seed46/noise0.15 | まず現状の guard コストを測る。 | wrong/confusion `0/0`, min valid `0.996`。 | raw `16.03/4.91/4.36ms`, trimmed `15.37/4.83/4.22ms`, over `45`。 | correctness はcleanだが明確に重い。 | 改善が必要。 | marker margin計算をまとめる。 |
+| 2 | marker margin vectorized, full blob-pair matrix | per-assignment loop を減らせば軽くなる。 | `0/0`, min valid `0.996`。 | raw `10.48/3.39/3.35ms`, trimmed `10.44/3.38/3.26ms`, over `23`。 | 改善したが、blob全組距離がまだ重い。 | 一部有効。 | assigned blob だけを見る。 |
+| 3 | assigned-blob distance matrix | 使う blob 行だけなら pair p95 を戻せる。 | `0/0`, min valid `0.996`。 | raw `5.92/1.73/1.65ms`, trimmed `5.84/1.70/1.63ms`, over `2`。 | pair p95 は6ms内、rigidはまだ少し重い。 | 採用候補。 | sqrtを外す。 |
+| 4 | squared distance compare, seed46/noise0.15 | sqrtを避ければさらに軽くなる。 | `0/0`, min valid `0.996`。 | raw `6.35/2.08/1.95ms`, trimmed `6.04/1.95/1.85ms`, over `3`。 | 理論上は軽いが実測は悪化。 | 単独効果は不確か。 | head側でも見る。 |
+| 5 | squared distance compare, seed45/noise0.10 | head close-marker側の correctness と性能を見る。 | `0/0`, min valid `1.000`。 | raw `6.55/1.87/1.86ms`, trimmed `6.53/1.83/1.80ms`, over `2`。 | correctness は維持、性能は境界。 | 次はprofile。 | hotspotを確認。 |
+| 6 | cProfile, 120 frames | 次の軽量化対象を実測で決める。 | `0/0`, min valid `0.992`。 | profile run raw `11.92/3.84/3.45ms`。 | `evaluate_object_conditioned_gating` が `0.509s/120 frames`、`linear_sum_assignment` は `0.004s`。 | assignment solverではなくgating周辺を削る。 | blob diameterの重複計算を消す。 |
+| 7 | per-camera blob diameter precompute, seed46/noise0.15 | rigidごとの blob area/diameter 再計算をやめると軽くなる。 | `0/0`, min valid `0.996`。 | raw `5.70/1.76/1.65ms`, trimmed `5.62/1.74/1.64ms`, over `2`。 | pair p95 は良好、rigidは境界超え。 | 採用候補。 | head側で確認。 |
+| 8 | precompute repeat, seed45/noise0.10 | head close-marker改善を維持する。 | `0/0`, min valid `1.000`。 | raw `5.93/1.86/1.63ms`, trimmed `5.87/1.78/1.63ms`, over `2`。 | correctness は維持、pair p95は6ms内。 | precomputeは維持。 | close-blob内側 loop をもう一段試す。 |
+| 9 | full threshold matrix vectorization | thresholdも行列化すれば Python loop を減らせる。 | `0/0`, min valid `0.996`。 | raw `5.71/1.85/1.80ms`, trimmed `5.62/1.83/1.75ms`, over `7`。 | threshold行列の確保が重く、overも増えた。 | 不採用。 | 小さい行単位判定へ戻す。 |
+| 10 | final: diameter precompute + valid assigned rows, seed46/noise0.15 | precomputeだけ残し、余分な行列化を避ける。 | `0/0`, min valid `0.996`。 | raw `5.66/1.74/1.62ms`, trimmed `5.56/1.70/1.54ms`, over `4`。 | baseline比で大幅改善、correctness維持。rigid p95 `1.5ms` は未達。 | 採用。 | 次は object-gating 評価頻度か projection/geometry 側の分離。 |
+
+結論: 軽量化として、per-camera blob diameter を `evaluate_object_conditioned_gating` の入口で一度だけ作り、close-blob ambiguity は assigned blob 行だけの距離行列で判定する形を採用する。これで seed46/noise0.15 の pair raw p95 は `16.03ms` から `5.66ms`、trimmed p95 は `15.37ms` から `5.56ms` まで戻った。wrong ownership と marker confusion は `0/0` を維持した。一方、rigid raw p95 は `1.74ms`、trimmed p95 は `1.70ms` で、`1.5ms` 目標はまだ未達。次はアルゴリズムの正しさをさらに触るより、object-gating を毎rigid毎frame full評価する必要があるか、projection/geometry時間をどこまで分離できるかを測る。
+
+## Object-Gating Lightweight PDCA 11-20
+
+前節の最終候補から、rigid p95 をさらに `1.5ms` に近づけるPDCAを続けた。logs は `logs/sim/five_rigid_body_occlusion_v1/20260503_lightweight_pdca/` に残す。
+
+baseline は seed `46` / noise `0.15px` / 240 frames。前節より測定外乱は低く、wrong/confusion `0/0`、pair/rigid/geometry raw p95 `5.35/1.66/1.55ms`、warmup-trimmed p95 `5.27/1.65/1.50ms` だった。つまり pair はよいが rigid p95 はまだ `1.5ms` を少し超えていた。
+
+| cycle | change | hypothesis | correctness | performance | read | decision | next |
+|---|---|---|---|---|---|---|---|
+| 11 | baseline final candidate, seed46/noise0.15 | 前節採用候補を再測定する。 | wrong/confusion `0/0`, min valid `0.996`。 | raw `5.35/1.66/1.55ms`, trimmed `5.27/1.65/1.50ms`, over `2`。 | かなり近いが rigid p95 は未達。 | もう一段軽量化する。 | profileで対象を確認。 |
+| 12 | cProfile baseline, 120 frames | 次の主犯が object-gating か確認する。 | `0/0`, min valid `0.992`。 | profile run raw `10.36/3.37/3.10ms`。 | `evaluate_object_conditioned_gating` `0.436s/120 frames`、`_process_points` `0.435s/120 frames`、`linear_sum_assignment` `0.004s`。 | solverではなくgating本体とpose処理が同格。 | assignment payload allocationを削る。 |
+| 13 | raw assignments を tuple 化, seed46/noise0.15 | dictを最終survivorだけ作れば allocation が減る。 | `0/0`, min valid `0.996`。 | raw `5.19/1.58/1.43ms`, trimmed `5.16/1.56/1.42ms`, over `2`。 | rigid p95 が大きく近づいた。 | 採用候補。 | head側副作用を見る。 |
+| 14 | tuple assignment, seed45/noise0.10 | head close-marker改善を維持する。 | `0/0`, min valid `1.000`。 | raw `5.76/1.71/1.51ms`, trimmed `5.60/1.62/1.47ms`, over `3`。 | correctnessは維持。head側は少し重い。 | 候補維持。 | projection fast pathを試す。 |
+| 15 | object-gating projection ndarray fast path | list-of-tuplesからndarray戻しを消せば軽くなる。 | `0/0`, min valid `0.996`。 | raw `5.70/1.77/1.54ms`, trimmed `5.64/1.72/1.52ms`, over `4`。 | 期待と逆に悪化。 | 不採用。 | fast pathを戻す。 |
+| 16 | projection fast path revert, seed46/noise0.15 | cycle15の悪化が戻るか確認。 | `0/0`, min valid `0.996`。 | raw `5.39/1.66/1.48ms`, trimmed `5.39/1.66/1.47ms`, over `2`。 | 戻ったがcycle13ほどではない。 | tupleのみ残す。 | blob index再生成を試す。 |
+| 17 | blob index array precompute | `np.arange(blob_count)` をrigidごとに作らない。 | `0/0`, min valid `0.996`。 | raw `5.84/1.71/1.63ms`, trimmed `5.72/1.68/1.56ms`, over `3`。 | 辞書参照増の方が勝ち、悪化。 | 不採用。 | precomputeを戻して repeat。 |
+| 18 | tuple-only repeat, seed46/noise0.15 | 採用候補を再測定する。 | `0/0`, min valid `0.996`。 | raw `5.33/1.62/1.53ms`, trimmed `5.25/1.60/1.47ms`, over `2`。 | tuple化は安定して小改善。 | 採用。 | profileを再確認。 |
+| 19 | cProfile tuple candidate, 120 frames | object-gating profileが下がったか確認する。 | `0/0`, min valid `0.992`。 | profile run raw `10.36/3.42/2.98ms`。 | function calls は `4.24M` から `4.19M`、object-gating は `0.436s` から `0.427s/120 frames`。小改善。 | 採用範囲は小さい。 | green repeat。 |
+| 20 | final green repeat, seeds 45/46/47 noise0.05 | clean条件を壊していないか確認する。 | all wrong/confusion `0/0`, min valid `1.000`。 | raw pair p95 `5.34/5.62/5.54ms`, raw rigid p95 `1.58/1.67/1.66ms`。 | correctness維持。rigid `1.5ms` は seedにより未達。 | tuple化採用、次は `_process_points` / geometry 側へ。 | pose処理とgeometryを分けて測る。 |
+
+結論: object-gating内の raw assignment を最初から dict にせず、内部では compact tuple として扱い、geometryへ渡す final assignments だけ dict 化する。seed46/noise0.15 repeat では raw p95 が `5.35/1.66/1.55ms` から `5.33/1.62/1.53ms`、best run では `5.19/1.58/1.43ms` まで下がった。projection ndarray fast path と blob index precompute は実測悪化のため不採用。correctness は green repeat まで `0/0` を維持した。ただし、profileでは object-gating と `_process_points` がほぼ同格まで来ているため、次に大きく軽くするなら object-gatingだけでなく pose処理/geometry側の重複 work を分けて見る。

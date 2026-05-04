@@ -45,7 +45,9 @@ DEFAULT_GENERATED_CAMERA_IDS = ("pi-cam-01", "pi-cam-02", "pi-cam-03", "pi-cam-0
 DEFAULT_MVP_RIGIDS = ("waist", "wand")
 DEFAULT_BODY_RIGIDS = ("head", "waist", "chest", "left_foot", "right_foot")
 DESIGN_5MARKER_LAYOUT = "design_5marker_seed"
+DESIGN_5MARKER_CAD_MARKER_Z_LIFT_M = 0.007
 BODY_MOUNT_SCENARIOS = {
+    "five_rigid_body_mesh_lite_v1",
     "five_rigid_body_occlusion_v1",
     "five_rigid_body_occlusion_relaxed_v1",
 }
@@ -123,6 +125,8 @@ _DESIGN_5MARKER_POLICIES: dict[str, dict[str, Any]] = {
 def _design_5marker_patterns() -> list[MarkerPattern]:
     patterns: list[MarkerPattern] = []
     for name in DEFAULT_BODY_RIGIDS:
+        points_m = np.asarray(_DESIGN_5MARKER_POINTS_MM[name], dtype=np.float64) * 0.001
+        cad_marker_z_m = points_m[:, 2] + DESIGN_5MARKER_CAD_MARKER_Z_LIFT_M
         policy = {
             "boot_min_markers": 4,
             "reacquire_min_markers": 4,
@@ -132,11 +136,14 @@ def _design_5marker_patterns() -> list[MarkerPattern]:
         patterns.append(
             marker_pattern_from_points(
                 name,
-                np.asarray(_DESIGN_5MARKER_POINTS_MM[name], dtype=np.float64) * 0.001,
+                points_m,
                 marker_diameter=0.014,
                 metadata={
                     "source": "rigid_body_design_seed",
                     "marker_layout": DESIGN_5MARKER_LAYOUT,
+                    "cad_marker_z_lift_m": DESIGN_5MARKER_CAD_MARKER_Z_LIFT_M,
+                    "cad_marker_centroid_z_m": float(np.mean(cad_marker_z_m)),
+                    "cad_marker_min_z_m": float(np.min(cad_marker_z_m)),
                     "tracking_policy": policy,
                 },
             )
@@ -153,6 +160,19 @@ def _sample_gaussian_pixel_noise(
         return 0.0, 0.0
     dx, dy = rng.normal(0.0, noise_px, size=2)
     return float(dx), float(dy)
+
+
+def _scale_pattern_marker_diameter(pattern: MarkerPattern, scale: float) -> MarkerPattern:
+    if not np.isfinite(scale) or float(scale) <= 0.0 or abs(float(scale) - 1.0) < 1e-9:
+        return pattern
+    metadata = dict(pattern.metadata or {})
+    metadata["sim_marker_diameter_scale"] = float(scale)
+    return MarkerPattern(
+        name=pattern.name,
+        marker_positions=np.asarray(pattern.marker_positions, dtype=np.float64).copy(),
+        marker_diameter=float(pattern.marker_diameter) * float(scale),
+        metadata=metadata,
+    )
 
 
 def verify_frame_log(path) -> dict:
@@ -269,6 +289,9 @@ class VirtualCamera:
         point_camera = self._rotation @ point + self._translation
         return float(point_camera[2])
 
+    def camera_center_world(self) -> np.ndarray:
+        return -self._rotation.T @ self._translation
+
 
 def _rotation_error_deg(r_pred: np.ndarray, r_gt: np.ndarray) -> float:
     """Rotation error in degrees between two rotation matrices."""
@@ -281,11 +304,20 @@ def _rotation_error_deg(r_pred: np.ndarray, r_gt: np.ndarray) -> float:
 
 def _summary(values: list[float]) -> dict[str, float]:
     if not values:
-        return {"count": 0, "mean": 0.0, "p95": 0.0, "max": 0.0}
+        return {
+            "count": 0,
+            "min": 0.0,
+            "mean": 0.0,
+            "p05": 0.0,
+            "p95": 0.0,
+            "max": 0.0,
+        }
     arr = np.asarray(values, dtype=np.float64)
     return {
         "count": int(arr.size),
+        "min": float(np.min(arr)),
         "mean": float(np.mean(arr)),
+        "p05": float(np.percentile(arr, 5)),
         "p95": float(np.percentile(arr, 95)),
         "max": float(np.max(arr)),
     }
@@ -317,6 +349,8 @@ def _warmup_trimmed_summary(
 
 def _gui_live_rigid_stabilization() -> dict[str, Any]:
     return {
+        "anchor_guided_body_nbest": False,
+        "temporal_body_nbest": True,
         "object_conditioned_gating": True,
         "subset_ransac": False,
         "reacquire_guard_shadow_enabled": False,
@@ -387,6 +421,112 @@ def _default_camera_rig_source_for_scenario(scenario: str | None, source: str | 
     return "real_2cam"
 
 
+def _segment_segment_distance_with_t(
+    a0: np.ndarray,
+    a1: np.ndarray,
+    b0: np.ndarray,
+    b1: np.ndarray,
+) -> tuple[float, float]:
+    """Return distance between two segments and the closest parameter on a0-a1."""
+    u = np.asarray(a1, dtype=np.float64) - np.asarray(a0, dtype=np.float64)
+    v = np.asarray(b1, dtype=np.float64) - np.asarray(b0, dtype=np.float64)
+    w = np.asarray(a0, dtype=np.float64) - np.asarray(b0, dtype=np.float64)
+    a = float(np.dot(u, u))
+    b = float(np.dot(u, v))
+    c = float(np.dot(v, v))
+    d = float(np.dot(u, w))
+    e = float(np.dot(v, w))
+    denom = a * c - b * b
+    small = 1e-12
+
+    if a <= small:
+        sc = 0.0
+        tc = float(np.clip(e / c, 0.0, 1.0)) if c > small else 0.0
+    elif c <= small:
+        tc = 0.0
+        sc = float(np.clip(-d / a, 0.0, 1.0))
+    elif denom <= small:
+        sc = 0.0
+        tc = float(np.clip(e / c, 0.0, 1.0))
+    else:
+        sc = float(np.clip((b * e - c * d) / denom, 0.0, 1.0))
+        tc = float((a * e + b * sc) / c)
+        if tc < 0.0:
+            tc = 0.0
+            sc = float(np.clip(-d / a, 0.0, 1.0))
+        elif tc > 1.0:
+            tc = 1.0
+            sc = float(np.clip((b - d) / a, 0.0, 1.0))
+
+    closest_a = np.asarray(a0, dtype=np.float64) + sc * u
+    closest_b = np.asarray(b0, dtype=np.float64) + tc * v
+    return float(np.linalg.norm(closest_a - closest_b)), float(sc)
+
+
+def _segment_sphere_distance_with_t(
+    a0: np.ndarray,
+    a1: np.ndarray,
+    center: np.ndarray,
+) -> tuple[float, float]:
+    segment = np.asarray(a1, dtype=np.float64) - np.asarray(a0, dtype=np.float64)
+    denom = float(np.dot(segment, segment))
+    if denom <= 1e-12:
+        return float(np.linalg.norm(np.asarray(a0, dtype=np.float64) - center)), 0.0
+    t = float(
+        np.clip(
+            np.dot(np.asarray(center, dtype=np.float64) - a0, segment) / denom,
+            0.0,
+            1.0,
+        )
+    )
+    closest = np.asarray(a0, dtype=np.float64) + t * segment
+    return float(np.linalg.norm(closest - np.asarray(center, dtype=np.float64))), t
+
+
+def _unit_vector(vector: np.ndarray, fallback: np.ndarray) -> np.ndarray:
+    values = np.asarray(vector, dtype=np.float64).reshape(3)
+    norm = float(np.linalg.norm(values))
+    if norm > 1e-12:
+        return values / norm
+    fallback_values = np.asarray(fallback, dtype=np.float64).reshape(3)
+    fallback_norm = float(np.linalg.norm(fallback_values))
+    if fallback_norm > 1e-12:
+        return fallback_values / fallback_norm
+    return np.array([0.0, 0.0, 1.0], dtype=np.float64)
+
+
+def _project_to_plane(
+    vector: np.ndarray,
+    normal: np.ndarray,
+    fallback: np.ndarray,
+) -> np.ndarray:
+    unit_normal = _unit_vector(normal, np.array([0.0, 0.0, 1.0], dtype=np.float64))
+    values = np.asarray(vector, dtype=np.float64).reshape(3)
+    projected = values - unit_normal * float(np.dot(values, unit_normal))
+    return _unit_vector(projected, fallback)
+
+
+def _surface_mount_rotation(
+    outward_normal: np.ndarray,
+    preferred_x: np.ndarray,
+) -> np.ndarray:
+    z_axis = _unit_vector(outward_normal, np.array([0.0, -1.0, 0.0], dtype=np.float64))
+    x_axis = _project_to_plane(
+        preferred_x,
+        z_axis,
+        np.array([1.0, 0.0, 0.0], dtype=np.float64),
+    )
+    if float(np.linalg.norm(np.cross(x_axis, z_axis))) <= 1e-9:
+        x_axis = _project_to_plane(
+            np.array([0.0, 0.0, 1.0], dtype=np.float64),
+            z_axis,
+            np.array([1.0, 0.0, 0.0], dtype=np.float64),
+        )
+    y_axis = _unit_vector(np.cross(z_axis, x_axis), np.array([0.0, 1.0, 0.0]))
+    x_axis = _unit_vector(np.cross(y_axis, z_axis), x_axis)
+    return np.column_stack([x_axis, y_axis, z_axis])
+
+
 def _latest_pipeline_stage_ms(pipeline: TrackingPipeline, name: str) -> float:
     stage_lock = getattr(pipeline, "_stage_lock", None)
     stage_ms = getattr(pipeline, "_stage_ms", {})
@@ -423,6 +563,7 @@ class MultiRigidScenarioConfig:
     noise_px: float = 0.0
     false_blobs_per_camera: int = 0
     marker_dropout_prob: float = 0.0
+    marker_detection_model: str = "iid_dropout"
     camera_dropout_prob: float = 0.0
     timestamp_jitter_us: int = 0
     occlusion_profile: str = "none"
@@ -431,6 +572,11 @@ class MultiRigidScenarioConfig:
     max_velocity_mps: float = 0.8
     max_angular_velocity_deg_s: float = 180.0
     body_mount_blob_merge_factor: float = 0.0
+    centroid_noise_model: str = "constant"
+    centroid_noise_reference_diameter_px: float = 4.0
+    marker_diameter_scale: float = 1.0
+    active_anchor_markers: bool = False
+    mesh_lite_occlusion: str = "off"
     marker_layout: str = "current_4marker"
     camera_rig_source: str = "auto"
     calibration_dir: str = "calibration"
@@ -473,6 +619,26 @@ class SyntheticFrameSample:
     ownership_ledger: dict[tuple[int, str, int], SyntheticBlobOwner]
 
 
+@dataclass(frozen=True)
+class MeshLiteMount:
+    rigid_name: str
+    position: np.ndarray
+    rotation: np.ndarray
+    normal: np.ndarray
+    surface_position: np.ndarray
+
+
+@dataclass(frozen=True)
+class MeshLiteOccluder:
+    name: str
+    kind: str
+    radius_m: float
+    rigids: frozenset[str]
+    center: np.ndarray | None = None
+    a: np.ndarray | None = None
+    b: np.ndarray | None = None
+
+
 def _pattern_to_pose_dict(
     rotation: np.ndarray,
     position: np.ndarray,
@@ -507,11 +673,35 @@ def _load_custom_rigid_patterns(path: str | Path) -> dict[str, MarkerPattern]:
         if not name or not isinstance(points, list):
             continue
         try:
+            points_array = np.asarray(points, dtype=np.float64)
+            metadata: dict[str, Any] = {
+                "source": "tracking_rigids",
+                "tracking_policy": item.get("tracking_policy", {}),
+            }
+            cad_marker_z_lift_m = float(
+                item.get(
+                    "cad_marker_z_lift_m",
+                    DESIGN_5MARKER_CAD_MARKER_Z_LIFT_M,
+                )
+                or 0.0
+            )
+            explicit_cad_centroid_z = item.get("cad_marker_centroid_z_m")
+            explicit_cad_min_z = item.get("cad_marker_min_z_m")
+            if explicit_cad_centroid_z is not None and explicit_cad_min_z is not None:
+                metadata["cad_marker_z_lift_m"] = cad_marker_z_lift_m
+                metadata["cad_marker_centroid_z_m"] = float(explicit_cad_centroid_z)
+                metadata["cad_marker_min_z_m"] = float(explicit_cad_min_z)
+            else:
+                cad_marker_z_m = points_array[:, 2] + cad_marker_z_lift_m
+                if np.all(cad_marker_z_m > 0.0):
+                    metadata["cad_marker_z_lift_m"] = cad_marker_z_lift_m
+                    metadata["cad_marker_centroid_z_m"] = float(np.mean(cad_marker_z_m))
+                    metadata["cad_marker_min_z_m"] = float(np.min(cad_marker_z_m))
             patterns[name] = marker_pattern_from_points(
                 name,
-                np.asarray(points, dtype=np.float64),
+                points_array,
                 marker_diameter=float(item.get("marker_diameter_m", 0.014) or 0.014),
-                metadata={"source": "tracking_rigids"},
+                metadata=metadata,
             )
         except Exception:
             continue
@@ -522,6 +712,7 @@ def load_mvp_patterns(
     rigids_path: str | Path = "calibration/tracking_rigids.json",
     *,
     marker_layout: str = "current_4marker",
+    marker_diameter_scale: float = 1.0,
 ) -> list[MarkerPattern]:
     custom = _load_custom_rigid_patterns(rigids_path)
     if marker_layout == DESIGN_5MARKER_LAYOUT:
@@ -534,8 +725,12 @@ def load_mvp_patterns(
             LEFT_FOOT_PATTERN,
             RIGHT_FOOT_PATTERN,
         ]
+    patterns = [
+        _scale_pattern_marker_diameter(custom.get(pattern.name, pattern), marker_diameter_scale)
+        for pattern in patterns
+    ]
     if "wand" in custom:
-        patterns.append(custom["wand"])
+        patterns.append(_scale_pattern_marker_diameter(custom["wand"], marker_diameter_scale))
     else:
         wand_points = np.array(
             [
@@ -547,11 +742,14 @@ def load_mvp_patterns(
             dtype=np.float64,
         )
         patterns.append(
-            MarkerPattern(
-                name="wand",
-                marker_positions=wand_points,
-                marker_diameter=0.014,
-                metadata={"source": "deterministic_fallback"},
+            _scale_pattern_marker_diameter(
+                MarkerPattern(
+                    name="wand",
+                    marker_positions=wand_points,
+                    marker_diameter=0.014,
+                    metadata={"source": "deterministic_fallback"},
+                ),
+                marker_diameter_scale,
             )
         )
     return patterns
@@ -840,12 +1038,29 @@ class MultiRigidFrameGenerator:
             raise ValueError("fps must be > 0")
         if config.noise_px < 0.0:
             raise ValueError("noise_px must be >= 0")
+        if config.centroid_noise_model not in {"constant", "diameter_scaled"}:
+            raise ValueError("centroid_noise_model must be constant or diameter_scaled")
+        if config.centroid_noise_reference_diameter_px <= 0.0:
+            raise ValueError("centroid_noise_reference_diameter_px must be > 0")
+        if config.marker_diameter_scale <= 0.0:
+            raise ValueError("marker_diameter_scale must be > 0")
+        if config.mesh_lite_occlusion not in {"off", "body_capsules"}:
+            raise ValueError("mesh_lite_occlusion must be off or body_capsules")
+        if (
+            config.mesh_lite_occlusion == "body_capsules"
+            and config.scenario not in BODY_MOUNT_SCENARIOS
+        ):
+            raise ValueError(
+                "mesh_lite_occlusion=body_capsules currently requires a body-mount scenario"
+            )
         if config.false_blobs_per_camera < 0:
             raise ValueError("false_blobs_per_camera must be >= 0")
         if config.body_mount_blob_merge_factor < 0.0:
             raise ValueError("body_mount_blob_merge_factor must be >= 0")
         if not (0.0 <= config.marker_dropout_prob <= 1.0):
             raise ValueError("marker_dropout_prob must be in [0, 1]")
+        if config.marker_detection_model not in {"iid_dropout", "pi_snr"}:
+            raise ValueError("marker_detection_model must be iid_dropout or pi_snr")
         if not (0.0 <= config.camera_dropout_prob <= 1.0):
             raise ValueError("camera_dropout_prob must be in [0, 1]")
 
@@ -874,6 +1089,7 @@ class MultiRigidFrameGenerator:
         pattern_list = patterns or load_mvp_patterns(
             config.rigids_path,
             marker_layout=config.marker_layout,
+            marker_diameter_scale=config.marker_diameter_scale,
         )
         pattern_by_name = {pattern.name: pattern for pattern in pattern_list}
         self.patterns = [
@@ -885,6 +1101,186 @@ class MultiRigidFrameGenerator:
             raise ValueError("no rigid patterns available for scenario")
         self._bodies = self._build_bodies(self.patterns)
         self._blob_reference_depth_by_camera = self._build_blob_reference_depths()
+        self._marker_detection_drop_counts: Counter[tuple[str, str, int], int] = Counter()
+        self._marker_detection_drop_probability_values: list[float] = []
+
+    def _mesh_lite_body_pose_components(
+        self,
+        frame_index: int,
+    ) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+        return {
+            rigid_name: body.pose_components(frame_index)
+            for rigid_name, body in self._bodies.items()
+        }
+
+    def _mesh_lite_surface_model(
+        self,
+        body_poses: dict[str, tuple[np.ndarray, np.ndarray]],
+    ) -> tuple[dict[str, MeshLiteMount], list[MeshLiteOccluder]]:
+        if self.config.scenario not in BODY_MOUNT_SCENARIOS:
+            return {}, []
+
+        radii = {
+            "head": 0.105,
+            "torso": 0.115,
+            "leg": 0.055,
+        }
+        front_local = np.array([0.0, -1.0, 0.0], dtype=np.float64)
+        world_up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+
+        positions = {
+            name: np.asarray(position, dtype=np.float64).reshape(3)
+            for name, (_rotation, position) in body_poses.items()
+        }
+        rotations = {
+            name: np.asarray(rotation, dtype=np.float64).reshape(3, 3)
+            for name, (rotation, _position) in body_poses.items()
+        }
+        normals: dict[str, np.ndarray] = {}
+        for name in ("head", "chest", "waist"):
+            rotation = rotations.get(name)
+            if rotation is not None:
+                normals[name] = _unit_vector(rotation @ front_local, front_local)
+
+        waist_position = positions.get("waist")
+        for name in ("left_foot", "right_foot"):
+            foot_position = positions.get(name)
+            rotation = rotations.get(name)
+            fallback = rotation @ front_local if rotation is not None else front_local
+            if waist_position is None or foot_position is None:
+                normals[name] = _unit_vector(fallback, front_local)
+                continue
+            preferred = foot_position - waist_position
+            preferred[2] = 0.0
+            if float(np.linalg.norm(preferred)) <= 1e-9:
+                preferred = fallback
+            leg_axis = foot_position - waist_position
+            normals[name] = _project_to_plane(preferred, leg_axis, fallback)
+
+        mounts: dict[str, MeshLiteMount] = {}
+        for name, position in positions.items():
+            normal = normals.get(name)
+            rotation = rotations.get(name)
+            if normal is None or rotation is None:
+                continue
+            pattern = self._bodies.get(name).pattern if name in self._bodies else None
+            if pattern is None:
+                continue
+            marker_positions = np.asarray(pattern.marker_positions, dtype=np.float64).reshape(-1, 3)
+            metadata = dict(pattern.metadata or {})
+            cad_centroid_z_m = metadata.get("cad_marker_centroid_z_m")
+            if cad_centroid_z_m is None:
+                min_local_z = float(np.min(marker_positions[:, 2])) if len(marker_positions) else 0.0
+                marker_surface_clearance_m = 0.004
+                mount_offset_m = marker_surface_clearance_m - min_local_z
+            else:
+                mount_offset_m = float(cad_centroid_z_m)
+            mount_position = position + normal * mount_offset_m
+            mounts[name] = MeshLiteMount(
+                rigid_name=name,
+                position=mount_position,
+                rotation=_surface_mount_rotation(normal, rotation[:, 0]),
+                normal=normal,
+                surface_position=position,
+            )
+
+        primitive_centers: dict[str, np.ndarray] = {}
+        for name, mount in mounts.items():
+            if name == "head":
+                radius = radii["head"]
+            elif name in {"left_foot", "right_foot"}:
+                radius = radii["leg"]
+            else:
+                radius = radii["torso"]
+            primitive_centers[name] = mount.surface_position - mount.normal * radius
+
+        occluders: list[MeshLiteOccluder] = []
+        if self.config.mesh_lite_occlusion != "body_capsules":
+            return mounts, occluders
+        head_center = primitive_centers.get("head")
+        if head_center is not None:
+            occluders.append(
+                MeshLiteOccluder(
+                    name="head",
+                    kind="sphere",
+                    radius_m=radii["head"],
+                    rigids=frozenset({"head"}),
+                    center=head_center,
+                )
+            )
+        chest_center = primitive_centers.get("chest")
+        waist_center = primitive_centers.get("waist")
+        if chest_center is not None and waist_center is not None:
+            occluders.append(
+                MeshLiteOccluder(
+                    name="torso",
+                    kind="capsule",
+                    radius_m=radii["torso"],
+                    rigids=frozenset({"chest", "waist"}),
+                    a=chest_center,
+                    b=waist_center,
+                )
+            )
+        left_center = primitive_centers.get("left_foot")
+        if waist_center is not None and left_center is not None:
+            occluders.append(
+                MeshLiteOccluder(
+                    name="left_leg",
+                    kind="capsule",
+                    radius_m=radii["leg"],
+                    rigids=frozenset({"left_foot"}),
+                    a=waist_center,
+                    b=left_center,
+                )
+            )
+        right_center = primitive_centers.get("right_foot")
+        if waist_center is not None and right_center is not None:
+            occluders.append(
+                MeshLiteOccluder(
+                    name="right_leg",
+                    kind="capsule",
+                    radius_m=radii["leg"],
+                    rigids=frozenset({"right_foot"}),
+                    a=waist_center,
+                    b=right_center,
+                )
+            )
+        return mounts, occluders
+
+    def _body_mount_pose_components(
+        self,
+        frame_index: int,
+    ) -> tuple[dict[str, tuple[np.ndarray, np.ndarray]], list[MeshLiteOccluder]]:
+        body_poses = self._mesh_lite_body_pose_components(frame_index)
+        mounts, occluders = self._mesh_lite_surface_model(body_poses)
+        pose_components: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        for rigid_name, (rotation, position) in body_poses.items():
+            mount = mounts.get(rigid_name)
+            if mount is None:
+                pose_components[rigid_name] = (rotation, position)
+            else:
+                pose_components[rigid_name] = (mount.rotation, mount.position)
+        return pose_components, occluders
+
+    def _marker_positions_world_for_frame(
+        self,
+        frame_index: int,
+    ) -> tuple[
+        dict[str, tuple[np.ndarray, np.ndarray]],
+        dict[str, np.ndarray],
+        list[MeshLiteOccluder],
+    ]:
+        pose_components, occluders = self._body_mount_pose_components(frame_index)
+        marker_world_by_rigid = {
+            rigid_name: (
+                rotation
+                @ np.asarray(self._bodies[rigid_name].pattern.marker_positions, dtype=np.float64).T
+            ).T
+            + position.reshape(1, 3)
+            for rigid_name, (rotation, position) in pose_components.items()
+            if rigid_name in self._bodies
+        }
+        return pose_components, marker_world_by_rigid, occluders
 
     def _build_bodies(self, patterns: list[MarkerPattern]) -> dict[str, SimulatedRigidInstance]:
         if self.config.scenario in FIVE_RIGID_BODY_SCENARIOS:
@@ -898,11 +1294,11 @@ class MultiRigidFrameGenerator:
                 }
             elif self.config.scenario in BODY_MOUNT_SCENARIOS:
                 base_positions = {
-                    "head": np.array([-0.22, 0.18, 2.46], dtype=np.float64),
-                    "chest": np.array([0.20, -0.16, 2.34], dtype=np.float64),
-                    "waist": np.array([0.05, 0.10, 2.20], dtype=np.float64),
-                    "left_foot": np.array([-0.28, -0.16, 2.05], dtype=np.float64),
-                    "right_foot": np.array([0.38, 0.16, 2.05], dtype=np.float64),
+                    "head": np.array([0.00, -0.055, 1.55], dtype=np.float64),
+                    "chest": np.array([0.00, -0.030, 1.15], dtype=np.float64),
+                    "waist": np.array([0.00, -0.010, 0.84], dtype=np.float64),
+                    "left_foot": np.array([-0.105, -0.015, 0.08], dtype=np.float64),
+                    "right_foot": np.array([0.105, 0.015, 0.08], dtype=np.float64),
                 }
             else:
                 base_positions = {
@@ -940,6 +1336,7 @@ class MultiRigidFrameGenerator:
                         "five_rigid_dance_occlusion",
                         "five_rigid_dance_hard_occlusion_v1",
                         "five_rigid_dance_swap_red_v1",
+                        "five_rigid_body_mesh_lite_v1",
                         "five_rigid_body_occlusion_v1",
                         "five_rigid_body_occlusion_relaxed_v1",
                     }
@@ -981,10 +1378,13 @@ class MultiRigidFrameGenerator:
         }:
             return {}
         references: dict[str, float] = {}
+        _pose_components, marker_world_by_rigid, _occluders = (
+            self._marker_positions_world_for_frame(0)
+        )
         for camera_id, camera in self._cameras.items():
             depths: list[float] = []
-            for body in self._bodies.values():
-                for point in body.marker_positions_world(0):
+            for points in marker_world_by_rigid.values():
+                for point in points:
                     depth = camera.camera_depth(point)
                     if depth > 0.0:
                         depths.append(depth)
@@ -1024,12 +1424,79 @@ class MultiRigidFrameGenerator:
             *BODY_MOUNT_SCENARIOS,
             "five_rigid_dance_swap_red_v1",
         }:
-            return self._depth_adjusted_blob_area(
+            area_px2 = self._depth_adjusted_blob_area(
                 camera_id,
                 self._real_log_like_blob_area(camera_id),
                 marker_world,
             )
+            diameter_scale = float(pattern.marker_diameter) / 0.014
+            return float(area_px2 * max(0.01, diameter_scale * diameter_scale))
         return float(max(4.0, pattern.marker_diameter * 3600.0))
+
+    def _effective_centroid_noise_px(self, area_px2: float) -> float:
+        noise_px = float(self.config.noise_px)
+        if noise_px <= 0.0 or self.config.centroid_noise_model == "constant":
+            return noise_px
+        diameter_px = float(np.sqrt(max(1e-9, 4.0 * float(area_px2) / np.pi)))
+        reference_diameter_px = float(self.config.centroid_noise_reference_diameter_px)
+        return float(noise_px * reference_diameter_px / max(diameter_px, 1e-6))
+
+    def _marker_detection_drop_probability(
+        self,
+        *,
+        area_px2: float,
+        is_active_anchor: bool,
+    ) -> float:
+        if is_active_anchor or self.config.marker_dropout_prob <= 0.0:
+            return 0.0
+        dropout = float(self.config.marker_dropout_prob)
+        if self.config.marker_detection_model == "iid_dropout":
+            return dropout
+
+        diameter_px = float(np.sqrt(max(1e-9, 4.0 * float(area_px2) / np.pi)))
+        reference_diameter_px = float(self.config.centroid_noise_reference_diameter_px)
+        snr_shortfall = max(0.0, reference_diameter_px / max(diameter_px, 1e-6) - 1.0)
+        low_snr_risk = float(np.clip(snr_shortfall * snr_shortfall, 0.0, 1.0))
+        return float(np.clip(dropout * low_snr_risk, 0.0, 1.0))
+
+    def _should_drop_marker_detection(
+        self,
+        *,
+        camera_id: str,
+        rigid_name: str,
+        marker_index: int,
+        area_px2: float,
+        is_active_anchor: bool,
+    ) -> bool:
+        probability = self._marker_detection_drop_probability(
+            area_px2=area_px2,
+            is_active_anchor=is_active_anchor,
+        )
+        if probability <= 0.0:
+            return False
+        self._marker_detection_drop_probability_values.append(float(probability))
+        if float(self._rng.random()) >= probability:
+            return False
+        self._marker_detection_drop_counts[
+            (str(camera_id), str(rigid_name), int(marker_index))
+        ] += 1
+        return True
+
+    def marker_detection_summary(self) -> dict[str, Any]:
+        by_rigid: Counter[str] = Counter()
+        by_camera: Counter[str] = Counter()
+        for (camera_id, rigid_name, _marker_index), count in (
+            self._marker_detection_drop_counts.items()
+        ):
+            by_camera[str(camera_id)] += int(count)
+            by_rigid[str(rigid_name)] += int(count)
+        return {
+            "model": str(self.config.marker_detection_model),
+            "drop_count": int(sum(self._marker_detection_drop_counts.values())),
+            "drop_count_by_camera": dict(sorted(by_camera.items())),
+            "drop_count_by_rigid": dict(sorted(by_rigid.items())),
+            "drop_probability": _summary(self._marker_detection_drop_probability_values),
+        }
 
     def _merge_nearby_body_mount_blobs(
         self,
@@ -1187,6 +1654,56 @@ class MultiRigidFrameGenerator:
             extra = 6 if 0.70 <= cycle_t < 1.18 else 0
         return int(self.config.false_blobs_per_camera) + extra
 
+    def _is_marker_mesh_lite_occluded(
+        self,
+        rigid_name: str,
+        camera_id: str,
+        marker_world: np.ndarray,
+        occluders: list[MeshLiteOccluder],
+    ) -> bool:
+        if self.config.mesh_lite_occlusion == "off":
+            return False
+        camera = self._cameras.get(camera_id)
+        if camera is None:
+            return False
+        camera_center = camera.camera_center_world()
+        marker = np.asarray(marker_world, dtype=np.float64).reshape(3)
+        segment_length = float(np.linalg.norm(marker - camera_center))
+        if segment_length <= 1e-9:
+            return False
+
+        # Keep a small endpoint clearance so a marker mounted on the surface of
+        # its own simplified body volume is not hidden by the volume it belongs to.
+        t_min = 0.015 / segment_length
+        t_max = max(0.0, 1.0 - 0.035 / segment_length)
+        for occluder in occluders:
+            radius = float(occluder.radius_m)
+            if radius <= 0.0:
+                continue
+            if occluder.kind == "sphere":
+                if occluder.center is None:
+                    continue
+                distance, ray_t = _segment_sphere_distance_with_t(
+                    camera_center,
+                    marker,
+                    np.asarray(occluder.center, dtype=np.float64),
+                )
+            else:
+                if occluder.a is None or occluder.b is None:
+                    continue
+                distance, ray_t = _segment_segment_distance_with_t(
+                    camera_center,
+                    marker,
+                    np.asarray(occluder.a, dtype=np.float64),
+                    np.asarray(occluder.b, dtype=np.float64),
+                )
+            if not (t_min <= ray_t <= t_max):
+                continue
+            if distance > radius:
+                continue
+            return True
+        return False
+
     def _is_marker_occluded(
         self,
         rigid_name: str,
@@ -1195,6 +1712,8 @@ class MultiRigidFrameGenerator:
         camera_id: str,
     ) -> bool:
         if self.config.scenario in BODY_MOUNT_SCENARIOS:
+            if self.config.scenario == "five_rigid_body_mesh_lite_v1":
+                return False
             cycle_index, cycle_t = self._hard_occlusion_cycle_time(frame_index)
             if cycle_t < 0.0:
                 return False
@@ -1468,11 +1987,13 @@ class MultiRigidFrameGenerator:
             present_camera_ids.append(camera_id)
 
         gt_poses: dict[str, dict[str, Any]] = {}
-        marker_world_by_rigid: dict[str, np.ndarray] = {}
-        for rigid_name, body in self._bodies.items():
-            rotation, position = body.pose_components(frame_index)
+        (
+            pose_components,
+            marker_world_by_rigid,
+            mesh_lite_occluders,
+        ) = self._marker_positions_world_for_frame(frame_index)
+        for rigid_name, (rotation, position) in pose_components.items():
             gt_poses[rigid_name] = _pattern_to_pose_dict(rotation, position)
-            marker_world_by_rigid[rigid_name] = body.marker_positions_world(frame_index)
 
         projections: dict[str, dict[str, list[tuple[float, float] | None]]] = {}
         for camera_id in present_camera_ids:
@@ -1491,27 +2012,52 @@ class MultiRigidFrameGenerator:
                 for marker_index in range(pattern.num_markers):
                     if self._is_marker_occluded(rigid_name, marker_index, frame_index, camera_id):
                         continue
-                    if (
-                        self.config.marker_dropout_prob > 0.0
-                        and float(self._rng.random()) < self.config.marker_dropout_prob
+                    marker_world = marker_world_by_rigid[rigid_name][marker_index]
+                    if self._is_marker_mesh_lite_occluded(
+                        rigid_name,
+                        camera_id,
+                        marker_world,
+                        mesh_lite_occluders,
                     ):
                         continue
+                    is_active_anchor = bool(
+                        self.config.active_anchor_markers and marker_index == 0
+                    )
                     projection = projections[camera_id][rigid_name][marker_index]
                     if projection is None:
                         continue
-                    dx, dy = _sample_gaussian_pixel_noise(self._rng, self.config.noise_px)
-                    blob_index = len(blobs)
-                    blobs.append(
-                        {
-                            "x": float(projection[0] + dx),
-                            "y": float(projection[1] + dy),
-                            "area": self._synthetic_blob_area(
-                                camera_id,
-                                pattern,
-                                marker_world_by_rigid[rigid_name][marker_index],
-                            ),
-                        }
+                    area_px2 = self._synthetic_blob_area(
+                        camera_id,
+                        pattern,
+                        marker_world,
                     )
+                    if self._should_drop_marker_detection(
+                        camera_id=camera_id,
+                        rigid_name=rigid_name,
+                        marker_index=marker_index,
+                        area_px2=area_px2,
+                        is_active_anchor=is_active_anchor,
+                    ):
+                        continue
+                    dx, dy = _sample_gaussian_pixel_noise(
+                        self._rng,
+                        self._effective_centroid_noise_px(area_px2),
+                    )
+                    blob_index = len(blobs)
+                    blob_payload: dict[str, Any] = {
+                        "x": float(projection[0] + dx),
+                        "y": float(projection[1] + dy),
+                        "area": float(area_px2),
+                    }
+                    if is_active_anchor:
+                        blob_payload.update(
+                            {
+                                "active_anchor": True,
+                                "active_anchor_rigid": str(rigid_name),
+                                "active_anchor_marker": int(marker_index),
+                            }
+                        )
+                    blobs.append(blob_payload)
                     ledger[(timestamp_us, camera_id, blob_index)] = SyntheticBlobOwner(
                         timestamp=timestamp_us,
                         camera_id=camera_id,
@@ -1717,6 +2263,136 @@ def _blob_merge_summary(owners: list[SyntheticBlobOwner]) -> dict[str, Any]:
     }
 
 
+def _visibility_phase(
+    *,
+    visible_marker_count: int,
+    visible_camera_count: int,
+    marker_view_count: int,
+    expected_markers: int,
+) -> str:
+    if visible_marker_count <= 0 or marker_view_count <= 0:
+        return "hidden"
+    if visible_camera_count <= 1:
+        return "one_camera_visible"
+    if visible_marker_count >= expected_markers:
+        return "full_visible"
+    return "partial_visible"
+
+
+def _evidence_phase(
+    *,
+    physical_phase: str,
+    hint_marker_count: int,
+    active_anchor_count: int,
+    assigned_marker_views: int,
+    expected_markers: int,
+) -> str:
+    if hint_marker_count >= expected_markers:
+        return "full_3d_hint"
+    if hint_marker_count >= 3:
+        return "partial_3d_hint"
+    if assigned_marker_views > 0 or active_anchor_count > 0:
+        return "partial_2d_evidence"
+    if physical_phase == "hidden":
+        return "hidden_prediction_only"
+    return "visible_no_solver_evidence"
+
+
+def _new_phase_bucket() -> dict[str, Any]:
+    return {
+        "frames": 0,
+        "valid": 0,
+        "measurement_valid": 0,
+        "prediction_hold_valid": 0,
+        "invalid": 0,
+        "pose_source_counts": Counter(),
+        "position_error_m": [],
+        "rotation_error_deg": [],
+        "measurement_position_error_m": [],
+        "measurement_rotation_error_deg": [],
+        "prediction_hold_position_error_m": [],
+        "prediction_hold_rotation_error_deg": [],
+    }
+
+
+def _record_phase_bucket(
+    bucket: dict[str, Any],
+    *,
+    pose_valid: bool,
+    pose_source: str,
+    position_error_m: float | None,
+    rotation_error_deg: float | None,
+) -> None:
+    bucket["frames"] = int(bucket.get("frames", 0)) + 1
+    bucket["pose_source_counts"][str(pose_source or "unknown")] += 1
+    hold_source = str(pose_source) in {
+        "prediction_hold",
+        "prediction_hold_2d_constrained",
+        "pose_continuity_guard",
+        "ownership_conflict_prediction_hold",
+    }
+    if pose_valid:
+        bucket["valid"] = int(bucket.get("valid", 0)) + 1
+        if hold_source:
+            bucket["prediction_hold_valid"] = int(bucket.get("prediction_hold_valid", 0)) + 1
+        else:
+            bucket["measurement_valid"] = int(bucket.get("measurement_valid", 0)) + 1
+        if position_error_m is not None:
+            bucket["position_error_m"].append(float(position_error_m))
+        if rotation_error_deg is not None:
+            bucket["rotation_error_deg"].append(float(rotation_error_deg))
+        if hold_source:
+            if position_error_m is not None:
+                bucket["prediction_hold_position_error_m"].append(float(position_error_m))
+            if rotation_error_deg is not None:
+                bucket["prediction_hold_rotation_error_deg"].append(float(rotation_error_deg))
+        else:
+            if position_error_m is not None:
+                bucket["measurement_position_error_m"].append(float(position_error_m))
+            if rotation_error_deg is not None:
+                bucket["measurement_rotation_error_deg"].append(float(rotation_error_deg))
+    else:
+        bucket["invalid"] = int(bucket.get("invalid", 0)) + 1
+
+
+def _finalize_phase_buckets(
+    buckets: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for phase, bucket in sorted(buckets.items()):
+        frames = max(1, int(bucket.get("frames", 0)))
+        result[str(phase)] = {
+            "frames": int(bucket.get("frames", 0)),
+            "valid": int(bucket.get("valid", 0)),
+            "invalid": int(bucket.get("invalid", 0)),
+            "measurement_valid": int(bucket.get("measurement_valid", 0)),
+            "prediction_hold_valid": int(bucket.get("prediction_hold_valid", 0)),
+            "valid_ratio": float(int(bucket.get("valid", 0)) / frames),
+            "measurement_valid_ratio": float(
+                int(bucket.get("measurement_valid", 0)) / frames
+            ),
+            "prediction_hold_valid_ratio": float(
+                int(bucket.get("prediction_hold_valid", 0)) / frames
+            ),
+            "pose_source_counts": dict(sorted(bucket.get("pose_source_counts", {}).items())),
+            "position_error_m": _summary(bucket.get("position_error_m", [])),
+            "rotation_error_deg": _summary(bucket.get("rotation_error_deg", [])),
+            "measurement_position_error_m": _summary(
+                bucket.get("measurement_position_error_m", [])
+            ),
+            "measurement_rotation_error_deg": _summary(
+                bucket.get("measurement_rotation_error_deg", [])
+            ),
+            "prediction_hold_position_error_m": _summary(
+                bucket.get("prediction_hold_position_error_m", [])
+            ),
+            "prediction_hold_rotation_error_deg": _summary(
+                bucket.get("prediction_hold_rotation_error_deg", [])
+            ),
+        }
+    return result
+
+
 def run_multi_rigid_scenario(
     config: MultiRigidScenarioConfig,
     *,
@@ -1738,7 +2414,9 @@ def run_multi_rigid_scenario(
     patterns = load_mvp_patterns(
         config.rigids_path,
         marker_layout=config.marker_layout,
+        marker_diameter_scale=config.marker_diameter_scale,
     )
+    patterns_by_name = {pattern.name: pattern for pattern in patterns}
     camera_params = load_camera_rig(config)
     generator = MultiRigidFrameGenerator(config, patterns=patterns, camera_params=camera_params)
 
@@ -1765,8 +2443,18 @@ def run_multi_rigid_scenario(
     rotation_delta_errors_by_rigid: dict[str, list[float]] = {
         name: [] for name in config.rigid_names
     }
+    position_delta_events_by_rigid: dict[str, list[dict[str, Any]]] = {
+        name: [] for name in config.rigid_names
+    }
+    rotation_delta_events_by_rigid: dict[str, list[dict[str, Any]]] = {
+        name: [] for name in config.rigid_names
+    }
     valid_frames_by_rigid: dict[str, int] = {name: 0 for name in config.rigid_names}
     last_valid_pose_by_rigid: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = {}
+    phase_eval_by_rigid: dict[str, dict[str, dict[str, dict[str, Any]]]] = {
+        rigid_name: {"physical": {}, "evidence": {}}
+        for rigid_name in config.rigid_names
+    }
     emitted_ledger_entries = 0
     wrong_ownership_count = 0
     marker_source_confusion_count = 0
@@ -1780,6 +2468,39 @@ def run_multi_rigid_scenario(
     blob_area_values_by_camera: dict[str, list[float]] = {
         camera_id: [] for camera_id in config.camera_ids
     }
+    blob_area_values_by_rigid: dict[str, list[float]] = {
+        rigid_name: [] for rigid_name in config.rigid_names
+    }
+    blob_nearest_distance_by_camera: dict[str, list[float]] = {
+        camera_id: [] for camera_id in config.camera_ids
+    }
+    blob_nearest_distance_by_rigid: dict[str, list[float]] = {
+        rigid_name: [] for rigid_name in config.rigid_names
+    }
+    marker_visibility_by_rigid: dict[str, dict[str, list[float]]] = {
+        rigid_name: {
+            "visible_marker_count": [],
+            "marker_view_count": [],
+            "visible_camera_count": [],
+            "two_ray_marker_count": [],
+        }
+        for rigid_name in config.rigid_names
+    }
+    marker_visibility_hist_by_rigid: dict[str, dict[int, int]] = {
+        rigid_name: {count: 0 for count in range(6)} for rigid_name in config.rigid_names
+    }
+    marker_visibility_by_frame: dict[int, dict[str, dict[str, Any]]] = {}
+    rigid_hint_visibility_by_frame: dict[int, dict[str, dict[str, Any]]] = {}
+    generic_3d_coverage_threshold_m = 0.02
+    generic_3d_coverage_by_rigid: dict[str, dict[str, list[float]]] = {
+        rigid_name: {
+            "covered_marker_count": [],
+            "nearest_marker_point_distance_m": [],
+        }
+        for rigid_name in config.rigid_names
+    }
+    generic_3d_coverage_by_frame: dict[int, dict[str, dict[str, Any]]] = {}
+    blob_quality_by_frame: dict[int, dict[str, dict[str, Any]]] = {}
     started_ns = time.perf_counter_ns()
 
     for _ in range(int(config.frames)):
@@ -1788,9 +2509,33 @@ def run_multi_rigid_scenario(
             break
         emitted_ledger_entries += len(sample.ownership_ledger)
         emitted_blob_owners.extend(sample.ownership_ledger.values())
+        frame_blob_distances_by_rigid: dict[str, list[float]] = {
+            rigid_name: [] for rigid_name in config.rigid_names
+        }
+        frame_blob_distances_by_camera_rigid: dict[str, dict[str, list[float]]] = {}
         for frame in sample.paired.frames.values():
-            camera_bucket = blob_area_values_by_camera.setdefault(str(frame.camera_id), [])
-            for blob in frame.blobs or []:
+            camera_id = str(frame.camera_id)
+            camera_bucket = blob_area_values_by_camera.setdefault(camera_id, [])
+            camera_distance_bucket = blob_nearest_distance_by_camera.setdefault(camera_id, [])
+            blobs = list(frame.blobs or [])
+            blob_uvs = np.asarray(
+                [
+                    [float(blob.get("x", 0.0) or 0.0), float(blob.get("y", 0.0) or 0.0)]
+                    for blob in blobs
+                ],
+                dtype=np.float64,
+            ).reshape(-1, 2)
+            nearest_distances: list[float] = []
+            if len(blob_uvs) >= 2:
+                deltas = blob_uvs[:, None, :] - blob_uvs[None, :, :]
+                distances = np.sqrt(np.sum(deltas * deltas, axis=2))
+                np.fill_diagonal(distances, np.inf)
+                nearest_distances = [
+                    float(value) for value in np.min(distances, axis=1) if np.isfinite(value)
+                ]
+            else:
+                nearest_distances = [0.0 for _ in blobs]
+            for blob_index, blob in enumerate(blobs):
                 try:
                     area = float(blob.get("area", 0.0) or 0.0)
                 except Exception:
@@ -1799,10 +2544,124 @@ def run_multi_rigid_scenario(
                     continue
                 blob_area_values.append(area)
                 camera_bucket.append(area)
+                if blob_index < len(nearest_distances):
+                    camera_distance_bucket.append(float(nearest_distances[blob_index]))
+                owner = sample.ownership_ledger.get(
+                    (int(frame.timestamp), camera_id, int(blob_index))
+                )
+                if owner is None:
+                    continue
+                rigid_bucket = blob_area_values_by_rigid.setdefault(
+                    str(owner.rigid_name),
+                    [],
+                )
+                rigid_bucket.append(area)
+                if blob_index < len(nearest_distances):
+                    blob_nearest_distance_by_rigid.setdefault(
+                        str(owner.rigid_name),
+                        [],
+                    ).append(float(nearest_distances[blob_index]))
+                    if str(owner.rigid_name) in frame_blob_distances_by_rigid:
+                        frame_blob_distances_by_rigid[str(owner.rigid_name)].append(
+                            float(nearest_distances[blob_index])
+                        )
+                        frame_blob_distances_by_camera_rigid.setdefault(
+                            camera_id,
+                            {},
+                        ).setdefault(str(owner.rigid_name), []).append(
+                            float(nearest_distances[blob_index])
+                        )
         if len(sample.paired.frames) < 2:
             continue
+        frame_index = min(
+            (int(frame.frame_index) for frame in sample.paired.frames.values()),
+            default=int(processed_samples),
+        )
+        _gt_pose_components, gt_marker_world_by_rigid, _gt_mesh_lite_occluders = (
+            generator._marker_positions_world_for_frame(int(frame_index))
+        )
+        blob_quality_by_frame[int(frame_index)] = {
+            rigid_name: {
+                "nearest_blob_distance_px": _summary(values),
+                "by_camera": {
+                    camera_id: _summary(
+                        frame_blob_distances_by_camera_rigid.get(camera_id, {}).get(
+                            rigid_name,
+                            [],
+                        )
+                    )
+                    for camera_id in sorted(frame_blob_distances_by_camera_rigid)
+                    if rigid_name
+                    in frame_blob_distances_by_camera_rigid.get(camera_id, {})
+                },
+            }
+            for rigid_name, values in frame_blob_distances_by_rigid.items()
+        }
+        visible_markers: dict[str, set[int]] = {
+            rigid_name: set() for rigid_name in config.rigid_names
+        }
+        visible_cameras: dict[str, set[str]] = {
+            rigid_name: set() for rigid_name in config.rigid_names
+        }
+        visible_marker_cameras: dict[str, dict[int, set[str]]] = {
+            rigid_name: {} for rigid_name in config.rigid_names
+        }
+        marker_view_counts: dict[str, int] = {rigid_name: 0 for rigid_name in config.rigid_names}
+        for owner in sample.ownership_ledger.values():
+            rigid_name = str(owner.rigid_name)
+            if rigid_name not in visible_markers or owner.marker_index is None:
+                continue
+            marker_index = int(owner.marker_index)
+            visible_markers[rigid_name].add(marker_index)
+            visible_cameras[rigid_name].add(str(owner.camera_id))
+            visible_marker_cameras[rigid_name].setdefault(marker_index, set()).add(
+                str(owner.camera_id)
+            )
+            marker_view_counts[rigid_name] += 1
+        frame_visibility: dict[str, dict[str, Any]] = {}
+        for rigid_name in config.rigid_names:
+            marker_count = int(len(visible_markers[rigid_name]))
+            view_count = int(marker_view_counts[rigid_name])
+            camera_count = int(len(visible_cameras[rigid_name]))
+            two_ray_count = int(
+                sum(
+                    1
+                    for cameras in visible_marker_cameras[rigid_name].values()
+                    if len(cameras) >= 2
+                )
+            )
+            marker_visibility_by_rigid[rigid_name]["visible_marker_count"].append(
+                float(marker_count)
+            )
+            marker_visibility_by_rigid[rigid_name]["marker_view_count"].append(
+                float(view_count)
+            )
+            marker_visibility_by_rigid[rigid_name]["visible_camera_count"].append(
+                float(camera_count)
+            )
+            marker_visibility_by_rigid[rigid_name]["two_ray_marker_count"].append(
+                float(two_ray_count)
+            )
+            marker_visibility_hist_by_rigid[rigid_name][marker_count] = (
+                int(marker_visibility_hist_by_rigid[rigid_name].get(marker_count, 0)) + 1
+            )
+            frame_visibility[rigid_name] = {
+                "visible_marker_count": marker_count,
+                "marker_view_count": view_count,
+                "visible_camera_count": camera_count,
+                "two_ray_marker_count": two_ray_count,
+                "marker_indices": [int(value) for value in sorted(visible_markers[rigid_name])],
+            }
+        marker_visibility_by_frame[int(frame_index)] = frame_visibility
         latest_poses.clear()
         pipeline._on_paired_frames(sample.paired)
+        current_rigid_hint_visibility: dict[str, dict[str, Any]] = {}
+        if hasattr(pipeline.rigid_estimator, "get_last_rigid_hint_visibility"):
+            current_rigid_hint_visibility = (
+                pipeline.rigid_estimator.get_last_rigid_hint_visibility()
+            )
+            rigid_hint_visibility_by_frame[int(frame_index)] = current_rigid_hint_visibility
+        current_tracking_status = pipeline.rigid_estimator.get_tracking_status()
         processed_samples += 1
         pipeline_pair_last_ms_values.append(
             _latest_pipeline_stage_ms(pipeline, "pipeline_pair_ms")
@@ -1810,13 +2669,61 @@ def run_multi_rigid_scenario(
         rigid_last_ms_values.append(_latest_pipeline_stage_ms(pipeline, "rigid_ms"))
         geometry_last_ms_values.append(_latest_pipeline_stage_ms(pipeline, "triangulation_ms"))
         snapshot = pipeline.get_latest_triangulation_snapshot()
+        generic_points = np.asarray(
+            [
+                point.get("point", [0.0, 0.0, 0.0])
+                for point in snapshot.get("triangulated_points", []) or []
+                if isinstance(point, dict)
+            ],
+            dtype=np.float64,
+        ).reshape(-1, 3)
+        frame_generic_coverage: dict[str, dict[str, Any]] = {}
+        for rigid_name in config.rigid_names:
+            gt_markers = gt_marker_world_by_rigid.get(rigid_name)
+            if gt_markers is None:
+                continue
+            gt_markers = np.asarray(
+                gt_markers,
+                dtype=np.float64,
+            ).reshape(-1, 3)
+            marker_distances: list[float] = []
+            covered_indices: list[int] = []
+            for marker_index, marker_point in enumerate(gt_markers):
+                if len(generic_points) == 0:
+                    nearest = float("inf")
+                else:
+                    nearest = float(
+                        np.min(
+                            np.linalg.norm(
+                                generic_points - marker_point.reshape(1, 3),
+                                axis=1,
+                            )
+                        )
+                    )
+                marker_distances.append(nearest)
+                if nearest <= generic_3d_coverage_threshold_m:
+                    covered_indices.append(int(marker_index))
+            finite_distances = [
+                distance for distance in marker_distances if np.isfinite(distance)
+            ]
+            generic_3d_coverage_by_rigid[rigid_name][
+                "covered_marker_count"
+            ].append(float(len(covered_indices)))
+            generic_3d_coverage_by_rigid[rigid_name][
+                "nearest_marker_point_distance_m"
+            ].extend(finite_distances)
+            frame_generic_coverage[rigid_name] = {
+                "covered_marker_count": int(len(covered_indices)),
+                "covered_marker_indices": covered_indices,
+                "nearest_marker_point_distance_m": [
+                    float(distance) if np.isfinite(distance) else None
+                    for distance in marker_distances
+                ],
+            }
+        generic_3d_coverage_by_frame[int(frame_index)] = frame_generic_coverage
         wrong, confused, events = _ownership_confusion_from_snapshot(
             snapshot,
             sample.ownership_ledger,
-        )
-        frame_index = min(
-            (int(frame.frame_index) for frame in sample.paired.frames.values()),
-            default=int(processed_samples - 1),
         )
         for event in events:
             event["frame_index"] = int(frame_index)
@@ -1825,16 +2732,88 @@ def run_multi_rigid_scenario(
         ownership_confusion_events.extend(events)
         for rigid_name, gt_pose in sample.gt_poses.items():
             pose = latest_poses.get(rigid_name)
-            if pose is None or not getattr(pose, "valid", False):
-                continue
             gt_position = np.asarray(gt_pose["position_m"], dtype=np.float64)
             gt_rotation = np.asarray(gt_pose["rotation"], dtype=np.float64)
-            position_errors_by_rigid.setdefault(rigid_name, []).append(
-                float(np.linalg.norm(np.asarray(pose.position, dtype=np.float64) - gt_position))
+            pose_valid = bool(pose is not None and getattr(pose, "valid", False))
+            tracking_payload = (
+                current_tracking_status.get(rigid_name, {})
+                if isinstance(current_tracking_status, dict)
+                else {}
             )
-            rotation_errors_by_rigid.setdefault(rigid_name, []).append(
-                _rotation_error_deg(np.asarray(pose.rotation, dtype=np.float64), gt_rotation)
+            pose_source = (
+                str(tracking_payload.get("last_pose_source", "unknown"))
+                if isinstance(tracking_payload, dict)
+                else "unknown"
             )
+            visibility_payload = frame_visibility.get(rigid_name, {})
+            pattern = patterns_by_name.get(rigid_name)
+            expected_markers = int(pattern.num_markers) if pattern is not None else 5
+            physical_phase = _visibility_phase(
+                visible_marker_count=int(
+                    visibility_payload.get("visible_marker_count", 0) or 0
+                ),
+                visible_camera_count=int(
+                    visibility_payload.get("visible_camera_count", 0) or 0
+                ),
+                marker_view_count=int(visibility_payload.get("marker_view_count", 0) or 0),
+                expected_markers=expected_markers,
+            )
+            hint_payload = current_rigid_hint_visibility.get(rigid_name, {})
+            object_gating = (
+                tracking_payload.get("object_gating", {})
+                if isinstance(tracking_payload, dict)
+                else {}
+            )
+            evidence_phase = _evidence_phase(
+                physical_phase=physical_phase,
+                hint_marker_count=int(hint_payload.get("marker_count", 0) or 0),
+                active_anchor_count=int(
+                    object_gating.get("active_anchor_assignment_count", 0) or 0
+                )
+                if isinstance(object_gating, dict)
+                else 0,
+                assigned_marker_views=int(
+                    object_gating.get("assigned_marker_views", 0) or 0
+                )
+                if isinstance(object_gating, dict)
+                else 0,
+                expected_markers=expected_markers,
+            )
+            position_error: float | None = None
+            rotation_error: float | None = None
+            if pose_valid:
+                position_error = float(
+                    np.linalg.norm(np.asarray(pose.position, dtype=np.float64) - gt_position)
+                )
+                rotation_error = _rotation_error_deg(
+                    np.asarray(pose.rotation, dtype=np.float64), gt_rotation
+                )
+                position_errors_by_rigid.setdefault(rigid_name, []).append(position_error)
+                rotation_errors_by_rigid.setdefault(rigid_name, []).append(rotation_error)
+            physical_bucket = phase_eval_by_rigid[rigid_name]["physical"].setdefault(
+                physical_phase,
+                _new_phase_bucket(),
+            )
+            evidence_bucket = phase_eval_by_rigid[rigid_name]["evidence"].setdefault(
+                evidence_phase,
+                _new_phase_bucket(),
+            )
+            _record_phase_bucket(
+                physical_bucket,
+                pose_valid=pose_valid,
+                pose_source=pose_source,
+                position_error_m=position_error,
+                rotation_error_deg=rotation_error,
+            )
+            _record_phase_bucket(
+                evidence_bucket,
+                pose_valid=pose_valid,
+                pose_source=pose_source,
+                position_error_m=position_error,
+                rotation_error_deg=rotation_error,
+            )
+            if not pose_valid:
+                continue
             pose_position = np.asarray(pose.position, dtype=np.float64).reshape(3)
             pose_rotation = np.asarray(pose.rotation, dtype=np.float64).reshape(3, 3)
             previous = last_valid_pose_by_rigid.get(rigid_name)
@@ -1842,13 +2821,32 @@ def run_multi_rigid_scenario(
                 prev_pose_position, prev_pose_rotation, prev_gt_position, prev_gt_rotation = previous
                 estimated_delta = pose_position - prev_pose_position
                 gt_delta = gt_position - prev_gt_position
+                position_delta_error = float(np.linalg.norm(estimated_delta - gt_delta))
                 position_delta_errors_by_rigid.setdefault(rigid_name, []).append(
-                    float(np.linalg.norm(estimated_delta - gt_delta))
+                    position_delta_error
                 )
                 estimated_rotation_delta = pose_rotation @ prev_pose_rotation.T
                 gt_rotation_delta = gt_rotation @ prev_gt_rotation.T
+                rotation_delta_error = _rotation_error_deg(
+                    estimated_rotation_delta,
+                    gt_rotation_delta,
+                )
                 rotation_delta_errors_by_rigid.setdefault(rigid_name, []).append(
-                    _rotation_error_deg(estimated_rotation_delta, gt_rotation_delta)
+                    rotation_delta_error
+                )
+                position_delta_events_by_rigid.setdefault(rigid_name, []).append(
+                    {
+                        "frame_index": int(frame_index),
+                        "timestamp": int(sample.paired.timestamp),
+                        "error_m": position_delta_error,
+                    }
+                )
+                rotation_delta_events_by_rigid.setdefault(rigid_name, []).append(
+                    {
+                        "frame_index": int(frame_index),
+                        "timestamp": int(sample.paired.timestamp),
+                        "error_deg": rotation_delta_error,
+                    }
                 )
             last_valid_pose_by_rigid[rigid_name] = (
                 pose_position.copy(),
@@ -1916,6 +2914,55 @@ def run_multi_rigid_scenario(
         name: float(valid_frames_by_rigid.get(name, 0)) / float(max(1, processed_samples))
         for name in config.rigid_names
     }
+    phase_evaluation_by_rigid = {
+        rigid_name: {
+            "physical": _finalize_phase_buckets(phase_payload.get("physical", {})),
+            "evidence": _finalize_phase_buckets(phase_payload.get("evidence", {})),
+        }
+        for rigid_name, phase_payload in sorted(phase_eval_by_rigid.items())
+    }
+    full_3d_measurement_ratios: list[float] = []
+    hold_position_max_values: list[float] = []
+    hold_rotation_max_values: list[float] = []
+    for phase_payload in phase_evaluation_by_rigid.values():
+        full_3d = phase_payload.get("evidence", {}).get("full_3d_hint", {})
+        if int(full_3d.get("frames", 0) or 0) > 0:
+            full_3d_measurement_ratios.append(
+                float(full_3d.get("measurement_valid_ratio", 0.0) or 0.0)
+            )
+        for evidence_bucket in phase_payload.get("evidence", {}).values():
+            hold_position_max_values.append(
+                float(
+                    evidence_bucket.get("prediction_hold_position_error_m", {}).get(
+                        "max",
+                        0.0,
+                    )
+                    or 0.0
+                )
+            )
+            hold_rotation_max_values.append(
+                float(
+                    evidence_bucket.get("prediction_hold_rotation_error_deg", {}).get(
+                        "max",
+                        0.0,
+                    )
+                    or 0.0
+                )
+            )
+    phase_aware_go_no_go = {
+        "full_3d_hint_measurement_valid_ratio_ge_0_95": all(
+            value >= 0.95 for value in full_3d_measurement_ratios
+        ),
+        "prediction_hold_position_error_max_le_5cm": (
+            max(hold_position_max_values, default=0.0) <= 0.05
+        ),
+        "prediction_hold_rotation_error_max_le_10deg": (
+            max(hold_rotation_max_values, default=0.0) <= 10.0
+        ),
+    }
+    phase_aware_go_no_go["passed"] = all(
+        bool(value) for value in phase_aware_go_no_go.values()
+    )
     blob_diameter_values = [
         float(np.sqrt(4.0 * area / np.pi)) for area in blob_area_values if area > 0.0
     ]
@@ -1931,6 +2978,38 @@ def run_multi_rigid_scenario(
             }
             for camera_id, values in sorted(blob_area_values_by_camera.items())
         },
+    }
+    blob_quality_summary_by_camera = {
+        camera_id: {
+            "area_px2": _summary(blob_area_values_by_camera.get(camera_id, [])),
+            "equivalent_diameter_px": _summary(
+                [
+                    float(np.sqrt(4.0 * area / np.pi))
+                    for area in blob_area_values_by_camera.get(camera_id, [])
+                    if area > 0.0
+                ]
+            ),
+            "nearest_blob_distance_px": _summary(
+                blob_nearest_distance_by_camera.get(camera_id, [])
+            ),
+        }
+        for camera_id in sorted(blob_area_values_by_camera)
+    }
+    blob_quality_summary_by_rigid = {
+        rigid_name: {
+            "area_px2": _summary(blob_area_values_by_rigid.get(rigid_name, [])),
+            "equivalent_diameter_px": _summary(
+                [
+                    float(np.sqrt(4.0 * area / np.pi))
+                    for area in blob_area_values_by_rigid.get(rigid_name, [])
+                    if area > 0.0
+                ]
+            ),
+            "nearest_blob_distance_px": _summary(
+                blob_nearest_distance_by_rigid.get(rigid_name, [])
+            ),
+        }
+        for rigid_name in sorted(blob_area_values_by_rigid)
     }
     max_position_delta_error_m = max(
         (
@@ -1957,9 +3036,135 @@ def run_multi_rigid_scenario(
         "production_go_no_go_passed": bool(production_go_no_go["passed"]),
     }
     scenario_go_no_go["passed"] = all(bool(value) for value in scenario_go_no_go.values())
+    passive_stabilization_v2 = dict(
+        dict(variant_metrics).get("passive_stabilization_v2", {})
+    )
+    marker_visibility_summary_by_rigid = {
+        rigid_name: {
+            "visible_marker_count": _summary(
+                values.get("visible_marker_count", [])
+            ),
+            "marker_view_count": _summary(values.get("marker_view_count", [])),
+            "visible_camera_count": _summary(
+                values.get("visible_camera_count", [])
+            ),
+            "two_ray_marker_count": _summary(
+                values.get("two_ray_marker_count", [])
+            ),
+            "visible_marker_count_histogram": {
+                str(count): int(value)
+                for count, value in sorted(
+                    marker_visibility_hist_by_rigid.get(rigid_name, {}).items()
+                )
+            },
+        }
+        for rigid_name, values in sorted(marker_visibility_by_rigid.items())
+    }
+    shape_observability_summary_by_rigid = {}
+    for rigid_name, values in sorted(marker_visibility_by_rigid.items()):
+        marker_counts = [
+            float(value) for value in values.get("visible_marker_count", [])
+        ]
+        view_counts = [float(value) for value in values.get("marker_view_count", [])]
+        camera_counts = [
+            float(value) for value in values.get("visible_camera_count", [])
+        ]
+        two_ray_counts = [
+            float(value) for value in values.get("two_ray_marker_count", [])
+        ]
+        frame_count = float(max(1, len(marker_counts)))
+        shape_observability_summary_by_rigid[rigid_name] = {
+            "frames": int(len(marker_counts)),
+            "visible_markers_ge_5_ratio": float(
+                sum(1 for value in marker_counts if value >= 5.0) / frame_count
+            ),
+            "visible_markers_ge_4_ratio": float(
+                sum(1 for value in marker_counts if value >= 4.0) / frame_count
+            ),
+            "visible_markers_ge_3_ratio": float(
+                sum(1 for value in marker_counts if value >= 3.0) / frame_count
+            ),
+            "visible_cameras_ge_2_ratio": float(
+                sum(1 for value in camera_counts if value >= 2.0) / frame_count
+            ),
+            "two_ray_markers_ge_4_ratio": float(
+                sum(1 for value in two_ray_counts if value >= 4.0) / frame_count
+            ),
+            "two_ray_markers_ge_3_ratio": float(
+                sum(1 for value in two_ray_counts if value >= 3.0) / frame_count
+            ),
+            "marker_views_ge_8_ratio": float(
+                sum(1 for value in view_counts if value >= 8.0) / frame_count
+            ),
+            "marker_views_ge_6_ratio": float(
+                sum(1 for value in view_counts if value >= 6.0) / frame_count
+            ),
+            "min_visible_marker_count": float(min(marker_counts, default=0.0)),
+            "min_two_ray_marker_count": float(min(two_ray_counts, default=0.0)),
+            "min_marker_view_count": float(min(view_counts, default=0.0)),
+            "min_visible_camera_count": float(min(camera_counts, default=0.0)),
+        }
+    top_delta_frame_indices = {
+        int(event["frame_index"])
+        for events in list(position_delta_events_by_rigid.values())
+        + list(rotation_delta_events_by_rigid.values())
+        for event in sorted(
+            events,
+            key=lambda payload: max(
+                float(payload.get("error_m", 0.0)),
+                float(payload.get("error_deg", 0.0)),
+            ),
+            reverse=True,
+        )[:5]
+        if "frame_index" in event
+    }
+    marker_visibility_top_delta_frames = {
+        str(frame_index): marker_visibility_by_frame.get(frame_index, {})
+        for frame_index in sorted(top_delta_frame_indices)
+    }
+    rigid_hint_visibility_top_delta_frames = {
+        str(frame_index): rigid_hint_visibility_by_frame.get(frame_index, {})
+        for frame_index in sorted(top_delta_frame_indices)
+    }
+    generic_3d_coverage_summary_by_rigid = {
+        rigid_name: {
+            "covered_marker_count": _summary(
+                values.get("covered_marker_count", [])
+            ),
+            "nearest_marker_point_distance_m": _summary(
+                values.get("nearest_marker_point_distance_m", [])
+            ),
+            "coverage_threshold_m": float(generic_3d_coverage_threshold_m),
+        }
+        for rigid_name, values in sorted(generic_3d_coverage_by_rigid.items())
+    }
+    generic_3d_coverage_top_delta_frames = {
+        str(frame_index): generic_3d_coverage_by_frame.get(frame_index, {})
+        for frame_index in sorted(top_delta_frame_indices)
+    }
+    blob_quality_top_delta_frames = {
+        str(frame_index): blob_quality_by_frame.get(frame_index, {})
+        for frame_index in sorted(top_delta_frame_indices)
+    }
+    passive_stabilization_v2.update(
+        {
+            "blob_quality_summary_by_camera": blob_quality_summary_by_camera,
+            "blob_quality_summary_by_rigid": blob_quality_summary_by_rigid,
+            "blob_quality_top_delta_frames": blob_quality_top_delta_frames,
+            "marker_visibility_summary_by_rigid": marker_visibility_summary_by_rigid,
+            "shape_observability_summary_by_rigid": shape_observability_summary_by_rigid,
+            "marker_visibility_top_delta_frames": marker_visibility_top_delta_frames,
+            "rigid_hint_visibility_top_delta_frames": rigid_hint_visibility_top_delta_frames,
+            "generic_3d_coverage_summary_by_rigid": generic_3d_coverage_summary_by_rigid,
+            "generic_3d_coverage_top_delta_frames": generic_3d_coverage_top_delta_frames,
+            "phase_evaluation_by_rigid": phase_evaluation_by_rigid,
+            "phase_aware_go_no_go": phase_aware_go_no_go,
+        }
+    )
     summary = {
         "scenario": config.scenario,
         "marker_layout": config.marker_layout,
+        "rigids_path": str(config.rigids_path),
         "camera_rig_source": config.camera_rig_source,
         "pipeline_variant": config.pipeline_variant,
         "subset_diagnostics_mode": config.subset_diagnostics_mode,
@@ -1968,6 +3173,17 @@ def run_multi_rigid_scenario(
         "camera_ids": list(camera_params),
         "rigid_names": list(config.rigid_names),
         "body_mount_blob_merge_factor": float(config.body_mount_blob_merge_factor),
+        "centroid_noise_model": config.centroid_noise_model,
+        "centroid_noise_reference_diameter_px": float(
+            config.centroid_noise_reference_diameter_px
+        ),
+        "marker_diameter_scale": float(config.marker_diameter_scale),
+        "marker_dropout_prob": float(config.marker_dropout_prob),
+        "marker_detection_model": str(config.marker_detection_model),
+        "camera_dropout_prob": float(config.camera_dropout_prob),
+        "active_anchor_markers": bool(config.active_anchor_markers),
+        "mesh_lite_occlusion": str(config.mesh_lite_occlusion),
+        "marker_detection_summary": generator.marker_detection_summary(),
         "frames_requested": int(config.frames),
         "frames_processed": int(status.get("frames_processed", processed_samples) or 0),
         "poses_estimated": int(status.get("poses_estimated", 0) or 0),
@@ -1983,6 +3199,7 @@ def run_multi_rigid_scenario(
         ),
         "blob_merge_summary": _blob_merge_summary(emitted_blob_owners),
         "blob_area_summary": blob_area_summary,
+        "passive_stabilization_v2": passive_stabilization_v2,
         "position_error_m": {
             name: _summary(values) for name, values in position_errors_by_rigid.items()
         },
@@ -1996,6 +3213,22 @@ def run_multi_rigid_scenario(
         "rotation_delta_error_deg": {
             name: _summary(values)
             for name, values in rotation_delta_errors_by_rigid.items()
+        },
+        "position_delta_top_events": {
+            name: sorted(
+                events,
+                key=lambda event: float(event.get("error_m", 0.0)),
+                reverse=True,
+            )[:5]
+            for name, events in position_delta_events_by_rigid.items()
+        },
+        "rotation_delta_top_events": {
+            name: sorted(
+                events,
+                key=lambda event: float(event.get("error_deg", 0.0)),
+                reverse=True,
+            )[:5]
+            for name, events in rotation_delta_events_by_rigid.items()
         },
         "valid_frame_ratio": valid_frame_ratio,
         "pipeline_pair_ms": pipeline_pair_ms,
@@ -2025,6 +3258,7 @@ def run_multi_rigid_scenario(
         },
         "production_go_no_go": production_go_no_go,
         "scenario_go_no_go": scenario_go_no_go,
+        "phase_aware_go_no_go": phase_aware_go_no_go,
         "tracking": dict(status.get("tracking", {})),
         "error_count": len(errors),
         "errors": errors,
@@ -2549,12 +3783,63 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Override position continuity guard enabled/enforced true/false for sim PDCA",
     )
+    parser.add_argument(
+        "--anchor-guided-body-nbest",
+        type=_parse_bool_override,
+        default=None,
+        help="Enable experimental active-anchor-guided non-anchor body N-best recovery",
+    )
+    parser.add_argument(
+        "--temporal-body-nbest",
+        type=_parse_bool_override,
+        default=None,
+        help="Enable passive body-level N-best marker assignment with temporal rotation cost",
+    )
     parser.add_argument("--noise-px", type=float, default=0.0, help="Pixel noise stddev")
+    parser.add_argument(
+        "--centroid-noise-model",
+        type=str,
+        default="constant",
+        choices=["constant", "diameter_scaled"],
+        help="Centroid noise model for physical-layer sim PDCA",
+    )
+    parser.add_argument(
+        "--centroid-noise-reference-diameter-px",
+        type=float,
+        default=4.0,
+        help="Equivalent blob diameter where --noise-px is measured for diameter_scaled noise",
+    )
+    parser.add_argument(
+        "--marker-diameter-scale",
+        type=float,
+        default=1.0,
+        help="Scale synthetic marker diameters for physical-layer sim PDCA",
+    )
+    parser.add_argument(
+        "--active-anchor-markers",
+        type=_parse_bool_override,
+        default=False,
+        help="Emit one decoded active anchor blob per rigid for physical-ID PDCA",
+    )
+    parser.add_argument(
+        "--mesh-lite-occlusion",
+        type=str,
+        default="off",
+        choices=["off", "body_capsules"],
+        help="Add simplified body-volume occlusion for rigid shape observability comparison",
+    )
     parser.add_argument(
         "--body-mount-blob-merge-factor",
         type=float,
         default=0.0,
         help="Merge close true blobs in body-mounted sim when distance <= factor * average equivalent diameter",
+    )
+    parser.add_argument(
+        "--marker-detection-model",
+        type=str,
+        default="iid_dropout",
+        choices=["iid_dropout", "pi_snr"],
+        help="Marker detection loss model: iid_dropout keeps the legacy random loss; pi_snr scales loss by projected blob size",
     )
     parser.add_argument("--marker-dropout", type=float, default=0.0, help="Marker dropout probability [0,1]")
     parser.add_argument("--camera-dropout", type=float, default=0.0, help="Camera dropout probability [0,1]")
@@ -2592,6 +3877,10 @@ def main(argv: list[str] | None = None) -> int:
         return _err("--camera-dropout must be in [0, 1]")
     if args.noise_px < 0.0:
         return _err("--noise-px must be >= 0")
+    if args.centroid_noise_reference_diameter_px <= 0.0:
+        return _err("--centroid-noise-reference-diameter-px must be > 0")
+    if args.marker_diameter_scale <= 0.0:
+        return _err("--marker-diameter-scale must be > 0")
     if args.body_mount_blob_merge_factor < 0.0:
         return _err("--body-mount-blob-merge-factor must be >= 0")
     if args.false_blobs_per_camera < 0:
@@ -2676,6 +3965,14 @@ def main(argv: list[str] | None = None) -> int:
             rigid_stabilization_overrides["position_continuity_guard_enforced"] = bool(
                 args.position_continuity_guard
             )
+        if args.anchor_guided_body_nbest is not None:
+            rigid_stabilization_overrides["anchor_guided_body_nbest"] = bool(
+                args.anchor_guided_body_nbest
+            )
+        if args.temporal_body_nbest is not None:
+            rigid_stabilization_overrides["temporal_body_nbest"] = bool(
+                args.temporal_body_nbest
+            )
         try:
             summary = run_multi_rigid_scenario(
                 MultiRigidScenarioConfig(
@@ -2687,11 +3984,19 @@ def main(argv: list[str] | None = None) -> int:
                     scenario=str(args.scenario),
                     trajectory_name=str(args.trajectory),
                     noise_px=float(args.noise_px),
+                    centroid_noise_model=str(args.centroid_noise_model),
+                    centroid_noise_reference_diameter_px=float(
+                        args.centroid_noise_reference_diameter_px
+                    ),
+                    marker_diameter_scale=float(args.marker_diameter_scale),
+                    active_anchor_markers=bool(args.active_anchor_markers),
+                    mesh_lite_occlusion=str(args.mesh_lite_occlusion),
                     body_mount_blob_merge_factor=float(
                         args.body_mount_blob_merge_factor
                     ),
                     false_blobs_per_camera=int(args.false_blobs_per_camera),
                     marker_dropout_prob=float(args.marker_dropout),
+                    marker_detection_model=str(args.marker_detection_model),
                     camera_dropout_prob=float(args.camera_dropout),
                     marker_layout=marker_layout,
                     camera_rig_source=camera_rig_source,

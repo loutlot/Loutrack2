@@ -4,6 +4,7 @@ import os
 import sys
 
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -16,6 +17,7 @@ from host.rigid import (
     RigidBodyPose,
     SubsetSolveConfig,
     WAIST_PATTERN,
+    _quaternion_delta_rotvec,
 )
 
 
@@ -52,6 +54,21 @@ def _observations_for_points(
     return observations
 
 
+def test_quaternion_delta_rotvec_matches_rotation_delta() -> None:
+    previous = Rotation.from_euler("xyz", [0.1, -0.2, 0.3])
+    current = Rotation.from_euler("xyz", [0.18, -0.05, 0.41])
+    previous_xyzw = previous.as_quat()
+    current_xyzw = current.as_quat()
+
+    actual = _quaternion_delta_rotvec(
+        np.array([current_xyzw[3], current_xyzw[0], current_xyzw[1], current_xyzw[2]]),
+        np.array([previous_xyzw[3], previous_xyzw[0], previous_xyzw[1], previous_xyzw[2]]),
+    )
+    expected = (current * previous.inv()).as_rotvec()
+
+    assert np.allclose(actual, expected)
+
+
 def test_process_context_reports_high_reprojection_score_for_matching_blobs() -> None:
     cameras = create_dummy_calibration(["cam0", "cam1"], focal_length=800.0)
     points_world = WAIST_PATTERN.marker_positions + np.array([0.0, 0.0, 2.5])
@@ -75,6 +92,33 @@ def test_process_context_reports_high_reprojection_score_for_matching_blobs() ->
     assert score["duplicate_assignment_count"] == 0
     assert score["mean_error_px"] < 1e-4
     assert score["score"] > 0.99
+
+
+def test_reprojection_scoring_broadens_acceptance_for_small_blobs() -> None:
+    cameras = create_dummy_calibration(["cam0", "cam1"], focal_length=800.0)
+    points_world = WAIST_PATTERN.marker_positions + np.array([0.0, 0.0, 2.5])
+    observations = _observations_for_points(cameras, points_world, offset_px=(14.0, 0.0))
+    for camera_observations in observations.values():
+        for observation in camera_observations:
+            observation["area"] = 1.0
+    estimator = RigidBodyEstimator(patterns=[WAIST_PATTERN])
+
+    poses = estimator.process_context(
+        points_world,
+        1_000_000,
+        camera_params=cameras,
+        observations_by_camera=observations,
+    )
+
+    assert poses["waist"].valid is True
+    score = estimator.get_tracking_status()["waist"]["reprojection_score"]
+    assert score["matched_marker_views"] == 8
+    assert score["mean_error_px"] > estimator.reprojection_match_gate_px
+    assert score["mean_normalized_error"] < score["mean_error_px"]
+    assert all(
+        observation["uncertainty_px"] > 1.0
+        for observation in score["matched_observations"]
+    )
 
 
 def test_process_points_keeps_3d_only_path_without_2d_score() -> None:
@@ -299,7 +343,7 @@ def test_object_conditioned_gating_assigns_predicted_marker_windows() -> None:
     assert estimator.get_tracking_status()["waist"]["object_gating"]["assigned_marker_views"] == 8
 
 
-def test_object_conditioned_gating_drops_ambiguous_nearby_blobs() -> None:
+def test_object_conditioned_gating_marks_ambiguous_nearby_blobs() -> None:
     cameras = create_dummy_calibration(["cam0", "cam1"], focal_length=800.0)
     points_world = WAIST_PATTERN.marker_positions + np.array([0.0, 0.0, 2.5])
     observations = _observations_for_points(cameras, points_world)
@@ -325,16 +369,22 @@ def test_object_conditioned_gating_drops_ambiguous_nearby_blobs() -> None:
         frames_by_camera=frames,
     )["waist"]
 
-    assert gating["assigned_marker_views"] == 6
+    assert gating["assigned_marker_views"] == 8
     assert gating["ambiguous_assignment_count"] == 2
-    assert gating["unmatched_marker_views"] == 2
+    assert gating["unmatched_marker_views"] == 0
+    assert gating["body_assignment"]["policy"] == "keep_body_assignment_mark_local_ambiguity"
     assert all(
         camera["ambiguous_assignment_count"] == 1
         for camera in gating["per_camera"].values()
     )
+    assert sum(
+        int(assignment["ambiguous"])
+        for camera in gating["per_camera"].values()
+        for assignment in camera["assignments"]
+    ) == 2
 
 
-def test_object_conditioned_gating_drops_blob_diameter_overlap() -> None:
+def test_object_conditioned_gating_marks_blob_diameter_overlap() -> None:
     cameras = create_dummy_calibration(["cam0", "cam1"], focal_length=800.0)
     points_world = WAIST_PATTERN.marker_positions + np.array([0.0, 0.0, 2.5])
     observations = _observations_for_points(cameras, points_world)
@@ -366,8 +416,64 @@ def test_object_conditioned_gating_drops_blob_diameter_overlap() -> None:
         frames_by_camera=frames,
     )["waist"]
 
-    assert gating["assigned_marker_views"] == 6
+    assert gating["assigned_marker_views"] == 8
     assert gating["ambiguous_assignment_count"] == 2
+    assert gating["unmatched_marker_views"] == 0
+    assert sum(
+        int(assignment["ambiguous"])
+        for camera in gating["per_camera"].values()
+        for assignment in camera["assignments"]
+    ) == 2
+
+
+def test_object_conditioned_gating_marks_low_marker_assignment_margin() -> None:
+    cameras = create_dummy_calibration(["cam0", "cam1"], focal_length=800.0)
+    points_world = WAIST_PATTERN.marker_positions + np.array([0.0, 0.0, 2.5])
+    observations = _observations_for_points(cameras, points_world)
+    estimator = RigidBodyEstimator(
+        patterns=[WAIST_PATTERN],
+        object_gating_config=ObjectGatingConfig(
+            pixel_min=20.0,
+            pixel_max=20.0,
+            ambiguous_blob_min_separation_px=0.0,
+            ambiguous_blob_diameter_overlap_ratio=0.0,
+            ambiguous_marker_assignment_min_margin_px=2.0,
+        ),
+    )
+    estimator.process_context(
+        points_world,
+        1_000_000,
+        camera_params=cameras,
+        observations_by_camera=observations,
+    )
+    frames = {}
+    for camera_id, camera_observations in observations.items():
+        blobs = [
+            {"x": float(obs["raw_uv"][0]), "y": float(obs["raw_uv"][1]), "area": 4.0}
+            for obs in camera_observations
+        ]
+        midpoint = 0.5 * (
+            np.asarray(camera_observations[0]["raw_uv"], dtype=np.float64)
+            + np.asarray(camera_observations[1]["raw_uv"], dtype=np.float64)
+        )
+        blobs[0] = {"x": float(midpoint[0]), "y": float(midpoint[1]), "area": 4.0}
+        frames[camera_id] = _Frame(blobs)
+
+    gating = estimator.evaluate_object_conditioned_gating(
+        timestamp=1_016_000,
+        camera_params=cameras,
+        frames_by_camera=frames,
+    )["waist"]
+
+    assert gating["assigned_marker_views"] == 8
+    assert gating["ambiguous_assignment_count"] == 2
+    assert gating["marker_margin_assignment_count"] == 2
+    assert gating["unmatched_marker_views"] == 0
+    assert sum(
+        int(assignment["marker_margin_ambiguous"])
+        for camera in gating["per_camera"].values()
+        for assignment in camera["assignments"]
+    ) == 2
 
 
 def test_object_conditioned_gating_can_stay_inactive_outside_reacquire() -> None:

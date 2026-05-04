@@ -34,6 +34,8 @@ AVAILABLE_PATTERNS: Dict[str, MarkerPattern] = {
 GUI_DEFAULT_PIPELINE_VARIANT = "fast_ABCDHRF"
 GUI_DEFAULT_SUBSET_DIAGNOSTICS_MODE = "off"
 GUI_DEFAULT_RIGID_STABILIZATION: Dict[str, Any] = {
+    "anchor_guided_body_nbest": False,
+    "temporal_body_nbest": True,
     "object_conditioned_gating": True,
     "subset_ransac": False,
     "reacquire_guard_shadow_enabled": False,

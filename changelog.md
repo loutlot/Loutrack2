@@ -1,3 +1,40 @@
+- GUI tracking now removes the active-anchor default route and enables passive temporal body N-best assignment with rotation-jump cost.
+- `tools/sim` now routes `five_rigid_body_mesh_lite_v1` through the body-motion trajectory instead of leaving it static.
+- `tools/sim` now adds `five_rigid_body_mesh_lite_v1` for CAD surface-mounted capsule occlusion without deterministic marker-drop stacking.
+- `tools/sim` mesh-lite capsule occlusion now allows far-side self-occlusion while keeping only endpoint clearance for surface-mounted markers.
+- `tools/sim` body-mount scenarios now use the CAD surface-mounted rigid pose consistently whether mesh-lite occlusion is on or off.
+- `tools/sim` now rejects mesh-lite body capsules outside body-mount scenarios and preserves CAD fixture height metadata for custom rigid candidates.
+- `tools/sim` mesh-lite mounting now uses the CAD fixture base-to-centroid height instead of centroid-local marker Z as the physical surface reference.
+- `tools/sim` mesh-lite surface mounting now offsets rigid origins so marker blobs stay outside their own body occluder volume.
+- `tools/sim` mesh-lite body-mount reference pose now matches a 1.7m HMD/chest/waist/feet marker layout.
+- `tools/sim` body-mount scenarios now use a floor-to-head human-scale pose for mesh-lite capsule occlusion.
+- `tools/sim` mesh-lite now mounts rigid layouts on body primitive surfaces with local `+Z` as the outward surface normal.
+- `tools/sim` now adds mesh-lite body capsule occlusion and shape observability summaries for comparing current and candidate rigid-body layouts before 3D printing.
+- Rigid tracking now reduces GUI hot-path latency by caching blob reprojection uncertainty, reusing geometry observation lookups, using small-sample rigid-hint summaries, and updating angular velocity directly from quaternion deltas.
+- `tools/sim` now supports a `pi_snr` marker detection model so body-mounted tests can stress projected blob size/SNR instead of only iid random marker dropout.
+- Rigid tracking now short-circuits anchor-only 5-marker recovery to invalid instead of running expensive generic 3D recovery when full 6DoF is unobservable.
+- Rigid tracking now uses decoded active-anchor camera rays for PnP-free translation relock while keeping single-anchor recovery classified as prediction hold.
+- Rigid tracking now keeps the partial-evidence recovery path PnP-free, relying on active-anchor side-channel hints and temporal body subsets instead.
+- Rigid tracking now exposes active-anchor observations as a side-channel for lightweight 2D-constrained prediction holds, keeping full body assignment separate from physical-ID hints.
+- `tools/sim` now reports visibility/evidence phase evaluation so prediction-hold compensation is separated from 3D-hint recovery and hard realignment.
+- `tools/sim` can now emit one decoded active-anchor marker per rigid outside random detection dropout, and object-gating uses that physical ID while temporal hold only extends existing body hypotheses from anchor evidence.
+- Object-gating now keeps body-level marker assignments while marking local ambiguity, preserving no-false-blob Pi observations for rigid-level scoring.
+- Geometry matching and rigid reprojection scoring now use blob-diameter-derived uncertainty so small real-log blobs can be accepted as lower-confidence observations instead of being rejected by fixed pixel residuals.
+- `tools/sim` now supports diameter-scaled centroid noise and marker-diameter scaling so passive 4-camera PDCA can test physical Blob/SNR changes instead of only fixed pixel-noise stress.
+- `docs/10_in_progress/rigid_body_stabilization_plan_v2.md` now records the continued passive PDCA showing `1.25x` marker diameter with diameter-aware centroid noise clears the hard `0.15px` no-dropout stress across seeds `44-46`.
+- `docs/10_in_progress/rigid_body_stabilization_plan_v2.md` now records a 10-cycle passive stabilization PDCA showing the current chest blocker is sustained evidence starvation rather than margin or continuity-guard tuning.
+- `tools/sim` and rigid tracking now expose passive-stabilization V2 entry diagnostics for mode counts, candidate rejection reasons, body conflicts, and blob-quality summaries.
+- `docs/10_in_progress/rigid_body_stabilization_plan_v2.md` now defines a passive 4-camera, 5-blob PDCA entry plan for replacing local threshold tuning with mode separation, body-level assignment, and blob-quality diagnostics.
+- `docs/10_in_progress/rigid_body_design_v2.md` now records 10 more sequential sustained-run PDCA cycles, narrowing the current blocker to pi-cam-04 waist/left_foot projection conflict and chest re-entry jumps.
+- `tools/sim` summaries now report top position and rotation delta events so rigid-body V2 sustained-run failures can be traced to exact frames and bodies.
+- Rigid tracking now holds prediction instead of committing or invalidating poses that lose a frame-local blob ownership contest, and rigid-body V2 PDCA promotes `candidate_00534` with expanded waist subset metadata for sim validation.
+- `tools/rigid_body_design_search.py` and `tools/rigid_body_projection_screen.py` now find a Gate 2/3 passing rigid-body V2 candidate and export sim-readable custom rigid definitions for validation.
+- `src/host/pattern_evaluator.py` and `tools/rigid_body_design_search.py` now emit Gate 2 subset-whitelist JSON and candidate search records for rigid-body V2 design PDCA.
+- `docs/10_in_progress/rigid_body_design_v2.md` now defines an end-to-end rigid design plan from candidate generation through geometry, projection, sim validation, and CAD freeze criteria.
+- Object-gating now keeps marker-blob assignment candidates compact until final rigid-hint payload emission, trimming allocation overhead in the live gating path.
+- Object-gating now reuses per-camera blob diameters and assigned-blob distance matrices, lowering close-blob ambiguity overhead while preserving marker-swap guards.
+- `.gitignore` now groups OS, Python, local runtime, and agent artifacts while ignoring GUI/deploy logs without hiding tracked hardware STL assets.
+- Object-gated rigid tracking now drops low-margin marker-vs-marker assignments, reducing temporal marker identity swaps without broadening the close-blob distance gate.
 - Object-gated rigid tracking now treats blob-center overlap relative to blob diameter as ambiguous, catching close-marker swaps that are wider than the fixed sub-pixel guard.
 - `src/host/tracking_replay_harness.py` now exposes the object-gating ambiguous blob threshold so replay checks can compare the new close-blob guard against disabled baselines.
 - Object-gated rigid tracking now drops sub-pixel ambiguous blob assignments before triangulation, reducing marker swaps and cross-rigid ownership at close projections.

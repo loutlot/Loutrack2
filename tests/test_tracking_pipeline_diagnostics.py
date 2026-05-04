@@ -578,6 +578,7 @@ def test_tracking_pipeline_maps_rigid_stabilization_flags_to_configs() -> None:
             "object_gating_activation_mode": "reacquire_only",
             "object_gating_ambiguous_blob_min_separation_px": 0.45,
             "object_gating_ambiguous_blob_diameter_overlap_ratio": 0.25,
+            "object_gating_ambiguous_marker_assignment_min_margin_px": 0.20,
             "pose_continuity_guard_enabled": True,
             "pose_continuity_guard_enforced": True,
             "pose_continuity_max_rotation_deg": 45.0,
@@ -602,6 +603,7 @@ def test_tracking_pipeline_maps_rigid_stabilization_flags_to_configs() -> None:
     assert pipeline.rigid_estimator.object_gating_config.activation_mode == "reacquire_only"
     assert pipeline.rigid_estimator.object_gating_config.ambiguous_blob_min_separation_px == 0.45
     assert pipeline.rigid_estimator.object_gating_config.ambiguous_blob_diameter_overlap_ratio == 0.25
+    assert pipeline.rigid_estimator.object_gating_config.ambiguous_marker_assignment_min_margin_px == 0.20
     assert pipeline.rigid_estimator.pose_continuity_guard_config.enabled is True
     assert pipeline.rigid_estimator.pose_continuity_guard_config.enforced is True
     assert pipeline.rigid_estimator.pose_continuity_guard_config.max_rotation_innovation_deg == 45.0

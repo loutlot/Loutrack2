@@ -1,0 +1,5000 @@
+{
+  "name": "candidate_00234",
+  "score": 7.526611752671823,
+  "metrics": {
+    "score": 7.526611752671823,
+    "worst_full_cross_mm": 14.622055978731536,
+    "worst_best_subset_mm": 5.759295853534215,
+    "min_marker_spacing_mm": 35.092422696332086
+  },
+  "marker_positions_mm": {
+    "head": [
+      [
+        15.99435411620181,
+        12.36588026261875,
+        55.469167813354325
+      ],
+      [
+        -27.029748218051264,
+        20.152223672303453,
+        13.144820299735317
+      ],
+      [
+        -7.223971319774797,
+        54.5698171672069,
+        10.997428453702543
+      ],
+      [
+        -3.9960015745959914,
+        -41.407605037546055,
+        42.18336000697396
+      ],
+      [
+        19.85766306492684,
+        -46.85933524603838,
+        5.5922622384083605
+      ]
+    ],
+    "waist": [
+      [
+        33.71189474202566,
+        -22.239391822869084,
+        24.137078985207317
+      ],
+      [
+        -37.569888196947026,
+        33.16548658191077,
+        12.268774759730652
+      ],
+      [
+        -33.32400291247061,
+        -0.0672951012505591,
+        37.99720845325924
+      ],
+      [
+        -5.097640446487883,
+        41.489804461063464,
+        1.8891317707997088
+      ],
+      [
+        16.190036302212206,
+        -53.18049420506696,
+        27.003348800196896
+      ]
+    ],
+    "chest": [
+      [
+        -4.167229993992257,
+        39.21987995251689,
+        35.64945908179033
+      ],
+      [
+        30.480163138232918,
+        5.326581585018506,
+        28.530661768184583
+      ],
+      [
+        -42.26615803110696,
+        41.88489102298583,
+        10.385223325434037
+      ],
+      [
+        -28.607835467661765,
+        15.270532200819098,
+        51.576129742049304
+      ],
+      [
+        8.336563135115915,
+        -44.48017958556822,
+        20.087350600322203
+      ]
+    ],
+    "left_foot": [
+      [
+        20.397654334150964,
+        49.148321488480825,
+        35.699610562194216
+      ],
+      [
+        37.351278271490195,
+        -9.960027044022748,
+        36.132506517132036
+      ],
+      [
+        -45.03628047195753,
+        -32.48970296979015,
+        33.10965990105373
+      ],
+      [
+        -34.316518530220876,
+        -54.20146421595349,
+        5.100121357422694
+      ],
+      [
+        -48.71899200993981,
+        8.629398932915452,
+        30.844156913009886
+      ]
+    ],
+    "right_foot": [
+      [
+        -22.90005655403327,
+        -21.490164601411898,
+        37.59333610551154
+      ],
+      [
+        -19.448978554402284,
+        20.98268739140686,
+        25.23807982781506
+      ],
+      [
+        27.810548829426033,
+        -37.49141131865906,
+        5.6259364896720685
+      ],
+      [
+        53.18754470051767,
+        -5.89720119457923,
+        18.81886904274712
+      ],
+      [
+        -19.15487643374353,
+        -56.80238466145885,
+        1.0825988327449179
+      ]
+    ]
+  },
+  "tracking_policy": {
+    "head": {
+      "boot_min_markers": 4,
+      "reacquire_min_markers": 4,
+      "continue_min_markers": 3,
+      "strong_4_subsets": [],
+      "strong_3_subsets": []
+    },
+    "waist": {
+      "boot_min_markers": 4,
+      "reacquire_min_markers": 4,
+      "continue_min_markers": 3,
+      "strong_4_subsets": [],
+      "strong_3_subsets": []
+    },
+    "chest": {
+      "boot_min_markers": 4,
+      "reacquire_min_markers": 4,
+      "continue_min_markers": 3,
+      "strong_4_subsets": [],
+      "strong_3_subsets": []
+    },
+    "left_foot": {
+      "boot_min_markers": 4,
+      "reacquire_min_markers": 4,
+      "continue_min_markers": 3,
+      "strong_4_subsets": [],
+      "strong_3_subsets": [
+        [
+          0,
+          2,
+          3
+        ]
+      ]
+    },
+    "right_foot": {
+      "boot_min_markers": 4,
+      "reacquire_min_markers": 4,
+      "continue_min_markers": 3,
+      "strong_4_subsets": [],
+      "strong_3_subsets": []
+    }
+  },
+  "gate_2": {
+    "gate": "geometry",
+    "pass": false,
+    "full_cross": {
+      "worst_full_cross_m": 0.014622055978731537,
+      "worst_full_cross_mm": 14.622055978731536,
+      "closest_pair": {
+        "pattern_a": "head",
+        "pattern_b": "chest",
+        "subset_size": 5,
+        "min_cross_pattern_m": 0.014622055978731537,
+        "min_cross_pattern_mm": 14.622055978731536,
+        "subset_a": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "subset_b": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "permutation_a_to_b": [
+          3,
+          1,
+          4,
+          0,
+          2
+        ],
+        "verdict": "ambiguous"
+      },
+      "pairs": [
+        {
+          "pattern_a": "head",
+          "pattern_b": "waist",
+          "subset_size": 5,
+          "min_cross_pattern_m": 0.015615938409598913,
+          "min_cross_pattern_mm": 15.615938409598913,
+          "subset_a": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "subset_b": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "permutation_a_to_b": [
+            3,
+            2,
+            1,
+            0,
+            4
+          ],
+          "verdict": "risky"
+        },
+        {
+          "pattern_a": "head",
+          "pattern_b": "chest",
+          "subset_size": 5,
+          "min_cross_pattern_m": 0.014622055978731537,
+          "min_cross_pattern_mm": 14.622055978731536,
+          "subset_a": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "subset_b": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "permutation_a_to_b": [
+            3,
+            1,
+            4,
+            0,
+            2
+          ],
+          "verdict": "ambiguous"
+        },
+        {
+          "pattern_a": "head",
+          "pattern_b": "left_foot",
+          "subset_size": 5,
+          "min_cross_pattern_m": 0.020292841033517355,
+          "min_cross_pattern_mm": 20.292841033517355,
+          "subset_a": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "subset_b": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "permutation_a_to_b": [
+            2,
+            1,
+            4,
+            3,
+            0
+          ],
+          "verdict": "risky"
+        },
+        {
+          "pattern_a": "head",
+          "pattern_b": "right_foot",
+          "subset_size": 5,
+          "min_cross_pattern_m": 0.018518021526058696,
+          "min_cross_pattern_mm": 18.518021526058696,
+          "subset_a": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "subset_b": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "permutation_a_to_b": [
+            3,
+            4,
+            2,
+            1,
+            0
+          ],
+          "verdict": "risky"
+        },
+        {
+          "pattern_a": "waist",
+          "pattern_b": "chest",
+          "subset_size": 5,
+          "min_cross_pattern_m": 0.016210898440653196,
+          "min_cross_pattern_mm": 16.210898440653196,
+          "subset_a": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "subset_b": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "permutation_a_to_b": [
+            3,
+            0,
+            1,
+            2,
+            4
+          ],
+          "verdict": "risky"
+        },
+        {
+          "pattern_a": "waist",
+          "pattern_b": "left_foot",
+          "subset_size": 5,
+          "min_cross_pattern_m": 0.015919832648761,
+          "min_cross_pattern_mm": 15.919832648761002,
+          "subset_a": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "subset_b": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "permutation_a_to_b": [
+            4,
+            0,
+            1,
+            3,
+            2
+          ],
+          "verdict": "risky"
+        },
+        {
+          "pattern_a": "waist",
+          "pattern_b": "right_foot",
+          "subset_size": 5,
+          "min_cross_pattern_m": 0.01621058206919604,
+          "min_cross_pattern_mm": 16.21058206919604,
+          "subset_a": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "subset_b": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "permutation_a_to_b": [
+            1,
+            2,
+            0,
+            4,
+            3
+          ],
+          "verdict": "risky"
+        },
+        {
+          "pattern_a": "chest",
+          "pattern_b": "left_foot",
+          "subset_size": 5,
+          "min_cross_pattern_m": 0.019929229610299616,
+          "min_cross_pattern_mm": 19.929229610299615,
+          "subset_a": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "subset_b": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "permutation_a_to_b": [
+            1,
+            4,
+            3,
+            2,
+            0
+          ],
+          "verdict": "risky"
+        },
+        {
+          "pattern_a": "chest",
+          "pattern_b": "right_foot",
+          "subset_size": 5,
+          "min_cross_pattern_m": 0.017326093852695755,
+          "min_cross_pattern_mm": 17.326093852695756,
+          "subset_a": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "subset_b": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "permutation_a_to_b": [
+            2,
+            3,
+            1,
+            4,
+            0
+          ],
+          "verdict": "risky"
+        },
+        {
+          "pattern_a": "left_foot",
+          "pattern_b": "right_foot",
+          "subset_size": 5,
+          "min_cross_pattern_m": 0.019181162329130478,
+          "min_cross_pattern_mm": 19.181162329130476,
+          "subset_a": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "subset_b": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "permutation_a_to_b": [
+            2,
+            4,
+            1,
+            0,
+            3
+          ],
+          "verdict": "risky"
+        }
+      ]
+    },
+    "bodies": [
+      {
+        "name": "head",
+        "marker_count": 5,
+        "min_marker_spacing_m": 0.039767459464556315,
+        "min_marker_spacing_mm": 39.76745946455632,
+        "closest_marker_pair": [
+          1,
+          2
+        ],
+        "strong_4_subsets": [],
+        "strong_3_subsets": [],
+        "best_4_subset": {
+          "subset": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "subset_size": 4,
+          "score_m": 0.011145527042444437,
+          "score_mm": 11.145527042444437,
+          "strong": false,
+          "rejection_reasons": [
+            "low_margin_against_another_body_or_subset"
+          ],
+          "nearest_cross_body_neighbor": {
+            "body": "chest",
+            "subset": [
+              0,
+              1,
+              2,
+              4
+            ],
+            "permutation": [
+              0,
+              2,
+              1,
+              3
+            ],
+            "rms_m": 0.011145527042444437,
+            "rms_mm": 11.145527042444437
+          },
+          "nearest_profile_neighbor": {
+            "body": "waist",
+            "subset": [
+              0,
+              1,
+              2,
+              4
+            ],
+            "profile_delta_m": 0.00576218553966716,
+            "profile_delta_mm": 5.76218553966716
+          },
+          "min_edge_m": 0.039767459464556315,
+          "min_edge_mm": 39.76745946455632,
+          "edge_lengths_mm": [
+            39.76745946455632,
+            44.01848605881097,
+            71.85682141279125,
+            82.13415549425986,
+            100.96854801664983,
+            105.12137604707691
+          ],
+          "tetra_volume_m3": 1.6285595551561477e-05,
+          "tetra_volume_mm3": 16285.595551561477
+        },
+        "best_3_subset": {
+          "subset": [
+            0,
+            1,
+            2
+          ],
+          "subset_size": 3,
+          "score_m": 0.006993047141171145,
+          "score_mm": 6.993047141171145,
+          "strong": false,
+          "rejection_reasons": [
+            "low_margin_against_another_body_or_subset",
+            "near_isosceles_or_symmetric_profile"
+          ],
+          "nearest_cross_body_neighbor": {
+            "body": "chest",
+            "subset": [
+              0,
+              1,
+              3
+            ],
+            "permutation": [
+              1,
+              0,
+              2
+            ],
+            "rms_m": 0.005205105981276499,
+            "rms_mm": 5.205105981276499
+          },
+          "nearest_profile_neighbor": {
+            "body": "chest",
+            "subset": [
+              0,
+              1,
+              3
+            ],
+            "profile_delta_m": 0.006993047141171145,
+            "profile_delta_mm": 6.993047141171145
+          },
+          "min_edge_m": 0.039767459464556315,
+          "min_edge_mm": 39.76745946455632,
+          "edge_lengths_mm": [
+            39.76745946455632,
+            60.852698525335825,
+            65.55912238560076
+          ],
+          "triangle_area_m2": 0.0011845775411608564,
+          "triangle_area_mm2": 1184.5775411608563
+        },
+        "subsets_4": [
+          {
+            "subset": [
+              1,
+              2,
+              3,
+              4
+            ],
+            "subset_size": 4,
+            "score_m": 0.011145527042444437,
+            "score_mm": 11.145527042444437,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "chest",
+              "subset": [
+                0,
+                1,
+                2,
+                4
+              ],
+              "permutation": [
+                0,
+                2,
+                1,
+                3
+              ],
+              "rms_m": 0.011145527042444437,
+              "rms_mm": 11.145527042444437
+            },
+            "nearest_profile_neighbor": {
+              "body": "waist",
+              "subset": [
+                0,
+                1,
+                2,
+                4
+              ],
+              "profile_delta_m": 0.00576218553966716,
+              "profile_delta_mm": 5.76218553966716
+            },
+            "min_edge_m": 0.039767459464556315,
+            "min_edge_mm": 39.76745946455632,
+            "edge_lengths_mm": [
+              39.76745946455632,
+              44.01848605881097,
+              71.85682141279125,
+              82.13415549425986,
+              100.96854801664983,
+              105.12137604707691
+            ],
+            "tetra_volume_m3": 1.6285595551561477e-05,
+            "tetra_volume_mm3": 16285.595551561477
+          },
+          {
+            "subset": [
+              0,
+              2,
+              3,
+              4
+            ],
+            "subset_size": 4,
+            "score_m": 0.011039975975460296,
+            "score_mm": 11.039975975460296,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "waist",
+              "subset": [
+                0,
+                1,
+                2,
+                4
+              ],
+              "permutation": [
+                3,
+                1,
+                0,
+                2
+              ],
+              "rms_m": 0.011039975975460296,
+              "rms_mm": 11.039975975460296
+            },
+            "nearest_profile_neighbor": {
+              "body": "head",
+              "subset": [
+                1,
+                2,
+                3,
+                4
+              ],
+              "profile_delta_m": 0.0070716632944319855,
+              "profile_delta_mm": 7.0716632944319855
+            },
+            "min_edge_m": 0.04401848605881097,
+            "min_edge_mm": 44.01848605881097,
+            "edge_lengths_mm": [
+              44.01848605881097,
+              58.887305347075696,
+              65.55912238560076,
+              77.52584741756942,
+              100.96854801664983,
+              105.12137604707691
+            ],
+            "tetra_volume_m3": 2.5023267115714212e-05,
+            "tetra_volume_mm3": 25023.267115714214
+          },
+          {
+            "subset": [
+              0,
+              1,
+              2,
+              4
+            ],
+            "subset_size": 4,
+            "score_m": 0.008811489008699479,
+            "score_mm": 8.811489008699478,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "waist",
+              "subset": [
+                0,
+                2,
+                3,
+                4
+              ],
+              "permutation": [
+                1,
+                0,
+                3,
+                2
+              ],
+              "rms_m": 0.008811489008699479,
+              "rms_mm": 8.811489008699478
+            },
+            "nearest_profile_neighbor": {
+              "body": "waist",
+              "subset": [
+                0,
+                2,
+                3,
+                4
+              ],
+              "profile_delta_m": 0.004426162408912768,
+              "profile_delta_mm": 4.426162408912768
+            },
+            "min_edge_m": 0.039767459464556315,
+            "min_edge_mm": 39.76745946455632,
+            "edge_lengths_mm": [
+              39.76745946455632,
+              60.852698525335825,
+              65.55912238560076,
+              77.52584741756942,
+              82.13415549425986,
+              105.12137604707691
+            ],
+            "tetra_volume_m3": 2.3705030174232044e-05,
+            "tetra_volume_mm3": 23705.030174232044
+          },
+          {
+            "subset": [
+              0,
+              1,
+              3,
+              4
+            ],
+            "subset_size": 4,
+            "score_m": 0.0062350586754391325,
+            "score_mm": 6.235058675439133,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "repeated_edge_lengths"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "right_foot",
+              "subset": [
+                0,
+                1,
+                2,
+                4
+              ],
+              "permutation": [
+                2,
+                3,
+                1,
+                0
+              ],
+              "rms_m": 0.0062350586754391325,
+              "rms_mm": 6.235058675439133
+            },
+            "nearest_profile_neighbor": {
+              "body": "chest",
+              "subset": [
+                0,
+                1,
+                3,
+                4
+              ],
+              "profile_delta_m": 0.006377913187619264,
+              "profile_delta_mm": 6.377913187619264
+            },
+            "min_edge_m": 0.04401848605881097,
+            "min_edge_mm": 44.01848605881097,
+            "edge_lengths_mm": [
+              44.01848605881097,
+              58.887305347075696,
+              60.852698525335825,
+              71.85682141279125,
+              77.52584741756942,
+              82.13415549425986
+            ],
+            "tetra_volume_m3": 2.476736279480149e-05,
+            "tetra_volume_mm3": 24767.36279480149
+          },
+          {
+            "subset": [
+              0,
+              1,
+              2,
+              3
+            ],
+            "subset_size": 4,
+            "score_m": 0.0052693798322962,
+            "score_mm": 5.2693798322962,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "low_4_point_volume",
+              "repeated_edge_lengths"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "waist",
+              "subset": [
+                0,
+                2,
+                3,
+                4
+              ],
+              "permutation": [
+                1,
+                0,
+                3,
+                2
+              ],
+              "rms_m": 0.0052693798322962,
+              "rms_mm": 5.2693798322962
+            },
+            "nearest_profile_neighbor": {
+              "body": "waist",
+              "subset": [
+                0,
+                2,
+                3,
+                4
+              ],
+              "profile_delta_m": 0.006424284460591951,
+              "profile_delta_mm": 6.4242844605919505
+            },
+            "min_edge_m": 0.039767459464556315,
+            "min_edge_mm": 39.76745946455632,
+            "edge_lengths_mm": [
+              39.76745946455632,
+              58.887305347075696,
+              60.852698525335825,
+              65.55912238560076,
+              71.85682141279125,
+              100.96854801664983
+            ],
+            "tetra_volume_m3": 7.163530301757857e-06,
+            "tetra_volume_mm3": 7163.530301757857
+          }
+        ],
+        "subsets_3": [
+          {
+            "subset": [
+              0,
+              1,
+              2
+            ],
+            "subset_size": 3,
+            "score_m": 0.006993047141171145,
+            "score_mm": 6.993047141171145,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "near_isosceles_or_symmetric_profile"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "chest",
+              "subset": [
+                0,
+                1,
+                3
+              ],
+              "permutation": [
+                1,
+                0,
+                2
+              ],
+              "rms_m": 0.005205105981276499,
+              "rms_mm": 5.205105981276499
+            },
+            "nearest_profile_neighbor": {
+              "body": "chest",
+              "subset": [
+                0,
+                1,
+                3
+              ],
+              "profile_delta_m": 0.006993047141171145,
+              "profile_delta_mm": 6.993047141171145
+            },
+            "min_edge_m": 0.039767459464556315,
+            "min_edge_mm": 39.76745946455632,
+            "edge_lengths_mm": [
+              39.76745946455632,
+              60.852698525335825,
+              65.55912238560076
+            ],
+            "triangle_area_m2": 0.0011845775411608564,
+            "triangle_area_mm2": 1184.5775411608563
+          },
+          {
+            "subset": [
+              2,
+              3,
+              4
+            ],
+            "subset_size": 3,
+            "score_m": 0.005345389163690758,
+            "score_mm": 5.345389163690758,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "near_isosceles_or_symmetric_profile"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "waist",
+              "subset": [
+                1,
+                3,
+                4
+              ],
+              "permutation": [
+                2,
+                1,
+                0
+              ],
+              "rms_m": 0.0036758577866782076,
+              "rms_mm": 3.6758577866782076
+            },
+            "nearest_profile_neighbor": {
+              "body": "waist",
+              "subset": [
+                1,
+                3,
+                4
+              ],
+              "profile_delta_m": 0.005345389163690758,
+              "profile_delta_mm": 5.345389163690758
+            },
+            "min_edge_m": 0.04401848605881097,
+            "min_edge_mm": 44.01848605881097,
+            "edge_lengths_mm": [
+              44.01848605881097,
+              100.96854801664983,
+              105.12137604707691
+            ],
+            "triangle_area_m2": 0.0022057237252980787,
+            "triangle_area_mm2": 2205.7237252980785
+          },
+          {
+            "subset": [
+              0,
+              2,
+              3
+            ],
+            "subset_size": 3,
+            "score_m": 0.004883249980598645,
+            "score_mm": 4.883249980598645,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "waist",
+              "subset": [
+                2,
+                3,
+                4
+              ],
+              "permutation": [
+                0,
+                2,
+                1
+              ],
+              "rms_m": 0.004505866297445791,
+              "rms_mm": 4.505866297445791
+            },
+            "nearest_profile_neighbor": {
+              "body": "waist",
+              "subset": [
+                2,
+                3,
+                4
+              ],
+              "profile_delta_m": 0.004883249980598645,
+              "profile_delta_mm": 4.883249980598645
+            },
+            "min_edge_m": 0.058887305347075695,
+            "min_edge_mm": 58.887305347075696,
+            "edge_lengths_mm": [
+              58.887305347075696,
+              65.55912238560076,
+              100.96854801664983
+            ],
+            "triangle_area_m2": 0.0018323006162764837,
+            "triangle_area_mm2": 1832.3006162764837
+          },
+          {
+            "subset": [
+              0,
+              2,
+              4
+            ],
+            "subset_size": 3,
+            "score_m": 0.004251778596441153,
+            "score_mm": 4.251778596441153,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "waist",
+              "subset": [
+                2,
+                3,
+                4
+              ],
+              "permutation": [
+                0,
+                1,
+                2
+              ],
+              "rms_m": 0.0024722052845830207,
+              "rms_mm": 2.4722052845830205
+            },
+            "nearest_profile_neighbor": {
+              "body": "waist",
+              "subset": [
+                2,
+                3,
+                4
+              ],
+              "profile_delta_m": 0.004251778596441153,
+              "profile_delta_mm": 4.251778596441153
+            },
+            "min_edge_m": 0.06555912238560076,
+            "min_edge_mm": 65.55912238560076,
+            "edge_lengths_mm": [
+              65.55912238560076,
+              77.52584741756942,
+              105.12137604707691
+            ],
+            "triangle_area_m2": 0.0025344793712869275,
+            "triangle_area_mm2": 2534.4793712869273
+          },
+          {
+            "subset": [
+              0,
+              1,
+              3
+            ],
+            "subset_size": 3,
+            "score_m": 0.004138962133264374,
+            "score_mm": 4.138962133264374,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "repeated_edge_lengths",
+              "near_isosceles_or_symmetric_profile"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "chest",
+              "subset": [
+                1,
+                3,
+                4
+              ],
+              "permutation": [
+                0,
+                1,
+                2
+              ],
+              "rms_m": 0.0031429578460807637,
+              "rms_mm": 3.1429578460807637
+            },
+            "nearest_profile_neighbor": {
+              "body": "chest",
+              "subset": [
+                1,
+                3,
+                4
+              ],
+              "profile_delta_m": 0.004138962133264374,
+              "profile_delta_mm": 4.138962133264374
+            },
+            "min_edge_m": 0.058887305347075695,
+            "min_edge_mm": 58.887305347075696,
+            "edge_lengths_mm": [
+              58.887305347075696,
+              60.852698525335825,
+              71.85682141279125
+            ],
+            "triangle_area_m2": 0.0017200107411908033,
+            "triangle_area_mm2": 1720.0107411908034
+          },
+          {
+            "subset": [
+              0,
+              1,
+              4
+            ],
+            "subset_size": 3,
+            "score_m": 0.003867461672189894,
+            "score_mm": 3.867461672189894,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "near_isosceles_or_symmetric_profile"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "left_foot",
+              "subset": [
+                0,
+                1,
+                4
+              ],
+              "permutation": [
+                0,
+                1,
+                2
+              ],
+              "rms_m": 0.002514880331500724,
+              "rms_mm": 2.514880331500724
+            },
+            "nearest_profile_neighbor": {
+              "body": "left_foot",
+              "subset": [
+                0,
+                1,
+                4
+              ],
+              "profile_delta_m": 0.003867461672189894,
+              "profile_delta_mm": 3.867461672189894
+            },
+            "min_edge_m": 0.06085269852533583,
+            "min_edge_mm": 60.852698525335825,
+            "edge_lengths_mm": [
+              60.852698525335825,
+              77.52584741756942,
+              82.13415549425986
+            ],
+            "triangle_area_m2": 0.0022391453503076237,
+            "triangle_area_mm2": 2239.1453503076236
+          },
+          {
+            "subset": [
+              1,
+              3,
+              4
+            ],
+            "subset_size": 3,
+            "score_m": 0.0036248718015242727,
+            "score_mm": 3.624871801524273,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "right_foot",
+              "subset": [
+                0,
+                1,
+                3
+              ],
+              "permutation": [
+                2,
+                1,
+                0
+              ],
+              "rms_m": 0.0032155945952727165,
+              "rms_mm": 3.2155945952727167
+            },
+            "nearest_profile_neighbor": {
+              "body": "right_foot",
+              "subset": [
+                0,
+                1,
+                3
+              ],
+              "profile_delta_m": 0.0036248718015242727,
+              "profile_delta_mm": 3.624871801524273
+            },
+            "min_edge_m": 0.04401848605881097,
+            "min_edge_mm": 44.01848605881097,
+            "edge_lengths_mm": [
+              44.01848605881097,
+              71.85682141279125,
+              82.13415549425986
+            ],
+            "triangle_area_m2": 0.0015790219395746144,
+            "triangle_area_mm2": 1579.0219395746144
+          },
+          {
+            "subset": [
+              1,
+              2,
+              3
+            ],
+            "subset_size": 3,
+            "score_m": 0.0019915168755546527,
+            "score_mm": 1.9915168755546526,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "waist",
+              "subset": [
+                1,
+                2,
+                4
+              ],
+              "permutation": [
+                1,
+                0,
+                2
+              ],
+              "rms_m": 0.001463213048527614,
+              "rms_mm": 1.463213048527614
+            },
+            "nearest_profile_neighbor": {
+              "body": "waist",
+              "subset": [
+                1,
+                2,
+                4
+              ],
+              "profile_delta_m": 0.0019915168755546527,
+              "profile_delta_mm": 1.9915168755546526
+            },
+            "min_edge_m": 0.039767459464556315,
+            "min_edge_mm": 39.76745946455632,
+            "edge_lengths_mm": [
+              39.76745946455632,
+              71.85682141279125,
+              100.96854801664983
+            ],
+            "triangle_area_m2": 0.0011391222326012063,
+            "triangle_area_mm2": 1139.1222326012064
+          },
+          {
+            "subset": [
+              0,
+              3,
+              4
+            ],
+            "subset_size": 3,
+            "score_m": 0.001836693187138941,
+            "score_mm": 1.836693187138941,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "right_foot",
+              "subset": [
+                0,
+                1,
+                2
+              ],
+              "permutation": [
+                1,
+                2,
+                0
+              ],
+              "rms_m": 0.001441839801609358,
+              "rms_mm": 1.4418398016093579
+            },
+            "nearest_profile_neighbor": {
+              "body": "right_foot",
+              "subset": [
+                0,
+                1,
+                2
+              ],
+              "profile_delta_m": 0.001836693187138941,
+              "profile_delta_mm": 1.836693187138941
+            },
+            "min_edge_m": 0.04401848605881097,
+            "min_edge_mm": 44.01848605881097,
+            "edge_lengths_mm": [
+              44.01848605881097,
+              58.887305347075696,
+              77.52584741756942
+            ],
+            "triangle_area_m2": 0.0012872118608009966,
+            "triangle_area_mm2": 1287.2118608009966
+          },
+          {
+            "subset": [
+              1,
+              2,
+              4
+            ],
+            "subset_size": 3,
+            "score_m": 0.0014376640361531128,
+            "score_mm": 1.4376640361531128,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "left_foot",
+              "subset": [
+                0,
+                2,
+                4
+              ],
+              "permutation": [
+                2,
+                1,
+                0
+              ],
+              "rms_m": 0.0009135047638458081,
+              "rms_mm": 0.9135047638458081
+            },
+            "nearest_profile_neighbor": {
+              "body": "left_foot",
+              "subset": [
+                0,
+                2,
+                4
+              ],
+              "profile_delta_m": 0.0014376640361531128,
+              "profile_delta_mm": 1.4376640361531128
+            },
+            "min_edge_m": 0.039767459464556315,
+            "min_edge_mm": 39.76745946455632,
+            "edge_lengths_mm": [
+              39.76745946455632,
+              82.13415549425986,
+              105.12137604707691
+            ],
+            "triangle_area_m2": 0.0014844839562853148,
+            "triangle_area_mm2": 1484.483956285315
+          }
+        ],
+        "gate_2_pass": false
+      },
+      {
+        "name": "waist",
+        "marker_count": 5,
+        "min_marker_spacing_m": 0.03509242269633209,
+        "min_marker_spacing_mm": 35.092422696332086,
+        "closest_marker_pair": [
+          1,
+          3
+        ],
+        "strong_4_subsets": [],
+        "strong_3_subsets": [],
+        "best_4_subset": {
+          "subset": [
+            0,
+            1,
+            3,
+            4
+          ],
+          "subset_size": 4,
+          "score_m": 0.01240026428449722,
+          "score_mm": 12.40026428449722,
+          "strong": false,
+          "rejection_reasons": [
+            "low_margin_against_another_body_or_subset",
+            "low_4_point_volume",
+            "repeated_edge_lengths"
+          ],
+          "nearest_cross_body_neighbor": {
+            "body": "left_foot",
+            "subset": [
+              0,
+              1,
+              2,
+              4
+            ],
+            "permutation": [
+              2,
+              1,
+              3,
+              0
+            ],
+            "rms_m": 0.01240026428449722,
+            "rms_mm": 12.40026428449722
+          },
+          "nearest_profile_neighbor": {
+            "body": "head",
+            "subset": [
+              1,
+              2,
+              3,
+              4
+            ],
+            "profile_delta_m": 0.005961751316210755,
+            "profile_delta_mm": 5.961751316210755
+          },
+          "min_edge_m": 0.03509242269633209,
+          "min_edge_mm": 35.092422696332086,
+          "edge_lengths_mm": [
+            35.092422696332086,
+            35.67327911004024,
+            77.8624533122322,
+            91.05849644704071,
+            100.23150466740057,
+            102.77580236794266
+          ],
+          "tetra_volume_m3": 6.050833591762489e-06,
+          "tetra_volume_mm3": 6050.833591762489
+        },
+        "best_3_subset": {
+          "subset": [
+            0,
+            2,
+            4
+          ],
+          "subset_size": 3,
+          "score_m": 0.005759295853534215,
+          "score_mm": 5.759295853534215,
+          "strong": false,
+          "rejection_reasons": [
+            "low_margin_against_another_body_or_subset",
+            "repeated_edge_lengths",
+            "near_isosceles_or_symmetric_profile"
+          ],
+          "nearest_cross_body_neighbor": {
+            "body": "right_foot",
+            "subset": [
+              1,
+              2,
+              3
+            ],
+            "permutation": [
+              1,
+              0,
+              2
+            ],
+            "rms_m": 0.003525346352113853,
+            "rms_mm": 3.525346352113853
+          },
+          "nearest_profile_neighbor": {
+            "body": "right_foot",
+            "subset": [
+              1,
+              2,
+              3
+            ],
+            "profile_delta_m": 0.005759295853534215,
+            "profile_delta_mm": 5.759295853534215
+          },
+          "min_edge_m": 0.03567327911004024,
+          "min_edge_mm": 35.67327911004024,
+          "edge_lengths_mm": [
+            35.67327911004024,
+            71.95496255469854,
+            73.44056745740751
+          ],
+          "triangle_area_m2": 0.0012559585161392181,
+          "triangle_area_mm2": 1255.958516139218
+        },
+        "subsets_4": [
+          {
+            "subset": [
+              0,
+              1,
+              3,
+              4
+            ],
+            "subset_size": 4,
+            "score_m": 0.01240026428449722,
+            "score_mm": 12.40026428449722,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "low_4_point_volume",
+              "repeated_edge_lengths"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "left_foot",
+              "subset": [
+                0,
+                1,
+                2,
+                4
+              ],
+              "permutation": [
+                2,
+                1,
+                3,
+                0
+              ],
+              "rms_m": 0.01240026428449722,
+              "rms_mm": 12.40026428449722
+            },
+            "nearest_profile_neighbor": {
+              "body": "head",
+              "subset": [
+                1,
+                2,
+                3,
+                4
+              ],
+              "profile_delta_m": 0.005961751316210755,
+              "profile_delta_mm": 5.961751316210755
+            },
+            "min_edge_m": 0.03509242269633209,
+            "min_edge_mm": 35.092422696332086,
+            "edge_lengths_mm": [
+              35.092422696332086,
+              35.67327911004024,
+              77.8624533122322,
+              91.05849644704071,
+              100.23150466740057,
+              102.77580236794266
+            ],
+            "tetra_volume_m3": 6.050833591762489e-06,
+            "tetra_volume_mm3": 6050.833591762489
+          },
+          {
+            "subset": [
+              0,
+              1,
+              2,
+              4
+            ],
+            "subset_size": 4,
+            "score_m": 0.010306991796048735,
+            "score_mm": 10.306991796048734,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "repeated_edge_lengths"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "right_foot",
+              "subset": [
+                0,
+                1,
+                2,
+                3
+              ],
+              "permutation": [
+                3,
+                0,
+                2,
+                1
+              ],
+              "rms_m": 0.010306991796048735,
+              "rms_mm": 10.306991796048734
+            },
+            "nearest_profile_neighbor": {
+              "body": "waist",
+              "subset": [
+                1,
+                2,
+                3,
+                4
+              ],
+              "profile_delta_m": 0.0055715121905981916,
+              "profile_delta_mm": 5.571512190598192
+            },
+            "min_edge_m": 0.03567327911004024,
+            "min_edge_mm": 35.67327911004024,
+            "edge_lengths_mm": [
+              35.67327911004024,
+              42.24213087158238,
+              71.95496255469854,
+              73.44056745740751,
+              91.05849644704071,
+              102.77580236794266
+            ],
+            "tetra_volume_m3": 1.1189397763339863e-05,
+            "tetra_volume_mm3": 11189.397763339863
+          },
+          {
+            "subset": [
+              0,
+              1,
+              2,
+              3
+            ],
+            "subset_size": 4,
+            "score_m": 0.009333883750868249,
+            "score_mm": 9.33388375086825,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "low_4_point_volume"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "chest",
+              "subset": [
+                0,
+                1,
+                3,
+                4
+              ],
+              "permutation": [
+                1,
+                2,
+                3,
+                0
+              ],
+              "rms_m": 0.009333883750868249,
+              "rms_mm": 9.33388375086825
+            },
+            "nearest_profile_neighbor": {
+              "body": "chest",
+              "subset": [
+                0,
+                1,
+                3,
+                4
+              ],
+              "profile_delta_m": 0.005531872529493784,
+              "profile_delta_mm": 5.531872529493784
+            },
+            "min_edge_m": 0.03509242269633209,
+            "min_edge_mm": 35.092422696332086,
+            "edge_lengths_mm": [
+              35.092422696332086,
+              42.24213087158238,
+              61.866899581274446,
+              71.95496255469854,
+              77.8624533122322,
+              91.05849644704071
+            ],
+            "tetra_volume_m3": 4.3635852568403e-06,
+            "tetra_volume_mm3": 4363.5852568403
+          },
+          {
+            "subset": [
+              1,
+              2,
+              3,
+              4
+            ],
+            "subset_size": 4,
+            "score_m": 0.008497685444365098,
+            "score_mm": 8.497685444365098,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "low_4_point_volume",
+              "repeated_edge_lengths"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "left_foot",
+              "subset": [
+                0,
+                2,
+                3,
+                4
+              ],
+              "permutation": [
+                3,
+                0,
+                2,
+                1
+              ],
+              "rms_m": 0.008497685444365098,
+              "rms_mm": 8.497685444365098
+            },
+            "nearest_profile_neighbor": {
+              "body": "waist",
+              "subset": [
+                0,
+                1,
+                2,
+                4
+              ],
+              "profile_delta_m": 0.0055715121905981916,
+              "profile_delta_mm": 5.571512190598192
+            },
+            "min_edge_m": 0.03509242269633209,
+            "min_edge_mm": 35.092422696332086,
+            "edge_lengths_mm": [
+              35.092422696332086,
+              42.24213087158238,
+              61.866899581274446,
+              73.44056745740751,
+              100.23150466740057,
+              102.77580236794266
+            ],
+            "tetra_volume_m3": 8.748687671616926e-06,
+            "tetra_volume_mm3": 8748.687671616926
+          },
+          {
+            "subset": [
+              0,
+              2,
+              3,
+              4
+            ],
+            "subset_size": 4,
+            "score_m": 0.005269379832296211,
+            "score_mm": 5.269379832296211,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "repeated_edge_lengths"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "head",
+              "subset": [
+                0,
+                1,
+                2,
+                3
+              ],
+              "permutation": [
+                1,
+                0,
+                3,
+                2
+              ],
+              "rms_m": 0.005269379832296211,
+              "rms_mm": 5.269379832296211
+            },
+            "nearest_profile_neighbor": {
+              "body": "head",
+              "subset": [
+                0,
+                1,
+                2,
+                4
+              ],
+              "profile_delta_m": 0.004426162408912768,
+              "profile_delta_mm": 4.426162408912768
+            },
+            "min_edge_m": 0.03567327911004024,
+            "min_edge_mm": 35.67327911004024,
+            "edge_lengths_mm": [
+              35.67327911004024,
+              61.866899581274446,
+              71.95496255469854,
+              73.44056745740751,
+              77.8624533122322,
+              100.23150466740057
+            ],
+            "tetra_volume_m3": 1.2855128940325725e-05,
+            "tetra_volume_mm3": 12855.128940325725
+          }
+        ],
+        "subsets_3": [
+          {
+            "subset": [
+              0,
+              2,
+              4
+            ],
+            "subset_size": 3,
+            "score_m": 0.005759295853534215,
+            "score_mm": 5.759295853534215,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "repeated_edge_lengths",
+              "near_isosceles_or_symmetric_profile"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "right_foot",
+              "subset": [
+                1,
+                2,
+                3
+              ],
+              "permutation": [
+                1,
+                0,
+                2
+              ],
+              "rms_m": 0.003525346352113853,
+              "rms_mm": 3.525346352113853
+            },
+            "nearest_profile_neighbor": {
+              "body": "right_foot",
+              "subset": [
+                1,
+                2,
+                3
+              ],
+              "profile_delta_m": 0.005759295853534215,
+              "profile_delta_mm": 5.759295853534215
+            },
+            "min_edge_m": 0.03567327911004024,
+            "min_edge_mm": 35.67327911004024,
+            "edge_lengths_mm": [
+              35.67327911004024,
+              71.95496255469854,
+              73.44056745740751
+            ],
+            "triangle_area_m2": 0.0012559585161392181,
+            "triangle_area_mm2": 1255.958516139218
+          },
+          {
+            "subset": [
+              0,
+              1,
+              4
+            ],
+            "subset_size": 3,
+            "score_m": 0.005306645958422814,
+            "score_mm": 5.306645958422814,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "chest",
+              "subset": [
+                0,
+                2,
+                4
+              ],
+              "permutation": [
+                0,
+                2,
+                1
+              ],
+              "rms_m": 0.004688405941274603,
+              "rms_mm": 4.688405941274603
+            },
+            "nearest_profile_neighbor": {
+              "body": "waist",
+              "subset": [
+                1,
+                3,
+                4
+              ],
+              "profile_delta_m": 0.005306645958422814,
+              "profile_delta_mm": 5.306645958422814
+            },
+            "min_edge_m": 0.03567327911004024,
+            "min_edge_mm": 35.67327911004024,
+            "edge_lengths_mm": [
+              35.67327911004024,
+              91.05849644704071,
+              102.77580236794266
+            ],
+            "triangle_area_m2": 0.0016048749410039786,
+            "triangle_area_mm2": 1604.8749410039786
+          },
+          {
+            "subset": [
+              1,
+              3,
+              4
+            ],
+            "subset_size": 3,
+            "score_m": 0.005306645958422814,
+            "score_mm": 5.306645958422814,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "repeated_edge_lengths",
+              "near_isosceles_or_symmetric_profile"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "head",
+              "subset": [
+                2,
+                3,
+                4
+              ],
+              "permutation": [
+                2,
+                1,
+                0
+              ],
+              "rms_m": 0.003675857786678207,
+              "rms_mm": 3.675857786678207
+            },
+            "nearest_profile_neighbor": {
+              "body": "waist",
+              "subset": [
+                0,
+                1,
+                4
+              ],
+              "profile_delta_m": 0.005306645958422814,
+              "profile_delta_mm": 5.306645958422814
+            },
+            "min_edge_m": 0.03509242269633209,
+            "min_edge_mm": 35.092422696332086,
+            "edge_lengths_mm": [
+              35.092422696332086,
+              100.23150466740057,
+              102.77580236794266
+            ],
+            "triangle_area_m2": 0.0017495764775792833,
+            "triangle_area_mm2": 1749.5764775792832
+          },
+          {
+            "subset": [
+              0,
+              1,
+              2
+            ],
+            "subset_size": 3,
+            "score_m": 0.0048524428503973534,
+            "score_mm": 4.852442850397353,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "chest",
+              "subset": [
+                0,
+                3,
+                4
+              ],
+              "permutation": [
+                1,
+                2,
+                0
+              ],
+              "rms_m": 0.00395183423379618,
+              "rms_mm": 3.95183423379618
+            },
+            "nearest_profile_neighbor": {
+              "body": "chest",
+              "subset": [
+                0,
+                3,
+                4
+              ],
+              "profile_delta_m": 0.0048524428503973534,
+              "profile_delta_mm": 4.852442850397353
+            },
+            "min_edge_m": 0.042242130871582385,
+            "min_edge_mm": 42.24213087158238,
+            "edge_lengths_mm": [
+              42.24213087158238,
+              71.95496255469854,
+              91.05849644704071
+            ],
+            "triangle_area_m2": 0.001482961498908934,
+            "triangle_area_mm2": 1482.961498908934
+          },
+          {
+            "subset": [
+              1,
+              2,
+              3
+            ],
+            "subset_size": 3,
+            "score_m": 0.004396039695406694,
+            "score_mm": 4.396039695406694,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "low_3_point_triangle_area"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "chest",
+              "subset": [
+                0,
+                1,
+                3
+              ],
+              "permutation": [
+                0,
+                1,
+                2
+              ],
+              "rms_m": 0.0031739258589863696,
+              "rms_mm": 3.1739258589863697
+            },
+            "nearest_profile_neighbor": {
+              "body": "chest",
+              "subset": [
+                0,
+                1,
+                3
+              ],
+              "profile_delta_m": 0.004396039695406694,
+              "profile_delta_mm": 4.396039695406694
+            },
+            "min_edge_m": 0.03509242269633209,
+            "min_edge_mm": 35.092422696332086,
+            "edge_lengths_mm": [
+              35.092422696332086,
+              42.24213087158238,
+              61.866899581274446
+            ],
+            "triangle_area_m2": 0.0007128740743054868,
+            "triangle_area_mm2": 712.8740743054868
+          },
+          {
+            "subset": [
+              2,
+              3,
+              4
+            ],
+            "subset_size": 3,
+            "score_m": 0.004251778596441153,
+            "score_mm": 4.251778596441153,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "head",
+              "subset": [
+                0,
+                2,
+                4
+              ],
+              "permutation": [
+                0,
+                1,
+                2
+              ],
+              "rms_m": 0.0024722052845830384,
+              "rms_mm": 2.4722052845830382
+            },
+            "nearest_profile_neighbor": {
+              "body": "head",
+              "subset": [
+                0,
+                2,
+                4
+              ],
+              "profile_delta_m": 0.004251778596441153,
+              "profile_delta_mm": 4.251778596441153
+            },
+            "min_edge_m": 0.06186689958127445,
+            "min_edge_mm": 61.866899581274446,
+            "edge_lengths_mm": [
+              61.866899581274446,
+              73.44056745740751,
+              100.23150466740057
+            ],
+            "triangle_area_m2": 0.0022623808036165336,
+            "triangle_area_mm2": 2262.3808036165337
+          },
+          {
+            "subset": [
+              0,
+              3,
+              4
+            ],
+            "subset_size": 3,
+            "score_m": 0.00421794421432846,
+            "score_mm": 4.21794421432846,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "head",
+              "subset": [
+                1,
+                2,
+                4
+              ],
+              "permutation": [
+                0,
+                2,
+                1
+              ],
+              "rms_m": 0.0027536524639841433,
+              "rms_mm": 2.7536524639841433
+            },
+            "nearest_profile_neighbor": {
+              "body": "head",
+              "subset": [
+                1,
+                2,
+                3
+              ],
+              "profile_delta_m": 0.00421794421432846,
+              "profile_delta_mm": 4.21794421432846
+            },
+            "min_edge_m": 0.03567327911004024,
+            "min_edge_mm": 35.67327911004024,
+            "edge_lengths_mm": [
+              35.67327911004024,
+              77.8624533122322,
+              100.23150466740057
+            ],
+            "triangle_area_m2": 0.0012121723202364722,
+            "triangle_area_mm2": 1212.1723202364722
+          },
+          {
+            "subset": [
+              0,
+              2,
+              3
+            ],
+            "subset_size": 3,
+            "score_m": 0.004095151664638349,
+            "score_mm": 4.095151664638348,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "head",
+              "subset": [
+                0,
+                1,
+                4
+              ],
+              "permutation": [
+                1,
+                2,
+                0
+              ],
+              "rms_m": 0.0026899448451016624,
+              "rms_mm": 2.6899448451016625
+            },
+            "nearest_profile_neighbor": {
+              "body": "head",
+              "subset": [
+                0,
+                1,
+                4
+              ],
+              "profile_delta_m": 0.004095151664638349,
+              "profile_delta_mm": 4.095151664638348
+            },
+            "min_edge_m": 0.06186689958127445,
+            "min_edge_mm": 61.866899581274446,
+            "edge_lengths_mm": [
+              61.866899581274446,
+              71.95496255469854,
+              77.8624533122322
+            ],
+            "triangle_area_m2": 0.0021007429475816014,
+            "triangle_area_mm2": 2100.742947581601
+          },
+          {
+            "subset": [
+              0,
+              1,
+              3
+            ],
+            "subset_size": 3,
+            "score_m": 0.0033119266859522206,
+            "score_mm": 3.3119266859522205,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "chest",
+              "subset": [
+                0,
+                3,
+                4
+              ],
+              "permutation": [
+                1,
+                2,
+                0
+              ],
+              "rms_m": 0.002793475017570927,
+              "rms_mm": 2.793475017570927
+            },
+            "nearest_profile_neighbor": {
+              "body": "chest",
+              "subset": [
+                0,
+                3,
+                4
+              ],
+              "profile_delta_m": 0.0033119266859522206,
+              "profile_delta_mm": 3.3119266859522205
+            },
+            "min_edge_m": 0.03509242269633209,
+            "min_edge_mm": 35.092422696332086,
+            "edge_lengths_mm": [
+              35.092422696332086,
+              77.8624533122322,
+              91.05849644704071
+            ],
+            "triangle_area_m2": 0.00134323356477312,
+            "triangle_area_mm2": 1343.2335647731202
+          },
+          {
+            "subset": [
+              1,
+              2,
+              4
+            ],
+            "subset_size": 3,
+            "score_m": 0.0019915168755546527,
+            "score_mm": 1.9915168755546526,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "head",
+              "subset": [
+                1,
+                2,
+                3
+              ],
+              "permutation": [
+                1,
+                0,
+                2
+              ],
+              "rms_m": 0.0014632130485276436,
+              "rms_mm": 1.4632130485276436
+            },
+            "nearest_profile_neighbor": {
+              "body": "head",
+              "subset": [
+                1,
+                2,
+                3
+              ],
+              "profile_delta_m": 0.0019915168755546527,
+              "profile_delta_mm": 1.9915168755546526
+            },
+            "min_edge_m": 0.042242130871582385,
+            "min_edge_mm": 42.24213087158238,
+            "edge_lengths_mm": [
+              42.24213087158238,
+              73.44056745740751,
+              102.77580236794266
+            ],
+            "triangle_area_m2": 0.0012999716842550147,
+            "triangle_area_mm2": 1299.9716842550147
+          }
+        ],
+        "gate_2_pass": false
+      },
+      {
+        "name": "chest",
+        "marker_count": 5,
+        "min_marker_spacing_m": 0.03774351986727881,
+        "min_marker_spacing_mm": 37.743519867278806,
+        "closest_marker_pair": [
+          0,
+          3
+        ],
+        "strong_4_subsets": [],
+        "strong_3_subsets": [],
+        "best_4_subset": {
+          "subset": [
+            0,
+            2,
+            3,
+            4
+          ],
+          "subset_size": 4,
+          "score_m": 0.013078414909133257,
+          "score_mm": 13.078414909133256,
+          "strong": false,
+          "rejection_reasons": [
+            "low_margin_against_another_body_or_subset"
+          ],
+          "nearest_cross_body_neighbor": {
+            "body": "left_foot",
+            "subset": [
+              1,
+              2,
+              3,
+              4
+            ],
+            "permutation": [
+              3,
+              0,
+              2,
+              1
+            ],
+            "rms_m": 0.013078414909133257,
+            "rms_mm": 13.078414909133256
+          },
+          "nearest_profile_neighbor": {
+            "body": "chest",
+            "subset": [
+              0,
+              1,
+              2,
+              4
+            ],
+            "profile_delta_m": 0.004732730298864358,
+            "profile_delta_mm": 4.732730298864358
+          },
+          "min_edge_m": 0.03774351986727881,
+          "min_edge_mm": 37.743519867278806,
+          "edge_lengths_mm": [
+            37.743519867278806,
+            45.79205400433266,
+            50.90741244833131,
+            76.98427994686521,
+            86.04780084164562,
+            100.56685380534262
+          ],
+          "tetra_volume_m3": 2.0786477721862188e-05,
+          "tetra_volume_mm3": 20786.47772186219
+        },
+        "best_3_subset": {
+          "subset": [
+            0,
+            2,
+            3
+          ],
+          "subset_size": 3,
+          "score_m": 0.006824969564654568,
+          "score_mm": 6.824969564654568,
+          "strong": false,
+          "rejection_reasons": [
+            "low_margin_against_another_body_or_subset"
+          ],
+          "nearest_cross_body_neighbor": {
+            "body": "right_foot",
+            "subset": [
+              0,
+              2,
+              4
+            ],
+            "permutation": [
+              2,
+              1,
+              0
+            ],
+            "rms_m": 0.006266216779471554,
+            "rms_mm": 6.266216779471554
+          },
+          "nearest_profile_neighbor": {
+            "body": "waist",
+            "subset": [
+              1,
+              2,
+              3
+            ],
+            "profile_delta_m": 0.006824969564654568,
+            "profile_delta_mm": 6.824969564654568
+          },
+          "min_edge_m": 0.03774351986727881,
+          "min_edge_mm": 37.743519867278806,
+          "edge_lengths_mm": [
+            37.743519867278806,
+            45.79205400433266,
+            50.90741244833131
+          ],
+          "triangle_area_m2": 0.0008323185881239806,
+          "triangle_area_mm2": 832.3185881239806
+        },
+        "subsets_4": [
+          {
+            "subset": [
+              0,
+              2,
+              3,
+              4
+            ],
+            "subset_size": 4,
+            "score_m": 0.013078414909133257,
+            "score_mm": 13.078414909133256,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "left_foot",
+              "subset": [
+                1,
+                2,
+                3,
+                4
+              ],
+              "permutation": [
+                3,
+                0,
+                2,
+                1
+              ],
+              "rms_m": 0.013078414909133257,
+              "rms_mm": 13.078414909133256
+            },
+            "nearest_profile_neighbor": {
+              "body": "chest",
+              "subset": [
+                0,
+                1,
+                2,
+                4
+              ],
+              "profile_delta_m": 0.004732730298864358,
+              "profile_delta_mm": 4.732730298864358
+            },
+            "min_edge_m": 0.03774351986727881,
+            "min_edge_mm": 37.743519867278806,
+            "edge_lengths_mm": [
+              37.743519867278806,
+              45.79205400433266,
+              50.90741244833131,
+              76.98427994686521,
+              86.04780084164562,
+              100.56685380534262
+            ],
+            "tetra_volume_m3": 2.0786477721862188e-05,
+            "tetra_volume_mm3": 20786.47772186219
+          },
+          {
+            "subset": [
+              0,
+              1,
+              2,
+              4
+            ],
+            "subset_size": 4,
+            "score_m": 0.010555440724865509,
+            "score_mm": 10.555440724865509,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "repeated_edge_lengths"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "waist",
+              "subset": [
+                1,
+                2,
+                3,
+                4
+              ],
+              "permutation": [
+                0,
+                1,
+                2,
+                3
+              ],
+              "rms_m": 0.010555440724865509,
+              "rms_mm": 10.555440724865509
+            },
+            "nearest_profile_neighbor": {
+              "body": "chest",
+              "subset": [
+                0,
+                2,
+                3,
+                4
+              ],
+              "profile_delta_m": 0.004732730298864358,
+              "profile_delta_mm": 4.732730298864358
+            },
+            "min_edge_m": 0.045792054004332665,
+            "min_edge_mm": 45.79205400433266,
+            "edge_lengths_mm": [
+              45.79205400433266,
+              48.98851702470114,
+              55.15742908148692,
+              83.41339322263883,
+              86.04780084164562,
+              100.56685380534262
+            ],
+            "tetra_volume_m3": 1.1060759122380393e-05,
+            "tetra_volume_mm3": 11060.759122380394
+          },
+          {
+            "subset": [
+              1,
+              2,
+              3,
+              4
+            ],
+            "subset_size": 4,
+            "score_m": 0.010412294438381976,
+            "score_mm": 10.412294438381975,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "head",
+              "subset": [
+                0,
+                1,
+                3,
+                4
+              ],
+              "permutation": [
+                3,
+                0,
+                2,
+                1
+              ],
+              "rms_m": 0.010412294438381976,
+              "rms_mm": 10.412294438381975
+            },
+            "nearest_profile_neighbor": {
+              "body": "head",
+              "subset": [
+                0,
+                1,
+                2,
+                4
+              ],
+              "profile_delta_m": 0.005493345286840818,
+              "profile_delta_mm": 5.4933452868408175
+            },
+            "min_edge_m": 0.05090741244833131,
+            "min_edge_mm": 50.90741244833131,
+            "edge_lengths_mm": [
+              50.90741244833131,
+              55.15742908148692,
+              64.19787634520411,
+              76.98427994686521,
+              83.41339322263883,
+              100.56685380534262
+            ],
+            "tetra_volume_m3": 2.8614014209785954e-05,
+            "tetra_volume_mm3": 28614.014209785953
+          },
+          {
+            "subset": [
+              0,
+              1,
+              2,
+              3
+            ],
+            "subset_size": 4,
+            "score_m": 0.009302113020876386,
+            "score_mm": 9.302113020876387,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "repeated_edge_lengths"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "right_foot",
+              "subset": [
+                0,
+                1,
+                2,
+                4
+              ],
+              "permutation": [
+                0,
+                1,
+                3,
+                2
+              ],
+              "rms_m": 0.009302113020876386,
+              "rms_mm": 9.302113020876387
+            },
+            "nearest_profile_neighbor": {
+              "body": "right_foot",
+              "subset": [
+                0,
+                1,
+                2,
+                4
+              ],
+              "profile_delta_m": 0.008004967213112491,
+              "profile_delta_mm": 8.004967213112492
+            },
+            "min_edge_m": 0.03774351986727881,
+            "min_edge_mm": 37.743519867278806,
+            "edge_lengths_mm": [
+              37.743519867278806,
+              45.79205400433266,
+              48.98851702470114,
+              50.90741244833131,
+              64.19787634520411,
+              83.41339322263883
+            ],
+            "tetra_volume_m3": 1.1324448938426887e-05,
+            "tetra_volume_mm3": 11324.448938426887
+          },
+          {
+            "subset": [
+              0,
+              1,
+              3,
+              4
+            ],
+            "subset_size": 4,
+            "score_m": 0.008132545492262465,
+            "score_mm": 8.132545492262464,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "low_4_point_volume"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "right_foot",
+              "subset": [
+                0,
+                1,
+                2,
+                3
+              ],
+              "permutation": [
+                0,
+                2,
+                1,
+                3
+              ],
+              "rms_m": 0.008132545492262465,
+              "rms_mm": 8.132545492262464
+            },
+            "nearest_profile_neighbor": {
+              "body": "right_foot",
+              "subset": [
+                0,
+                2,
+                3,
+                4
+              ],
+              "profile_delta_m": 0.0035477080949074587,
+              "profile_delta_mm": 3.547708094907459
+            },
+            "min_edge_m": 0.03774351986727881,
+            "min_edge_mm": 37.743519867278806,
+            "edge_lengths_mm": [
+              37.743519867278806,
+              48.98851702470114,
+              55.15742908148692,
+              64.19787634520411,
+              76.98427994686521,
+              86.04780084164562
+            ],
+            "tetra_volume_m3": 8.091226303970225e-06,
+            "tetra_volume_mm3": 8091.226303970226
+          }
+        ],
+        "subsets_3": [
+          {
+            "subset": [
+              0,
+              2,
+              3
+            ],
+            "subset_size": 3,
+            "score_m": 0.006824969564654568,
+            "score_mm": 6.824969564654568,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "right_foot",
+              "subset": [
+                0,
+                2,
+                4
+              ],
+              "permutation": [
+                2,
+                1,
+                0
+              ],
+              "rms_m": 0.006266216779471554,
+              "rms_mm": 6.266216779471554
+            },
+            "nearest_profile_neighbor": {
+              "body": "waist",
+              "subset": [
+                1,
+                2,
+                3
+              ],
+              "profile_delta_m": 0.006824969564654568,
+              "profile_delta_mm": 6.824969564654568
+            },
+            "min_edge_m": 0.03774351986727881,
+            "min_edge_mm": 37.743519867278806,
+            "edge_lengths_mm": [
+              37.743519867278806,
+              45.79205400433266,
+              50.90741244833131
+            ],
+            "triangle_area_m2": 0.0008323185881239806,
+            "triangle_area_mm2": 832.3185881239806
+          },
+          {
+            "subset": [
+              0,
+              2,
+              4
+            ],
+            "subset_size": 3,
+            "score_m": 0.004828346535878597,
+            "score_mm": 4.828346535878597,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "waist",
+              "subset": [
+                0,
+                1,
+                4
+              ],
+              "permutation": [
+                0,
+                2,
+                1
+              ],
+              "rms_m": 0.004688405941274605,
+              "rms_mm": 4.688405941274604
+            },
+            "nearest_profile_neighbor": {
+              "body": "left_foot",
+              "subset": [
+                0,
+                2,
+                4
+              ],
+              "profile_delta_m": 0.004828346535878597,
+              "profile_delta_mm": 4.828346535878597
+            },
+            "min_edge_m": 0.045792054004332665,
+            "min_edge_mm": 45.79205400433266,
+            "edge_lengths_mm": [
+              45.79205400433266,
+              86.04780084164562,
+              100.56685380534262
+            ],
+            "triangle_area_m2": 0.0019641920480968807,
+            "triangle_area_mm2": 1964.1920480968806
+          },
+          {
+            "subset": [
+              1,
+              2,
+              3
+            ],
+            "subset_size": 3,
+            "score_m": 0.004449574470097406,
+            "score_mm": 4.449574470097406,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "right_foot",
+              "subset": [
+                0,
+                1,
+                2
+              ],
+              "permutation": [
+                2,
+                1,
+                0
+              ],
+              "rms_m": 0.0031150788796429902,
+              "rms_mm": 3.1150788796429905
+            },
+            "nearest_profile_neighbor": {
+              "body": "chest",
+              "subset": [
+                1,
+                3,
+                4
+              ],
+              "profile_delta_m": 0.004449574470097406,
+              "profile_delta_mm": 4.449574470097406
+            },
+            "min_edge_m": 0.05090741244833131,
+            "min_edge_mm": 50.90741244833131,
+            "edge_lengths_mm": [
+              50.90741244833131,
+              64.19787634520411,
+              83.41339322263883
+            ],
+            "triangle_area_m2": 0.0016329268560263922,
+            "triangle_area_mm2": 1632.9268560263922
+          },
+          {
+            "subset": [
+              1,
+              2,
+              4
+            ],
+            "subset_size": 3,
+            "score_m": 0.004449574470097406,
+            "score_mm": 4.449574470097406,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "left_foot",
+              "subset": [
+                0,
+                1,
+                2
+              ],
+              "permutation": [
+                2,
+                0,
+                1
+              ],
+              "rms_m": 0.0028029897213703455,
+              "rms_mm": 2.8029897213703454
+            },
+            "nearest_profile_neighbor": {
+              "body": "chest",
+              "subset": [
+                2,
+                3,
+                4
+              ],
+              "profile_delta_m": 0.004449574470097406,
+              "profile_delta_mm": 4.449574470097406
+            },
+            "min_edge_m": 0.055157429081486915,
+            "min_edge_mm": 55.15742908148692,
+            "edge_lengths_mm": [
+              55.15742908148692,
+              83.41339322263883,
+              100.56685380534262
+            ],
+            "triangle_area_m2": 0.002300258983835796,
+            "triangle_area_mm2": 2300.2589838357962
+          },
+          {
+            "subset": [
+              2,
+              3,
+              4
+            ],
+            "subset_size": 3,
+            "score_m": 0.004449574470097406,
+            "score_mm": 4.449574470097406,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "waist",
+              "subset": [
+                0,
+                1,
+                2
+              ],
+              "permutation": [
+                2,
+                0,
+                1
+              ],
+              "rms_m": 0.004707162623857856,
+              "rms_mm": 4.707162623857856
+            },
+            "nearest_profile_neighbor": {
+              "body": "chest",
+              "subset": [
+                1,
+                2,
+                4
+              ],
+              "profile_delta_m": 0.004449574470097406,
+              "profile_delta_mm": 4.449574470097406
+            },
+            "min_edge_m": 0.05090741244833131,
+            "min_edge_mm": 50.90741244833131,
+            "edge_lengths_mm": [
+              50.90741244833131,
+              76.98427994686521,
+              100.56685380534262
+            ],
+            "triangle_area_m2": 0.001918506586793816,
+            "triangle_area_mm2": 1918.506586793816
+          },
+          {
+            "subset": [
+              0,
+              1,
+              3
+            ],
+            "subset_size": 3,
+            "score_m": 0.004396039695406694,
+            "score_mm": 4.396039695406694,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "waist",
+              "subset": [
+                1,
+                2,
+                3
+              ],
+              "permutation": [
+                0,
+                1,
+                2
+              ],
+              "rms_m": 0.003173925858986374,
+              "rms_mm": 3.173925858986374
+            },
+            "nearest_profile_neighbor": {
+              "body": "waist",
+              "subset": [
+                1,
+                2,
+                3
+              ],
+              "profile_delta_m": 0.004396039695406694,
+              "profile_delta_mm": 4.396039695406694
+            },
+            "min_edge_m": 0.03774351986727881,
+            "min_edge_mm": 37.743519867278806,
+            "edge_lengths_mm": [
+              37.743519867278806,
+              48.98851702470114,
+              64.19787634520411
+            ],
+            "triangle_area_m2": 0.0009215146887771515,
+            "triangle_area_mm2": 921.5146887771515
+          },
+          {
+            "subset": [
+              0,
+              1,
+              4
+            ],
+            "subset_size": 3,
+            "score_m": 0.004290025458666538,
+            "score_mm": 4.2900254586665385,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "right_foot",
+              "subset": [
+                0,
+                1,
+                4
+              ],
+              "permutation": [
+                1,
+                0,
+                2
+              ],
+              "rms_m": 0.002866507582020003,
+              "rms_mm": 2.8665075820200028
+            },
+            "nearest_profile_neighbor": {
+              "body": "chest",
+              "subset": [
+                0,
+                1,
+                2
+              ],
+              "profile_delta_m": 0.004290025458666538,
+              "profile_delta_mm": 4.2900254586665385
+            },
+            "min_edge_m": 0.04898851702470114,
+            "min_edge_mm": 48.98851702470114,
+            "edge_lengths_mm": [
+              48.98851702470114,
+              55.15742908148692,
+              86.04780084164562
+            ],
+            "triangle_area_m2": 0.0012588558048571453,
+            "triangle_area_mm2": 1258.8558048571454
+          },
+          {
+            "subset": [
+              1,
+              3,
+              4
+            ],
+            "subset_size": 3,
+            "score_m": 0.004138962133264374,
+            "score_mm": 4.138962133264374,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "head",
+              "subset": [
+                0,
+                1,
+                3
+              ],
+              "permutation": [
+                0,
+                1,
+                2
+              ],
+              "rms_m": 0.0031429578460807632,
+              "rms_mm": 3.1429578460807632
+            },
+            "nearest_profile_neighbor": {
+              "body": "head",
+              "subset": [
+                0,
+                1,
+                3
+              ],
+              "profile_delta_m": 0.004138962133264374,
+              "profile_delta_mm": 4.138962133264374
+            },
+            "min_edge_m": 0.055157429081486915,
+            "min_edge_mm": 55.15742908148692,
+            "edge_lengths_mm": [
+              55.15742908148692,
+              64.19787634520411,
+              76.98427994686521
+            ],
+            "triangle_area_m2": 0.0017432717958975167,
+            "triangle_area_mm2": 1743.2717958975168
+          },
+          {
+            "subset": [
+              0,
+              3,
+              4
+            ],
+            "subset_size": 3,
+            "score_m": 0.0033119266859522206,
+            "score_mm": 3.3119266859522205,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "waist",
+              "subset": [
+                0,
+                1,
+                3
+              ],
+              "permutation": [
+                2,
+                0,
+                1
+              ],
+              "rms_m": 0.0027934750175709435,
+              "rms_mm": 2.7934750175709437
+            },
+            "nearest_profile_neighbor": {
+              "body": "waist",
+              "subset": [
+                0,
+                1,
+                3
+              ],
+              "profile_delta_m": 0.0033119266859522206,
+              "profile_delta_mm": 3.3119266859522205
+            },
+            "min_edge_m": 0.03774351986727881,
+            "min_edge_mm": 37.743519867278806,
+            "edge_lengths_mm": [
+              37.743519867278806,
+              76.98427994686521,
+              86.04780084164562
+            ],
+            "triangle_area_m2": 0.0014527682647863544,
+            "triangle_area_mm2": 1452.7682647863544
+          },
+          {
+            "subset": [
+              0,
+              1,
+              2
+            ],
+            "subset_size": 3,
+            "score_m": 0.0017943034931940565,
+            "score_mm": 1.7943034931940565,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "near_isosceles_or_symmetric_profile"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "right_foot",
+              "subset": [
+                0,
+                1,
+                4
+              ],
+              "permutation": [
+                0,
+                2,
+                1
+              ],
+              "rms_m": 0.001591264843228544,
+              "rms_mm": 1.5912648432285441
+            },
+            "nearest_profile_neighbor": {
+              "body": "right_foot",
+              "subset": [
+                0,
+                1,
+                4
+              ],
+              "profile_delta_m": 0.0017943034931940565,
+              "profile_delta_mm": 1.7943034931940565
+            },
+            "min_edge_m": 0.045792054004332665,
+            "min_edge_mm": 45.79205400433266,
+            "edge_lengths_mm": [
+              45.79205400433266,
+              48.98851702470114,
+              83.41339322263883
+            ],
+            "triangle_area_m2": 0.0009378416327171856,
+            "triangle_area_mm2": 937.8416327171857
+          }
+        ],
+        "gate_2_pass": false
+      },
+      {
+        "name": "left_foot",
+        "marker_count": 5,
+        "min_marker_spacing_m": 0.03702496619748705,
+        "min_marker_spacing_mm": 37.024966197487046,
+        "closest_marker_pair": [
+          2,
+          3
+        ],
+        "strong_4_subsets": [],
+        "strong_3_subsets": [
+          [
+            0,
+            2,
+            3
+          ]
+        ],
+        "best_4_subset": {
+          "subset": [
+            0,
+            1,
+            3,
+            4
+          ],
+          "subset_size": 4,
+          "score_m": 0.015932336658974297,
+          "score_mm": 15.932336658974297,
+          "strong": false,
+          "rejection_reasons": [
+            "repeated_edge_lengths"
+          ],
+          "nearest_cross_body_neighbor": {
+            "body": "head",
+            "subset": [
+              0,
+              1,
+              2,
+              3
+            ],
+            "permutation": [
+              3,
+              1,
+              0,
+              2
+            ],
+            "rms_m": 0.015932336658974297,
+            "rms_mm": 15.932336658974297
+          },
+          "nearest_profile_neighbor": {
+            "body": "left_foot",
+            "subset": [
+              0,
+              1,
+              2,
+              4
+            ],
+            "profile_delta_m": 0.011117726206883682,
+            "profile_delta_mm": 11.117726206883681
+          },
+          "min_edge_m": 0.061493167342042486,
+          "min_edge_mm": 61.49316734204248,
+          "edge_lengths_mm": [
+            61.49316734204248,
+            69.41112283383148,
+            80.26499434409374,
+            88.21351838582278,
+            89.75849146543068,
+            120.87658026672408
+          ],
+          "tetra_volume_m3": 2.0658758073159223e-05,
+          "tetra_volume_mm3": 20658.758073159224
+        },
+        "best_3_subset": {
+          "subset": [
+            0,
+            2,
+            3
+          ],
+          "subset_size": 3,
+          "score_m": 0.010177426032490628,
+          "score_mm": 10.177426032490628,
+          "strong": true,
+          "rejection_reasons": [],
+          "nearest_cross_body_neighbor": {
+            "body": "waist",
+            "subset": [
+              1,
+              3,
+              4
+            ],
+            "permutation": [
+              2,
+              1,
+              0
+            ],
+            "rms_m": 0.0077150338389594215,
+            "rms_mm": 7.715033838959421
+          },
+          "nearest_profile_neighbor": {
+            "body": "head",
+            "subset": [
+              2,
+              3,
+              4
+            ],
+            "profile_delta_m": 0.010177426032490628,
+            "profile_delta_mm": 10.177426032490628
+          },
+          "min_edge_m": 0.03702496619748705,
+          "min_edge_mm": 37.024966197487046,
+          "edge_lengths_mm": [
+            37.024966197487046,
+            104.65693816506602,
+            120.87658026672408
+          ],
+          "triangle_area_m2": 0.0018511585923134404,
+          "triangle_area_mm2": 1851.1585923134403
+        },
+        "subsets_4": [
+          {
+            "subset": [
+              0,
+              1,
+              3,
+              4
+            ],
+            "subset_size": 4,
+            "score_m": 0.015932336658974297,
+            "score_mm": 15.932336658974297,
+            "strong": false,
+            "rejection_reasons": [
+              "repeated_edge_lengths"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "head",
+              "subset": [
+                0,
+                1,
+                2,
+                3
+              ],
+              "permutation": [
+                3,
+                1,
+                0,
+                2
+              ],
+              "rms_m": 0.015932336658974297,
+              "rms_mm": 15.932336658974297
+            },
+            "nearest_profile_neighbor": {
+              "body": "left_foot",
+              "subset": [
+                0,
+                1,
+                2,
+                4
+              ],
+              "profile_delta_m": 0.011117726206883682,
+              "profile_delta_mm": 11.117726206883681
+            },
+            "min_edge_m": 0.061493167342042486,
+            "min_edge_mm": 61.49316734204248,
+            "edge_lengths_mm": [
+              61.49316734204248,
+              69.41112283383148,
+              80.26499434409374,
+              88.21351838582278,
+              89.75849146543068,
+              120.87658026672408
+            ],
+            "tetra_volume_m3": 2.0658758073159223e-05,
+            "tetra_volume_mm3": 20658.758073159224
+          },
+          {
+            "subset": [
+              0,
+              1,
+              2,
+              3
+            ],
+            "subset_size": 4,
+            "score_m": 0.012490175561372668,
+            "score_mm": 12.490175561372668,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "head",
+              "subset": [
+                1,
+                2,
+                3,
+                4
+              ],
+              "permutation": [
+                1,
+                0,
+                3,
+                2
+              ],
+              "rms_m": 0.012490175561372668,
+              "rms_mm": 12.490175561372668
+            },
+            "nearest_profile_neighbor": {
+              "body": "left_foot",
+              "subset": [
+                0,
+                1,
+                2,
+                4
+              ],
+              "profile_delta_m": 0.009980049927655782,
+              "profile_delta_mm": 9.98004992765578
+            },
+            "min_edge_m": 0.03702496619748705,
+            "min_edge_mm": 37.024966197487046,
+            "edge_lengths_mm": [
+              37.024966197487046,
+              61.49316734204248,
+              85.46597998437441,
+              89.75849146543068,
+              104.65693816506602,
+              120.87658026672408
+            ],
+            "tetra_volume_m3": 2.479678836891499e-05,
+            "tetra_volume_mm3": 24796.78836891499
+          },
+          {
+            "subset": [
+              0,
+              2,
+              3,
+              4
+            ],
+            "subset_size": 4,
+            "score_m": 0.0084976854443651,
+            "score_mm": 8.4976854443651,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "waist",
+              "subset": [
+                1,
+                2,
+                3,
+                4
+              ],
+              "permutation": [
+                1,
+                3,
+                2,
+                0
+              ],
+              "rms_m": 0.0084976854443651,
+              "rms_mm": 8.4976854443651
+            },
+            "nearest_profile_neighbor": {
+              "body": "head",
+              "subset": [
+                1,
+                2,
+                3,
+                4
+              ],
+              "profile_delta_m": 0.006903747677228586,
+              "profile_delta_mm": 6.903747677228585
+            },
+            "min_edge_m": 0.03702496619748705,
+            "min_edge_mm": 37.024966197487046,
+            "edge_lengths_mm": [
+              37.024966197487046,
+              41.34580280204885,
+              69.41112283383148,
+              80.26499434409374,
+              104.65693816506602,
+              120.87658026672408
+            ],
+            "tetra_volume_m3": 1.4986468646721795e-05,
+            "tetra_volume_mm3": 14986.468646721796
+          },
+          {
+            "subset": [
+              0,
+              1,
+              2,
+              4
+            ],
+            "subset_size": 4,
+            "score_m": 0.008252273498734985,
+            "score_mm": 8.252273498734985,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "low_4_point_volume",
+              "repeated_edge_lengths"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "waist",
+              "subset": [
+                0,
+                2,
+                3,
+                4
+              ],
+              "permutation": [
+                3,
+                1,
+                0,
+                2
+              ],
+              "rms_m": 0.008252273498734985,
+              "rms_mm": 8.252273498734985
+            },
+            "nearest_profile_neighbor": {
+              "body": "head",
+              "subset": [
+                0,
+                1,
+                2,
+                4
+              ],
+              "profile_delta_m": 0.007295936071400377,
+              "profile_delta_mm": 7.295936071400377
+            },
+            "min_edge_m": 0.04134580280204885,
+            "min_edge_mm": 41.34580280204885,
+            "edge_lengths_mm": [
+              41.34580280204885,
+              61.49316734204248,
+              80.26499434409374,
+              85.46597998437441,
+              88.21351838582278,
+              104.65693816506602
+            ],
+            "tetra_volume_m3": 1.9741150051155675e-06,
+            "tetra_volume_mm3": 1974.1150051155676
+          },
+          {
+            "subset": [
+              1,
+              2,
+              3,
+              4
+            ],
+            "subset_size": 4,
+            "score_m": 0.0070669994597657585,
+            "score_mm": 7.066999459765759,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "repeated_edge_lengths"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "right_foot",
+              "subset": [
+                0,
+                1,
+                3,
+                4
+              ],
+              "permutation": [
+                1,
+                3,
+                0,
+                2
+              ],
+              "rms_m": 0.0070669994597657585,
+              "rms_mm": 7.066999459765759
+            },
+            "nearest_profile_neighbor": {
+              "body": "right_foot",
+              "subset": [
+                0,
+                1,
+                3,
+                4
+              ],
+              "profile_delta_m": 0.006971950859234546,
+              "profile_delta_mm": 6.971950859234545
+            },
+            "min_edge_m": 0.03702496619748705,
+            "min_edge_mm": 37.024966197487046,
+            "edge_lengths_mm": [
+              37.024966197487046,
+              41.34580280204885,
+              69.41112283383148,
+              85.46597998437441,
+              88.21351838582278,
+              89.75849146543068
+            ],
+            "tetra_volume_m3": 1.7150383937361972e-05,
+            "tetra_volume_mm3": 17150.38393736197
+          }
+        ],
+        "subsets_3": [
+          {
+            "subset": [
+              0,
+              2,
+              3
+            ],
+            "subset_size": 3,
+            "score_m": 0.010177426032490628,
+            "score_mm": 10.177426032490628,
+            "strong": true,
+            "rejection_reasons": [],
+            "nearest_cross_body_neighbor": {
+              "body": "waist",
+              "subset": [
+                1,
+                3,
+                4
+              ],
+              "permutation": [
+                2,
+                1,
+                0
+              ],
+              "rms_m": 0.0077150338389594215,
+              "rms_mm": 7.715033838959421
+            },
+            "nearest_profile_neighbor": {
+              "body": "head",
+              "subset": [
+                2,
+                3,
+                4
+              ],
+              "profile_delta_m": 0.010177426032490628,
+              "profile_delta_mm": 10.177426032490628
+            },
+            "min_edge_m": 0.03702496619748705,
+            "min_edge_mm": 37.024966197487046,
+            "edge_lengths_mm": [
+              37.024966197487046,
+              104.65693816506602,
+              120.87658026672408
+            ],
+            "triangle_area_m2": 0.0018511585923134404,
+            "triangle_area_mm2": 1851.1585923134403
+          },
+          {
+            "subset": [
+              0,
+              1,
+              3
+            ],
+            "subset_size": 3,
+            "score_m": 0.007137238185806056,
+            "score_mm": 7.137238185806056,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "head",
+              "subset": [
+                0,
+                2,
+                4
+              ],
+              "permutation": [
+                1,
+                0,
+                2
+              ],
+              "rms_m": 0.007785941832280573,
+              "rms_mm": 7.785941832280573
+            },
+            "nearest_profile_neighbor": {
+              "body": "left_foot",
+              "subset": [
+                0,
+                3,
+                4
+              ],
+              "profile_delta_m": 0.007137238185806056,
+              "profile_delta_mm": 7.137238185806056
+            },
+            "min_edge_m": 0.061493167342042486,
+            "min_edge_mm": 61.49316734204248,
+            "edge_lengths_mm": [
+              61.49316734204248,
+              89.75849146543068,
+              120.87658026672408
+            ],
+            "triangle_area_m2": 0.0026712666904168832,
+            "triangle_area_mm2": 2671.266690416883
+          },
+          {
+            "subset": [
+              0,
+              3,
+              4
+            ],
+            "subset_size": 3,
+            "score_m": 0.007137238185806056,
+            "score_mm": 7.137238185806056,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "head",
+              "subset": [
+                0,
+                2,
+                4
+              ],
+              "permutation": [
+                2,
+                1,
+                0
+              ],
+              "rms_m": 0.006770378654505555,
+              "rms_mm": 6.7703786545055555
+            },
+            "nearest_profile_neighbor": {
+              "body": "left_foot",
+              "subset": [
+                0,
+                1,
+                3
+              ],
+              "profile_delta_m": 0.007137238185806056,
+              "profile_delta_mm": 7.137238185806056
+            },
+            "min_edge_m": 0.06941112283383148,
+            "min_edge_mm": 69.41112283383148,
+            "edge_lengths_mm": [
+              69.41112283383148,
+              80.26499434409374,
+              120.87658026672408
+            ],
+            "triangle_area_m2": 0.002656702669876277,
+            "triangle_area_mm2": 2656.702669876277
+          },
+          {
+            "subset": [
+              1,
+              3,
+              4
+            ],
+            "subset_size": 3,
+            "score_m": 0.0061895320840544546,
+            "score_mm": 6.189532084054455,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "repeated_edge_lengths",
+              "near_isosceles_or_symmetric_profile"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "right_foot",
+              "subset": [
+                1,
+                3,
+                4
+              ],
+              "permutation": [
+                2,
+                1,
+                0
+              ],
+              "rms_m": 0.004841526621444115,
+              "rms_mm": 4.841526621444116
+            },
+            "nearest_profile_neighbor": {
+              "body": "right_foot",
+              "subset": [
+                1,
+                3,
+                4
+              ],
+              "profile_delta_m": 0.0061895320840544546,
+              "profile_delta_mm": 6.189532084054455
+            },
+            "min_edge_m": 0.06941112283383148,
+            "min_edge_mm": 69.41112283383148,
+            "edge_lengths_mm": [
+              69.41112283383148,
+              88.21351838582278,
+              89.75849146543068
+            ],
+            "triangle_area_m2": 0.0028430415333734237,
+            "triangle_area_mm2": 2843.0415333734236
+          },
+          {
+            "subset": [
+              2,
+              3,
+              4
+            ],
+            "subset_size": 3,
+            "score_m": 0.00452597808495623,
+            "score_mm": 4.525978084956231,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "low_3_point_triangle_area",
+              "near_isosceles_or_symmetric_profile"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "waist",
+              "subset": [
+                1,
+                2,
+                3
+              ],
+              "permutation": [
+                0,
+                2,
+                1
+              ],
+              "rms_m": 0.003958537724719571,
+              "rms_mm": 3.9585377247195708
+            },
+            "nearest_profile_neighbor": {
+              "body": "waist",
+              "subset": [
+                1,
+                2,
+                3
+              ],
+              "profile_delta_m": 0.00452597808495623,
+              "profile_delta_mm": 4.525978084956231
+            },
+            "min_edge_m": 0.03702496619748705,
+            "min_edge_mm": 37.024966197487046,
+            "edge_lengths_mm": [
+              37.024966197487046,
+              41.34580280204885,
+              69.41112283383148
+            ],
+            "triangle_area_m2": 0.0006302052654617469,
+            "triangle_area_mm2": 630.2052654617469
+          },
+          {
+            "subset": [
+              0,
+              1,
+              2
+            ],
+            "subset_size": 3,
+            "score_m": 0.004512334273609535,
+            "score_mm": 4.512334273609535,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "chest",
+              "subset": [
+                1,
+                2,
+                4
+              ],
+              "permutation": [
+                1,
+                2,
+                0
+              ],
+              "rms_m": 0.002802989721370337,
+              "rms_mm": 2.802989721370337
+            },
+            "nearest_profile_neighbor": {
+              "body": "chest",
+              "subset": [
+                1,
+                2,
+                4
+              ],
+              "profile_delta_m": 0.004512334273609535,
+              "profile_delta_mm": 4.512334273609535
+            },
+            "min_edge_m": 0.061493167342042486,
+            "min_edge_mm": 61.49316734204248,
+            "edge_lengths_mm": [
+              61.49316734204248,
+              85.46597998437441,
+              104.65693816506602
+            ],
+            "triangle_area_m2": 0.002627577267422977,
+            "triangle_area_mm2": 2627.577267422977
+          },
+          {
+            "subset": [
+              0,
+              1,
+              4
+            ],
+            "subset_size": 3,
+            "score_m": 0.003867461672189894,
+            "score_mm": 3.867461672189894,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "head",
+              "subset": [
+                0,
+                1,
+                4
+              ],
+              "permutation": [
+                0,
+                1,
+                2
+              ],
+              "rms_m": 0.0025148803315007038,
+              "rms_mm": 2.5148803315007036
+            },
+            "nearest_profile_neighbor": {
+              "body": "head",
+              "subset": [
+                0,
+                1,
+                4
+              ],
+              "profile_delta_m": 0.003867461672189894,
+              "profile_delta_mm": 3.867461672189894
+            },
+            "min_edge_m": 0.061493167342042486,
+            "min_edge_mm": 61.49316734204248,
+            "edge_lengths_mm": [
+              61.49316734204248,
+              80.26499434409374,
+              88.21351838582278
+            ],
+            "triangle_area_m2": 0.0023911537077988313,
+            "triangle_area_mm2": 2391.1537077988314
+          },
+          {
+            "subset": [
+              1,
+              2,
+              3
+            ],
+            "subset_size": 3,
+            "score_m": 0.002649312538504677,
+            "score_mm": 2.649312538504677,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "near_isosceles_or_symmetric_profile"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "chest",
+              "subset": [
+                0,
+                3,
+                4
+              ],
+              "permutation": [
+                2,
+                1,
+                0
+              ],
+              "rms_m": 0.003482356573565354,
+              "rms_mm": 3.4823565735653537
+            },
+            "nearest_profile_neighbor": {
+              "body": "left_foot",
+              "subset": [
+                1,
+                2,
+                4
+              ],
+              "profile_delta_m": 0.002649312538504677,
+              "profile_delta_mm": 2.649312538504677
+            },
+            "min_edge_m": 0.03702496619748705,
+            "min_edge_mm": 37.024966197487046,
+            "edge_lengths_mm": [
+              37.024966197487046,
+              85.46597998437441,
+              89.75849146543068
+            ],
+            "triangle_area_m2": 0.0015746089491210325,
+            "triangle_area_mm2": 1574.6089491210325
+          },
+          {
+            "subset": [
+              1,
+              2,
+              4
+            ],
+            "subset_size": 3,
+            "score_m": 0.002649312538504677,
+            "score_mm": 2.649312538504677,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "repeated_edge_lengths",
+              "near_isosceles_or_symmetric_profile"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "chest",
+              "subset": [
+                0,
+                3,
+                4
+              ],
+              "permutation": [
+                2,
+                1,
+                0
+              ],
+              "rms_m": 0.0038411422287453413,
+              "rms_mm": 3.8411422287453414
+            },
+            "nearest_profile_neighbor": {
+              "body": "left_foot",
+              "subset": [
+                1,
+                2,
+                3
+              ],
+              "profile_delta_m": 0.002649312538504677,
+              "profile_delta_mm": 2.649312538504677
+            },
+            "min_edge_m": 0.04134580280204885,
+            "min_edge_mm": 41.34580280204885,
+            "edge_lengths_mm": [
+              41.34580280204885,
+              85.46597998437441,
+              88.21351838582278
+            ],
+            "triangle_area_m2": 0.0017397642576318375,
+            "triangle_area_mm2": 1739.7642576318376
+          },
+          {
+            "subset": [
+              0,
+              2,
+              4
+            ],
+            "subset_size": 3,
+            "score_m": 0.0014376640361531128,
+            "score_mm": 1.4376640361531128,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "head",
+              "subset": [
+                1,
+                2,
+                4
+              ],
+              "permutation": [
+                2,
+                1,
+                0
+              ],
+              "rms_m": 0.0009135047638458041,
+              "rms_mm": 0.913504763845804
+            },
+            "nearest_profile_neighbor": {
+              "body": "head",
+              "subset": [
+                1,
+                2,
+                4
+              ],
+              "profile_delta_m": 0.0014376640361531128,
+              "profile_delta_mm": 1.4376640361531128
+            },
+            "min_edge_m": 0.04134580280204885,
+            "min_edge_mm": 41.34580280204885,
+            "edge_lengths_mm": [
+              41.34580280204885,
+              80.26499434409374,
+              104.65693816506602
+            ],
+            "triangle_area_m2": 0.0015042988883700312,
+            "triangle_area_mm2": 1504.2988883700311
+          }
+        ],
+        "gate_2_pass": false
+      },
+      {
+        "name": "right_foot",
+        "marker_count": 5,
+        "min_marker_spacing_m": 0.0426173615109605,
+        "min_marker_spacing_mm": 42.6173615109605,
+        "closest_marker_pair": [
+          2,
+          3
+        ],
+        "strong_4_subsets": [],
+        "strong_3_subsets": [],
+        "best_4_subset": {
+          "subset": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "subset_size": 4,
+          "score_m": 0.011831343428620567,
+          "score_mm": 11.831343428620567,
+          "strong": false,
+          "rejection_reasons": [
+            "low_margin_against_another_body_or_subset",
+            "low_4_point_volume",
+            "repeated_edge_lengths"
+          ],
+          "nearest_cross_body_neighbor": {
+            "body": "waist",
+            "subset": [
+              0,
+              1,
+              2,
+              3
+            ],
+            "permutation": [
+              0,
+              1,
+              2,
+              3
+            ],
+            "rms_m": 0.011831343428620567,
+            "rms_mm": 11.831343428620567
+          },
+          "nearest_profile_neighbor": {
+            "body": "right_foot",
+            "subset": [
+              0,
+              1,
+              3,
+              4
+            ],
+            "profile_delta_m": 0.001144692532062437,
+            "profile_delta_mm": 1.144692532062437
+          },
+          "min_edge_m": 0.0426173615109605,
+          "min_edge_mm": 42.6173615109605,
+          "edge_lengths_mm": [
+            42.6173615109605,
+            50.98339708828299,
+            77.7001886407827,
+            77.71614496396927,
+            81.44993058579044,
+            90.21828462305015
+          ],
+          "tetra_volume_m3": 2.542610792806233e-06,
+          "tetra_volume_mm3": 2542.610792806233
+        },
+        "best_3_subset": {
+          "subset": [
+            0,
+            2,
+            4
+          ],
+          "subset_size": 3,
+          "score_m": 0.007800389520987886,
+          "score_mm": 7.800389520987886,
+          "strong": false,
+          "rejection_reasons": [
+            "low_margin_against_another_body_or_subset",
+            "repeated_edge_lengths",
+            "near_isosceles_or_symmetric_profile"
+          ],
+          "nearest_cross_body_neighbor": {
+            "body": "head",
+            "subset": [
+              0,
+              1,
+              3
+            ],
+            "permutation": [
+              2,
+              1,
+              0
+            ],
+            "rms_m": 0.005363126118819339,
+            "rms_mm": 5.3631261188193395
+          },
+          "nearest_profile_neighbor": {
+            "body": "chest",
+            "subset": [
+              0,
+              1,
+              3
+            ],
+            "profile_delta_m": 0.007800389520987886,
+            "profile_delta_mm": 7.800389520987886
+          },
+          "min_edge_m": 0.05093145585886571,
+          "min_edge_mm": 50.93145585886571,
+          "edge_lengths_mm": [
+            50.93145585886571,
+            50.98339708828299,
+            62.04450042559709
+          ],
+          "triangle_area_m2": 0.0012541118882852592,
+          "triangle_area_mm2": 1254.1118882852593
+        },
+        "subsets_4": [
+          {
+            "subset": [
+              1,
+              2,
+              3,
+              4
+            ],
+            "subset_size": 4,
+            "score_m": 0.011831343428620567,
+            "score_mm": 11.831343428620567,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "low_4_point_volume",
+              "repeated_edge_lengths"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "waist",
+              "subset": [
+                0,
+                1,
+                2,
+                3
+              ],
+              "permutation": [
+                0,
+                1,
+                2,
+                3
+              ],
+              "rms_m": 0.011831343428620567,
+              "rms_mm": 11.831343428620567
+            },
+            "nearest_profile_neighbor": {
+              "body": "right_foot",
+              "subset": [
+                0,
+                1,
+                3,
+                4
+              ],
+              "profile_delta_m": 0.001144692532062437,
+              "profile_delta_mm": 1.144692532062437
+            },
+            "min_edge_m": 0.0426173615109605,
+            "min_edge_mm": 42.6173615109605,
+            "edge_lengths_mm": [
+              42.6173615109605,
+              50.98339708828299,
+              77.7001886407827,
+              77.71614496396927,
+              81.44993058579044,
+              90.21828462305015
+            ],
+            "tetra_volume_m3": 2.542610792806233e-06,
+            "tetra_volume_mm3": 2542.610792806233
+          },
+          {
+            "subset": [
+              0,
+              2,
+              3,
+              4
+            ],
+            "subset_size": 4,
+            "score_m": 0.010117848123658346,
+            "score_mm": 10.117848123658346,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "low_4_point_volume",
+              "repeated_edge_lengths"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "chest",
+              "subset": [
+                0,
+                1,
+                3,
+                4
+              ],
+              "permutation": [
+                3,
+                1,
+                0,
+                2
+              ],
+              "rms_m": 0.010117848123658346,
+              "rms_mm": 10.117848123658346
+            },
+            "nearest_profile_neighbor": {
+              "body": "chest",
+              "subset": [
+                0,
+                1,
+                3,
+                4
+              ],
+              "profile_delta_m": 0.0035477080949074587,
+              "profile_delta_mm": 3.547708094907459
+            },
+            "min_edge_m": 0.0426173615109605,
+            "min_edge_mm": 42.6173615109605,
+            "edge_lengths_mm": [
+              42.6173615109605,
+              50.93145585886571,
+              50.98339708828299,
+              62.04450042559709,
+              79.90584575592196,
+              90.21828462305015
+            ],
+            "tetra_volume_m3": 3.0097703500687564e-06,
+            "tetra_volume_mm3": 3009.770350068756
+          },
+          {
+            "subset": [
+              0,
+              1,
+              2,
+              3
+            ],
+            "subset_size": 4,
+            "score_m": 0.008132545492262472,
+            "score_mm": 8.132545492262471,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "repeated_edge_lengths"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "chest",
+              "subset": [
+                0,
+                1,
+                3,
+                4
+              ],
+              "permutation": [
+                0,
+                2,
+                1,
+                3
+              ],
+              "rms_m": 0.008132545492262472,
+              "rms_mm": 8.132545492262471
+            },
+            "nearest_profile_neighbor": {
+              "body": "waist",
+              "subset": [
+                0,
+                1,
+                2,
+                3
+              ],
+              "profile_delta_m": 0.006035803491917233,
+              "profile_delta_mm": 6.035803491917233
+            },
+            "min_edge_m": 0.0426173615109605,
+            "min_edge_mm": 42.6173615109605,
+            "edge_lengths_mm": [
+              42.6173615109605,
+              44.36784256024834,
+              62.04450042559709,
+              77.7001886407827,
+              77.71614496396927,
+              79.90584575592196
+            ],
+            "tetra_volume_m3": 1.415431995134058e-05,
+            "tetra_volume_mm3": 14154.31995134058
+          },
+          {
+            "subset": [
+              0,
+              1,
+              3,
+              4
+            ],
+            "subset_size": 4,
+            "score_m": 0.0070669994597657515,
+            "score_mm": 7.066999459765752,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "repeated_edge_lengths"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "left_foot",
+              "subset": [
+                1,
+                2,
+                3,
+                4
+              ],
+              "permutation": [
+                2,
+                0,
+                3,
+                1
+              ],
+              "rms_m": 0.0070669994597657515,
+              "rms_mm": 7.066999459765752
+            },
+            "nearest_profile_neighbor": {
+              "body": "right_foot",
+              "subset": [
+                1,
+                2,
+                3,
+                4
+              ],
+              "profile_delta_m": 0.001144692532062437,
+              "profile_delta_mm": 1.144692532062437
+            },
+            "min_edge_m": 0.04436784256024834,
+            "min_edge_mm": 44.36784256024834,
+            "edge_lengths_mm": [
+              44.36784256024834,
+              50.93145585886571,
+              77.71614496396927,
+              79.90584575592196,
+              81.44993058579044,
+              90.21828462305015
+            ],
+            "tetra_volume_m3": 2.4111497189180007e-05,
+            "tetra_volume_mm3": 24111.49718918001
+          },
+          {
+            "subset": [
+              0,
+              1,
+              2,
+              4
+            ],
+            "subset_size": 4,
+            "score_m": 0.00623505867543914,
+            "score_mm": 6.235058675439141,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "repeated_edge_lengths"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "head",
+              "subset": [
+                0,
+                1,
+                3,
+                4
+              ],
+              "permutation": [
+                3,
+                2,
+                0,
+                1
+              ],
+              "rms_m": 0.00623505867543914,
+              "rms_mm": 6.235058675439141
+            },
+            "nearest_profile_neighbor": {
+              "body": "right_foot",
+              "subset": [
+                0,
+                2,
+                3,
+                4
+              ],
+              "profile_delta_m": 0.003759723831529142,
+              "profile_delta_mm": 3.759723831529142
+            },
+            "min_edge_m": 0.04436784256024834,
+            "min_edge_mm": 44.36784256024834,
+            "edge_lengths_mm": [
+              44.36784256024834,
+              50.93145585886571,
+              50.98339708828299,
+              62.04450042559709,
+              77.7001886407827,
+              81.44993058579044
+            ],
+            "tetra_volume_m3": 1.5509558380714428e-05,
+            "tetra_volume_mm3": 15509.558380714428
+          }
+        ],
+        "subsets_3": [
+          {
+            "subset": [
+              0,
+              2,
+              4
+            ],
+            "subset_size": 3,
+            "score_m": 0.007800389520987886,
+            "score_mm": 7.800389520987886,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "repeated_edge_lengths",
+              "near_isosceles_or_symmetric_profile"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "head",
+              "subset": [
+                0,
+                1,
+                3
+              ],
+              "permutation": [
+                2,
+                1,
+                0
+              ],
+              "rms_m": 0.005363126118819339,
+              "rms_mm": 5.3631261188193395
+            },
+            "nearest_profile_neighbor": {
+              "body": "chest",
+              "subset": [
+                0,
+                1,
+                3
+              ],
+              "profile_delta_m": 0.007800389520987886,
+              "profile_delta_mm": 7.800389520987886
+            },
+            "min_edge_m": 0.05093145585886571,
+            "min_edge_mm": 50.93145585886571,
+            "edge_lengths_mm": [
+              50.93145585886571,
+              50.98339708828299,
+              62.04450042559709
+            ],
+            "triangle_area_m2": 0.0012541118882852592,
+            "triangle_area_mm2": 1254.1118882852593
+          },
+          {
+            "subset": [
+              1,
+              3,
+              4
+            ],
+            "subset_size": 3,
+            "score_m": 0.0061895320840544546,
+            "score_mm": 6.189532084054455,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "near_isosceles_or_symmetric_profile"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "left_foot",
+              "subset": [
+                1,
+                3,
+                4
+              ],
+              "permutation": [
+                2,
+                1,
+                0
+              ],
+              "rms_m": 0.00484152662144411,
+              "rms_mm": 4.84152662144411
+            },
+            "nearest_profile_neighbor": {
+              "body": "left_foot",
+              "subset": [
+                1,
+                3,
+                4
+              ],
+              "profile_delta_m": 0.0061895320840544546,
+              "profile_delta_mm": 6.189532084054455
+            },
+            "min_edge_m": 0.07771614496396927,
+            "min_edge_mm": 77.71614496396927,
+            "edge_lengths_mm": [
+              77.71614496396927,
+              81.44993058579044,
+              90.21828462305015
+            ],
+            "triangle_area_m2": 0.0029549974310753386,
+            "triangle_area_mm2": 2954.9974310753387
+          },
+          {
+            "subset": [
+              0,
+              3,
+              4
+            ],
+            "subset_size": 3,
+            "score_m": 0.005220206053519553,
+            "score_mm": 5.220206053519553,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "chest",
+              "subset": [
+                1,
+                2,
+                4
+              ],
+              "permutation": [
+                0,
+                1,
+                2
+              ],
+              "rms_m": 0.004285371102017278,
+              "rms_mm": 4.285371102017278
+            },
+            "nearest_profile_neighbor": {
+              "body": "right_foot",
+              "subset": [
+                1,
+                2,
+                4
+              ],
+              "profile_delta_m": 0.005220206053519553,
+              "profile_delta_mm": 5.220206053519553
+            },
+            "min_edge_m": 0.05093145585886571,
+            "min_edge_mm": 50.93145585886571,
+            "edge_lengths_mm": [
+              50.93145585886571,
+              79.90584575592196,
+              90.21828462305015
+            ],
+            "triangle_area_m2": 0.002024005290659891,
+            "triangle_area_mm2": 2024.0052906598908
+          },
+          {
+            "subset": [
+              2,
+              3,
+              4
+            ],
+            "subset_size": 3,
+            "score_m": 0.004485709377825759,
+            "score_mm": 4.485709377825758,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "low_3_point_triangle_area"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "chest",
+              "subset": [
+                0,
+                1,
+                2
+              ],
+              "permutation": [
+                0,
+                2,
+                1
+              ],
+              "rms_m": 0.005609712093133386,
+              "rms_mm": 5.6097120931333855
+            },
+            "nearest_profile_neighbor": {
+              "body": "chest",
+              "subset": [
+                0,
+                1,
+                2
+              ],
+              "profile_delta_m": 0.004485709377825759,
+              "profile_delta_mm": 4.485709377825758
+            },
+            "min_edge_m": 0.0426173615109605,
+            "min_edge_mm": 42.6173615109605,
+            "edge_lengths_mm": [
+              42.6173615109605,
+              50.98339708828299,
+              90.21828462305015
+            ],
+            "triangle_area_m2": 0.0005599789769689109,
+            "triangle_area_mm2": 559.9789769689108
+          },
+          {
+            "subset": [
+              1,
+              2,
+              4
+            ],
+            "subset_size": 3,
+            "score_m": 0.003922159876032567,
+            "score_mm": 3.9221598760325675,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "near_isosceles_or_symmetric_profile"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "head",
+              "subset": [
+                1,
+                3,
+                4
+              ],
+              "permutation": [
+                0,
+                1,
+                2
+              ],
+              "rms_m": 0.004078118172564525,
+              "rms_mm": 4.078118172564524
+            },
+            "nearest_profile_neighbor": {
+              "body": "right_foot",
+              "subset": [
+                0,
+                1,
+                3
+              ],
+              "profile_delta_m": 0.003922159876032567,
+              "profile_delta_mm": 3.9221598760325675
+            },
+            "min_edge_m": 0.05098339708828299,
+            "min_edge_mm": 50.98339708828299,
+            "edge_lengths_mm": [
+              50.98339708828299,
+              77.7001886407827,
+              81.44993058579044
+            ],
+            "triangle_area_m2": 0.0019163969129895003,
+            "triangle_area_mm2": 1916.3969129895004
+          },
+          {
+            "subset": [
+              0,
+              1,
+              4
+            ],
+            "subset_size": 3,
+            "score_m": 0.0017943034931940565,
+            "score_mm": 1.7943034931940565,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "chest",
+              "subset": [
+                0,
+                1,
+                2
+              ],
+              "permutation": [
+                0,
+                2,
+                1
+              ],
+              "rms_m": 0.001591264843228547,
+              "rms_mm": 1.591264843228547
+            },
+            "nearest_profile_neighbor": {
+              "body": "chest",
+              "subset": [
+                0,
+                1,
+                2
+              ],
+              "profile_delta_m": 0.0017943034931940565,
+              "profile_delta_mm": 1.7943034931940565
+            },
+            "min_edge_m": 0.04436784256024834,
+            "min_edge_mm": 44.36784256024834,
+            "edge_lengths_mm": [
+              44.36784256024834,
+              50.93145585886571,
+              81.44993058579044
+            ],
+            "triangle_area_m2": 0.0010041757717344532,
+            "triangle_area_mm2": 1004.1757717344532
+          },
+          {
+            "subset": [
+              0,
+              1,
+              2
+            ],
+            "subset_size": 3,
+            "score_m": 0.0016257415962651507,
+            "score_mm": 1.6257415962651507,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "head",
+              "subset": [
+                0,
+                3,
+                4
+              ],
+              "permutation": [
+                2,
+                0,
+                1
+              ],
+              "rms_m": 0.0014418398016093515,
+              "rms_mm": 1.4418398016093514
+            },
+            "nearest_profile_neighbor": {
+              "body": "right_foot",
+              "subset": [
+                0,
+                2,
+                3
+              ],
+              "profile_delta_m": 0.0016257415962651507,
+              "profile_delta_mm": 1.6257415962651507
+            },
+            "min_edge_m": 0.04436784256024834,
+            "min_edge_mm": 44.36784256024834,
+            "edge_lengths_mm": [
+              44.36784256024834,
+              62.04450042559709,
+              77.7001886407827
+            ],
+            "triangle_area_m2": 0.0013752980342882542,
+            "triangle_area_mm2": 1375.2980342882543
+          },
+          {
+            "subset": [
+              0,
+              2,
+              3
+            ],
+            "subset_size": 3,
+            "score_m": 0.0016257415962651507,
+            "score_mm": 1.6257415962651507,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "head",
+              "subset": [
+                0,
+                3,
+                4
+              ],
+              "permutation": [
+                0,
+                1,
+                2
+              ],
+              "rms_m": 0.001556753437214154,
+              "rms_mm": 1.5567534372141538
+            },
+            "nearest_profile_neighbor": {
+              "body": "right_foot",
+              "subset": [
+                0,
+                1,
+                2
+              ],
+              "profile_delta_m": 0.0016257415962651507,
+              "profile_delta_mm": 1.6257415962651507
+            },
+            "min_edge_m": 0.0426173615109605,
+            "min_edge_mm": 42.6173615109605,
+            "edge_lengths_mm": [
+              42.6173615109605,
+              62.04450042559709,
+              79.90584575592196
+            ],
+            "triangle_area_m2": 0.0013098037742271206,
+            "triangle_area_mm2": 1309.8037742271206
+          },
+          {
+            "subset": [
+              0,
+              1,
+              3
+            ],
+            "subset_size": 3,
+            "score_m": 0.0016185619199816134,
+            "score_mm": 1.6185619199816135,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "repeated_edge_lengths",
+              "near_isosceles_or_symmetric_profile"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "head",
+              "subset": [
+                1,
+                3,
+                4
+              ],
+              "permutation": [
+                2,
+                1,
+                0
+              ],
+              "rms_m": 0.003215594595272721,
+              "rms_mm": 3.2155945952727207
+            },
+            "nearest_profile_neighbor": {
+              "body": "right_foot",
+              "subset": [
+                1,
+                2,
+                3
+              ],
+              "profile_delta_m": 0.0016185619199816134,
+              "profile_delta_mm": 1.6185619199816135
+            },
+            "min_edge_m": 0.04436784256024834,
+            "min_edge_mm": 44.36784256024834,
+            "edge_lengths_mm": [
+              44.36784256024834,
+              77.71614496396927,
+              79.90584575592196
+            ],
+            "triangle_area_m2": 0.0016756008509853646,
+            "triangle_area_mm2": 1675.6008509853646
+          },
+          {
+            "subset": [
+              1,
+              2,
+              3
+            ],
+            "subset_size": 3,
+            "score_m": 0.0016185619199816134,
+            "score_mm": 1.6185619199816135,
+            "strong": false,
+            "rejection_reasons": [
+              "low_margin_against_another_body_or_subset",
+              "repeated_edge_lengths",
+              "near_isosceles_or_symmetric_profile"
+            ],
+            "nearest_cross_body_neighbor": {
+              "body": "waist",
+              "subset": [
+                0,
+                2,
+                4
+              ],
+              "permutation": [
+                1,
+                0,
+                2
+              ],
+              "rms_m": 0.003525346352113883,
+              "rms_mm": 3.5253463521138833
+            },
+            "nearest_profile_neighbor": {
+              "body": "right_foot",
+              "subset": [
+                0,
+                1,
+                3
+              ],
+              "profile_delta_m": 0.0016185619199816134,
+              "profile_delta_mm": 1.6185619199816135
+            },
+            "min_edge_m": 0.0426173615109605,
+            "min_edge_mm": 42.6173615109605,
+            "edge_lengths_mm": [
+              42.6173615109605,
+              77.7001886407827,
+              77.71614496396927
+            ],
+            "triangle_area_m2": 0.0015923871097214422,
+            "triangle_area_mm2": 1592.3871097214421
+          }
+        ],
+        "gate_2_pass": false
+      }
+    ],
+    "tracking_policy": {
+      "head": {
+        "boot_min_markers": 4,
+        "reacquire_min_markers": 4,
+        "continue_min_markers": 3,
+        "strong_4_subsets": [],
+        "strong_3_subsets": []
+      },
+      "waist": {
+        "boot_min_markers": 4,
+        "reacquire_min_markers": 4,
+        "continue_min_markers": 3,
+        "strong_4_subsets": [],
+        "strong_3_subsets": []
+      },
+      "chest": {
+        "boot_min_markers": 4,
+        "reacquire_min_markers": 4,
+        "continue_min_markers": 3,
+        "strong_4_subsets": [],
+        "strong_3_subsets": []
+      },
+      "left_foot": {
+        "boot_min_markers": 4,
+        "reacquire_min_markers": 4,
+        "continue_min_markers": 3,
+        "strong_4_subsets": [],
+        "strong_3_subsets": [
+          [
+            0,
+            2,
+            3
+          ]
+        ]
+      },
+      "right_foot": {
+        "boot_min_markers": 4,
+        "reacquire_min_markers": 4,
+        "continue_min_markers": 3,
+        "strong_4_subsets": [],
+        "strong_3_subsets": []
+      }
+    }
+  }
+}

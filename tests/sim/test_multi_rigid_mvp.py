@@ -1,9 +1,11 @@
 import inspect
+import json
 import math
 import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
@@ -172,6 +174,40 @@ def test_five_rigid_dance_occlusion_emits_four_camera_body_load():
             assert isinstance(policy, dict)
             assert policy.get("boot_min_markers") == 4
             assert policy.get("continue_min_markers") == 3
+
+
+def test_design_5marker_layout_allows_custom_body_override(tmp_path):
+    rigids_path = tmp_path / "tracking_rigids.json"
+    custom_head = [
+        [0.000, 0.000, 0.000],
+        [0.060, 0.000, 0.000],
+        [0.000, 0.055, 0.000],
+        [0.000, 0.000, 0.050],
+        [0.045, 0.040, 0.030],
+    ]
+    rigids_path.write_text(
+        json.dumps(
+            {
+                "custom_rigids": [
+                    {
+                        "name": "head",
+                        "marker_positions": custom_head,
+                        "marker_diameter_m": 0.014,
+                        "tracking_policy": {"strong_4_subsets": [[0, 1, 2, 3]]},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    patterns = load_mvp_patterns(rigids_path, marker_layout=DESIGN_5MARKER_LAYOUT)
+    head = next(pattern for pattern in patterns if pattern.name == "head")
+
+    assert head.metadata["source"] == "tracking_rigids"
+    assert head.metadata["tracking_policy"]["strong_4_subsets"] == [[0, 1, 2, 3]]
+    assert head.metadata["cad_marker_min_z_m"] > 0.0
+    assert np.allclose(np.mean(head.marker_positions, axis=0), np.zeros(3))
 
 
 def test_five_rigid_hard_occlusion_has_two_camera_two_marker_blackout():
@@ -459,6 +495,52 @@ def test_body_occlusion_blob_area_gently_scales_with_camera_depth():
     assert far_area >= math.pi * (2.2 * 0.5) ** 2
 
 
+def test_pi_snr_marker_detection_model_preserves_high_snr_visible_blobs():
+    base_config = dict(
+        seed=49,
+        camera_ids=DEFAULT_GENERATED_CAMERA_IDS,
+        frames=1,
+        rigid_names=DEFAULT_BODY_RIGIDS,
+        scenario="five_rigid_body_occlusion_v1",
+        camera_rig_source="cube_top_2_4m_aim_center",
+        marker_layout=DESIGN_5MARKER_LAYOUT,
+        rigids_path="missing-test-rigids.json",
+        marker_dropout_prob=1.0,
+    )
+
+    iid_generator = MultiRigidFrameGenerator(
+        MultiRigidScenarioConfig(
+            **base_config,
+            marker_detection_model="iid_dropout",
+        ),
+        patterns=load_mvp_patterns(base_config["rigids_path"], marker_layout=DESIGN_5MARKER_LAYOUT),
+        camera_params=load_camera_rig(
+            MultiRigidScenarioConfig(
+                **base_config,
+                marker_detection_model="iid_dropout",
+            )
+        ),
+    )
+    pi_snr_config = MultiRigidScenarioConfig(
+        **base_config,
+        marker_detection_model="pi_snr",
+    )
+    pi_snr_generator = MultiRigidFrameGenerator(
+        pi_snr_config,
+        patterns=load_mvp_patterns(pi_snr_config.rigids_path, marker_layout=pi_snr_config.marker_layout),
+        camera_params=load_camera_rig(pi_snr_config),
+    )
+
+    iid_sample = iid_generator.next_sample()
+    pi_snr_sample = pi_snr_generator.next_sample()
+
+    assert iid_sample is not None
+    assert pi_snr_sample is not None
+    assert len(iid_sample.ownership_ledger) == 0
+    assert len(pi_snr_sample.ownership_ledger) > 0
+    assert pi_snr_generator.marker_detection_summary()["model"] == "pi_snr"
+
+
 def test_body_occlusion_merges_close_projected_blobs():
     config = MultiRigidScenarioConfig(
         seed=47,
@@ -491,6 +573,323 @@ def test_body_occlusion_merges_close_projected_blobs():
 
     assert merged_entries
     assert any(":merged:" in entry.synthetic_blob_id for entry in merged_entries)
+
+
+def test_mesh_lite_occlusion_requires_body_mount_scenario():
+    config = MultiRigidScenarioConfig(
+        seed=55,
+        camera_ids=DEFAULT_GENERATED_CAMERA_IDS,
+        frames=80,
+        fps=118.0,
+        rigid_names=DEFAULT_BODY_RIGIDS,
+        scenario="five_rigid_dance_occlusion",
+        camera_rig_source="cube_top_2_4m_aim_center",
+        marker_layout=DESIGN_5MARKER_LAYOUT,
+        rigids_path="missing-test-rigids.json",
+        mesh_lite_occlusion="body_capsules",
+    )
+    with pytest.raises(ValueError, match="body-mount scenario"):
+        generator = MultiRigidFrameGenerator(
+            config,
+            patterns=load_mvp_patterns(config.rigids_path, marker_layout=config.marker_layout),
+            camera_params=load_camera_rig(config),
+        )
+        generator.next_sample()
+
+
+def test_mesh_lite_occlusion_adds_body_volume_visibility_loss():
+    def emitted_entries(mesh_lite_occlusion: str) -> int:
+        config = MultiRigidScenarioConfig(
+            seed=55,
+            camera_ids=DEFAULT_GENERATED_CAMERA_IDS,
+            frames=80,
+            fps=118.0,
+            rigid_names=DEFAULT_BODY_RIGIDS,
+            scenario="five_rigid_body_occlusion_relaxed_v1",
+            camera_rig_source="cube_top_2_4m_aim_center",
+            marker_layout=DESIGN_5MARKER_LAYOUT,
+            rigids_path="missing-test-rigids.json",
+            mesh_lite_occlusion=mesh_lite_occlusion,
+        )
+        generator = MultiRigidFrameGenerator(
+            config,
+            patterns=load_mvp_patterns(config.rigids_path, marker_layout=config.marker_layout),
+            camera_params=load_camera_rig(config),
+        )
+        count = 0
+        for _ in range(config.frames):
+            sample = generator.next_sample()
+            assert sample is not None
+            count += len(sample.ownership_ledger)
+        return count
+
+    assert emitted_entries("body_capsules") < emitted_entries("off")
+
+
+def test_mesh_lite_geometry_keeps_each_marker_visible_in_two_cameras():
+    config = MultiRigidScenarioConfig(
+        seed=61,
+        camera_ids=DEFAULT_GENERATED_CAMERA_IDS,
+        frames=120,
+        fps=118.0,
+        rigid_names=DEFAULT_BODY_RIGIDS,
+        scenario="five_rigid_body_mesh_lite_v1",
+        camera_rig_source="cube_top_2_4m_aim_center",
+        marker_layout=DESIGN_5MARKER_LAYOUT,
+        rigids_path="missing-test-rigids.json",
+        mesh_lite_occlusion="body_capsules",
+    )
+    generator = MultiRigidFrameGenerator(
+        config,
+        patterns=load_mvp_patterns(config.rigids_path, marker_layout=config.marker_layout),
+        camera_params=load_camera_rig(config),
+    )
+
+    for frame_index in range(config.frames):
+        _poses, marker_world_by_rigid, occluders = generator._marker_positions_world_for_frame(
+            frame_index
+        )
+        for rigid_name in DEFAULT_BODY_RIGIDS:
+            for marker_index in range(5):
+                visible_cameras = [
+                    camera_id
+                    for camera_id in DEFAULT_GENERATED_CAMERA_IDS
+                    if not generator._is_marker_mesh_lite_occluded(
+                        rigid_name,
+                        camera_id,
+                        marker_world_by_rigid[rigid_name][marker_index],
+                        occluders,
+                    )
+                ]
+                assert len(visible_cameras) >= 2
+
+
+def test_mesh_lite_body_mount_scenario_uses_body_motion():
+    config = MultiRigidScenarioConfig(
+        seed=62,
+        camera_ids=DEFAULT_GENERATED_CAMERA_IDS,
+        frames=120,
+        fps=118.0,
+        rigid_names=DEFAULT_BODY_RIGIDS,
+        scenario="five_rigid_body_mesh_lite_v1",
+        camera_rig_source="cube_top_2_4m_aim_center",
+        marker_layout=DESIGN_5MARKER_LAYOUT,
+        rigids_path="missing-test-rigids.json",
+        mesh_lite_occlusion="body_capsules",
+    )
+    generator = MultiRigidFrameGenerator(
+        config,
+        patterns=load_mvp_patterns(config.rigids_path, marker_layout=config.marker_layout),
+        camera_params=load_camera_rig(config),
+    )
+
+    first = generator._mesh_lite_body_pose_components(0)
+    later = generator._mesh_lite_body_pose_components(80)
+
+    moved = [
+        float(np.linalg.norm(later[rigid_name][1] - first[rigid_name][1]))
+        for rigid_name in DEFAULT_BODY_RIGIDS
+    ]
+    assert max(moved) > 0.05
+
+
+def test_mesh_lite_mounts_rigids_on_body_surface_with_z_normal():
+    config = MultiRigidScenarioConfig(
+        seed=57,
+        camera_ids=DEFAULT_GENERATED_CAMERA_IDS,
+        frames=1,
+        fps=118.0,
+        rigid_names=DEFAULT_BODY_RIGIDS,
+        scenario="five_rigid_body_occlusion_relaxed_v1",
+        camera_rig_source="cube_top_2_4m_aim_center",
+        marker_layout=DESIGN_5MARKER_LAYOUT,
+        rigids_path="missing-test-rigids.json",
+        mesh_lite_occlusion="body_capsules",
+    )
+    generator = MultiRigidFrameGenerator(
+        config,
+        patterns=load_mvp_patterns(config.rigids_path, marker_layout=config.marker_layout),
+        camera_params=load_camera_rig(config),
+    )
+
+    body_poses = generator._mesh_lite_body_pose_components(0)
+    mounts, occluders = generator._mesh_lite_surface_model(body_poses)
+    occluder_by_name = {occluder.name: occluder for occluder in occluders}
+
+    assert set(DEFAULT_BODY_RIGIDS).issubset(set(mounts))
+    for mount in mounts.values():
+        assert np.isclose(float(np.linalg.norm(mount.normal)), 1.0)
+        assert np.allclose(mount.rotation[:, 2], mount.normal)
+
+    head = occluder_by_name["head"]
+    assert head.center is not None
+    assert np.isclose(
+        float(np.linalg.norm(mounts["head"].surface_position - head.center)),
+        head.radius_m,
+    )
+
+    torso = occluder_by_name["torso"]
+    assert torso.a is not None
+    assert torso.b is not None
+    assert np.isclose(
+        float(np.linalg.norm(mounts["chest"].surface_position - torso.a)),
+        torso.radius_m,
+    )
+    assert np.isclose(
+        float(np.linalg.norm(mounts["waist"].surface_position - torso.b)),
+        torso.radius_m,
+    )
+
+    left_leg = occluder_by_name["left_leg"]
+    right_leg = occluder_by_name["right_leg"]
+    assert left_leg.b is not None
+    assert right_leg.b is not None
+    assert np.isclose(
+        float(np.linalg.norm(mounts["left_foot"].surface_position - left_leg.b)),
+        left_leg.radius_m,
+    )
+    assert np.isclose(
+        float(np.linalg.norm(mounts["right_foot"].surface_position - right_leg.b)),
+        right_leg.radius_m,
+    )
+
+
+def test_body_mount_pose_is_consistent_with_or_without_mesh_lite_occlusion():
+    configs = [
+        MultiRigidScenarioConfig(
+            seed=57,
+            camera_ids=DEFAULT_GENERATED_CAMERA_IDS,
+            frames=1,
+            fps=118.0,
+            rigid_names=DEFAULT_BODY_RIGIDS,
+            scenario="five_rigid_body_occlusion_relaxed_v1",
+            camera_rig_source="cube_top_2_4m_aim_center",
+            marker_layout=DESIGN_5MARKER_LAYOUT,
+            rigids_path="missing-test-rigids.json",
+            mesh_lite_occlusion=mesh_lite_occlusion,
+        )
+        for mesh_lite_occlusion in ("off", "body_capsules")
+    ]
+    marker_world_by_mode = {}
+    for config in configs:
+        generator = MultiRigidFrameGenerator(
+            config,
+            patterns=load_mvp_patterns(config.rigids_path, marker_layout=config.marker_layout),
+            camera_params=load_camera_rig(config),
+        )
+        _poses, marker_world, _occluders = generator._marker_positions_world_for_frame(0)
+        marker_world_by_mode[config.mesh_lite_occlusion] = marker_world
+
+    for rigid_name in DEFAULT_BODY_RIGIDS:
+        assert np.allclose(
+            marker_world_by_mode["off"][rigid_name],
+            marker_world_by_mode["body_capsules"][rigid_name],
+        )
+
+
+def test_body_mount_reference_pose_matches_1_7m_person_scale():
+    config = MultiRigidScenarioConfig(
+        seed=58,
+        camera_ids=DEFAULT_GENERATED_CAMERA_IDS,
+        frames=1,
+        fps=118.0,
+        rigid_names=DEFAULT_BODY_RIGIDS,
+        scenario="five_rigid_body_occlusion_relaxed_v1",
+        camera_rig_source="cube_top_2_4m_aim_center",
+        marker_layout=DESIGN_5MARKER_LAYOUT,
+        rigids_path="missing-test-rigids.json",
+        mesh_lite_occlusion="body_capsules",
+    )
+    generator = MultiRigidFrameGenerator(
+        config,
+        patterns=load_mvp_patterns(config.rigids_path, marker_layout=config.marker_layout),
+        camera_params=load_camera_rig(config),
+    )
+
+    body_poses = generator._mesh_lite_body_pose_components(0)
+    positions = {
+        rigid_name: np.asarray(position, dtype=np.float64)
+        for rigid_name, (_rotation, position) in body_poses.items()
+    }
+
+    assert 1.48 <= positions["head"][2] <= 1.62
+    assert 1.08 <= positions["chest"][2] <= 1.22
+    assert 0.78 <= positions["waist"][2] <= 0.92
+    assert 0.05 <= positions["left_foot"][2] <= 0.16
+    assert 0.05 <= positions["right_foot"][2] <= 0.16
+    foot_separation_m = float(
+        np.linalg.norm(positions["left_foot"][:2] - positions["right_foot"][:2])
+    )
+    assert 0.16 <= foot_separation_m <= 0.32
+    assert 0.25 <= positions["chest"][2] - positions["waist"][2] <= 0.40
+    assert 0.65 <= positions["waist"][2] - positions["left_foot"][2] <= 0.85
+
+
+def test_design_5marker_pattern_keeps_cad_fixture_height_metadata():
+    patterns = load_mvp_patterns("missing-test-rigids.json", marker_layout=DESIGN_5MARKER_LAYOUT)
+    for pattern in patterns:
+        if pattern.name not in DEFAULT_BODY_RIGIDS:
+            continue
+        centroid_z_m = float(pattern.metadata["cad_marker_centroid_z_m"])
+        min_z_m = float(pattern.metadata["cad_marker_min_z_m"])
+        reconstructed_cad_z = np.asarray(pattern.marker_positions, dtype=np.float64)[:, 2] + centroid_z_m
+
+        assert min_z_m > 0.0
+        assert np.isclose(float(np.min(reconstructed_cad_z)), min_z_m)
+        assert np.all(reconstructed_cad_z > 0.0)
+
+
+def test_mesh_lite_markers_remain_outside_own_occluder_surface():
+    config = MultiRigidScenarioConfig(
+        seed=59,
+        camera_ids=DEFAULT_GENERATED_CAMERA_IDS,
+        frames=1,
+        fps=118.0,
+        rigid_names=DEFAULT_BODY_RIGIDS,
+        scenario="five_rigid_body_occlusion_relaxed_v1",
+        camera_rig_source="cube_top_2_4m_aim_center",
+        marker_layout=DESIGN_5MARKER_LAYOUT,
+        rigids_path="missing-test-rigids.json",
+        mesh_lite_occlusion="body_capsules",
+    )
+    generator = MultiRigidFrameGenerator(
+        config,
+        patterns=load_mvp_patterns(config.rigids_path, marker_layout=config.marker_layout),
+        camera_params=load_camera_rig(config),
+    )
+
+    _poses, marker_world_by_rigid, occluders = generator._marker_positions_world_for_frame(0)
+    occluder_by_name = {occluder.name: occluder for occluder in occluders}
+    own_occluder_by_rigid = {
+        "head": occluder_by_name["head"],
+        "chest": occluder_by_name["torso"],
+        "waist": occluder_by_name["torso"],
+        "left_foot": occluder_by_name["left_leg"],
+        "right_foot": occluder_by_name["right_leg"],
+    }
+
+    def point_segment_distance(point, a, b):
+        point = np.asarray(point, dtype=np.float64)
+        a = np.asarray(a, dtype=np.float64)
+        b = np.asarray(b, dtype=np.float64)
+        ab = b - a
+        denom = float(np.dot(ab, ab))
+        t = 0.0 if denom <= 1e-12 else float(np.clip(np.dot(point - a, ab) / denom, 0.0, 1.0))
+        nearest = a + ab * t
+        return float(np.linalg.norm(point - nearest))
+
+    min_clearance_m = 0.003
+    for rigid_name, marker_points in marker_world_by_rigid.items():
+        occluder = own_occluder_by_rigid[rigid_name]
+        for point in marker_points:
+            if occluder.kind == "sphere":
+                assert occluder.center is not None
+                distance = float(np.linalg.norm(point - occluder.center))
+            else:
+                assert occluder.a is not None
+                assert occluder.b is not None
+                distance = point_segment_distance(point, occluder.a, occluder.b)
+            assert distance - float(occluder.radius_m) >= min_clearance_m
 
 
 def test_five_rigid_swap_red_adds_cross_rigid_alias_blobs():
