@@ -349,7 +349,6 @@ def _warmup_trimmed_summary(
 
 def _gui_live_rigid_stabilization() -> dict[str, Any]:
     return {
-        "anchor_guided_body_nbest": False,
         "temporal_body_nbest": True,
         "object_conditioned_gating": True,
         "subset_ransac": False,
@@ -358,8 +357,22 @@ def _gui_live_rigid_stabilization() -> dict[str, Any]:
         "reacquire_guard_enforced": True,
         "object_gating_enforced": True,
         "object_gating_pixel_max_px": 4.5,
-        "pose_continuity_guard_enabled": True,
-        "pose_continuity_guard_enforced": True,
+        "body_level_2d_recovery": True,
+        "body_level_2d_max_offsets": 8,
+        "body_level_2d_nearest_per_marker": 2,
+        "body_level_2d_assignment_nearest_per_marker": 2,
+        "body_level_2d_trigger_max_assignments": 3,
+        "body_level_2d_max_distance_scale": 0.12,
+        "body_level_2d_min_margin": 0.0,
+        "body_level_2d_candidate_cache": True,
+        "body_level_2d_cache_max_bins": 4,
+        "body_level_2d_cache_early_exit": True,
+        "body_level_2d_keep_nbest_diagnostics": False,
+        "skip_generic_search_when_object_gated": True,
+        "raw_scene_interval_frames": 4,
+        "runtime_diagnostics_enabled": False,
+        "pose_continuity_guard_enabled": False,
+        "pose_continuity_guard_enforced": False,
         "pose_continuity_max_rotation_deg": 90.0,
         "pose_continuity_max_angular_velocity_deg_s": 2500.0,
         "pose_continuity_max_angular_accel_deg_s2": 200000.0,
@@ -584,6 +597,7 @@ class MultiRigidScenarioConfig:
     pipeline_variant: str = "fast_ABCDHRF"
     subset_diagnostics_mode: str = "off"
     rigid_stabilization_profile: str = "pipeline_default"
+    cluster_radius_m: float | None = None
     rigid_stabilization_overrides: dict[str, Any] | None = None
 
 
@@ -1142,20 +1156,9 @@ class MultiRigidFrameGenerator:
             if rotation is not None:
                 normals[name] = _unit_vector(rotation @ front_local, front_local)
 
-        waist_position = positions.get("waist")
         for name in ("left_foot", "right_foot"):
-            foot_position = positions.get(name)
-            rotation = rotations.get(name)
-            fallback = rotation @ front_local if rotation is not None else front_local
-            if waist_position is None or foot_position is None:
-                normals[name] = _unit_vector(fallback, front_local)
-                continue
-            preferred = foot_position - waist_position
-            preferred[2] = 0.0
-            if float(np.linalg.norm(preferred)) <= 1e-9:
-                preferred = fallback
-            leg_axis = foot_position - waist_position
-            normals[name] = _project_to_plane(preferred, leg_axis, fallback)
+            if name in positions:
+                normals[name] = world_up.copy()
 
         mounts: dict[str, MeshLiteMount] = {}
         for name, position in positions.items():
@@ -1221,27 +1224,30 @@ class MultiRigidFrameGenerator:
                     b=waist_center,
                 )
             )
+        foot_capsule_depth_m = 0.22
         left_center = primitive_centers.get("left_foot")
-        if waist_center is not None and left_center is not None:
+        left_mount = mounts.get("left_foot")
+        if left_center is not None and left_mount is not None:
             occluders.append(
                 MeshLiteOccluder(
                     name="left_leg",
                     kind="capsule",
                     radius_m=radii["leg"],
                     rigids=frozenset({"left_foot"}),
-                    a=waist_center,
+                    a=left_center - left_mount.normal * foot_capsule_depth_m,
                     b=left_center,
                 )
             )
         right_center = primitive_centers.get("right_foot")
-        if waist_center is not None and right_center is not None:
+        right_mount = mounts.get("right_foot")
+        if right_center is not None and right_mount is not None:
             occluders.append(
                 MeshLiteOccluder(
                     name="right_leg",
                     kind="capsule",
                     radius_m=radii["leg"],
                     rigids=frozenset({"right_foot"}),
-                    a=waist_center,
+                    a=right_center - right_mount.normal * foot_capsule_depth_m,
                     b=right_center,
                 )
             )
@@ -2930,7 +2936,9 @@ def run_multi_rigid_scenario(
             full_3d_measurement_ratios.append(
                 float(full_3d.get("measurement_valid_ratio", 0.0) or 0.0)
             )
-        for evidence_bucket in phase_payload.get("evidence", {}).values():
+        for evidence_phase, evidence_bucket in phase_payload.get("evidence", {}).items():
+            if str(evidence_phase) == "hidden_prediction_only":
+                continue
             hold_position_max_values.append(
                 float(
                     evidence_bucket.get("prediction_hold_position_error_m", {}).get(
@@ -3169,6 +3177,11 @@ def run_multi_rigid_scenario(
         "pipeline_variant": config.pipeline_variant,
         "subset_diagnostics_mode": config.subset_diagnostics_mode,
         "rigid_stabilization_profile": config.rigid_stabilization_profile,
+        "cluster_radius_m": (
+            float(config.cluster_radius_m)
+            if config.cluster_radius_m is not None
+            else None
+        ),
         "rigid_stabilization_overrides": dict(config.rigid_stabilization_overrides or {}),
         "camera_ids": list(camera_params),
         "rigid_names": list(config.rigid_names),
@@ -3729,6 +3742,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pipeline-variant", type=str, default="fast_ABCDHRF")
     parser.add_argument("--subset-diagnostics-mode", type=str, default="off")
     parser.add_argument(
+        "--cluster-radius-m",
+        type=float,
+        default=None,
+        help="Override generic 3D DBSCAN rigid-body cluster radius in meters",
+    )
+    parser.add_argument(
         "--rigid-stabilization-profile",
         type=str,
         default="pipeline_default",
@@ -3784,16 +3803,66 @@ def main(argv: list[str] | None = None) -> int:
         help="Override position continuity guard enabled/enforced true/false for sim PDCA",
     )
     parser.add_argument(
-        "--anchor-guided-body-nbest",
-        type=_parse_bool_override,
-        default=None,
-        help="Enable experimental active-anchor-guided non-anchor body N-best recovery",
-    )
-    parser.add_argument(
         "--temporal-body-nbest",
         type=_parse_bool_override,
         default=None,
         help="Enable passive body-level N-best marker assignment with temporal rotation cost",
+    )
+    parser.add_argument(
+        "--body-level-2d-recovery",
+        type=_parse_bool_override,
+        default=None,
+        help="Enable whole-body 2D N-best blob assignment before triangulation",
+    )
+    parser.add_argument("--body-level-2d-max-offsets", type=int, default=None)
+    parser.add_argument("--body-level-2d-nearest-per-marker", type=int, default=None)
+    parser.add_argument("--body-level-2d-assignment-nearest-per-marker", type=int, default=None)
+    parser.add_argument("--body-level-2d-trigger-max-assignments", type=int, default=None)
+    parser.add_argument("--body-level-2d-max-distance-scale", type=float, default=None)
+    parser.add_argument("--body-level-2d-min-margin", type=float, default=None)
+    parser.add_argument(
+        "--body-level-2d-candidate-cache",
+        type=_parse_bool_override,
+        default=None,
+        help="Reuse prior body-level 2D translation bins during reacquire",
+    )
+    parser.add_argument("--body-level-2d-cache-max-bins", type=int, default=None)
+    parser.add_argument(
+        "--body-level-2d-cache-early-exit",
+        type=_parse_bool_override,
+        default=None,
+        help="Stop body-level 2D offset search when cached bin yields 4-of-5 evidence",
+    )
+    parser.add_argument(
+        "--body-level-2d-keep-nbest-diagnostics",
+        type=_parse_bool_override,
+        default=None,
+        help="Keep full body-level 2D N-best payloads in per-camera diagnostics",
+    )
+    parser.add_argument(
+        "--skip-generic-search-when-object-gated",
+        type=_parse_bool_override,
+        default=None,
+        help="Let strong object-gated CONTINUE evidence skip generic cluster search",
+    )
+    parser.add_argument("--raw-scene-interval-frames", type=int, default=None)
+    parser.add_argument(
+        "--runtime-diagnostics",
+        type=_parse_bool_override,
+        default=None,
+        help="Build per-frame runtime diagnostic events and tracking_diagnostics logs",
+    )
+    parser.add_argument(
+        "--temporal-2d-ownership-recovery",
+        type=_parse_bool_override,
+        default=None,
+        help="Feed confirmed 3D marker ownership back into next-frame 2D assignment",
+    )
+    parser.add_argument(
+        "--temporal-2d-motion-prediction",
+        type=_parse_bool_override,
+        default=None,
+        help="Use recent 3D marker velocity when feeding ownership back into 2D assignment",
     )
     parser.add_argument("--noise-px", type=float, default=0.0, help="Pixel noise stddev")
     parser.add_argument(
@@ -3885,6 +3954,36 @@ def main(argv: list[str] | None = None) -> int:
         return _err("--body-mount-blob-merge-factor must be >= 0")
     if args.false_blobs_per_camera < 0:
         return _err("--false-blobs-per-camera must be >= 0")
+    if args.cluster_radius_m is not None and args.cluster_radius_m <= 0.0:
+        return _err("--cluster-radius-m must be > 0")
+    if args.body_level_2d_max_offsets is not None and args.body_level_2d_max_offsets <= 0:
+        return _err("--body-level-2d-max-offsets must be > 0")
+    if (
+        args.body_level_2d_nearest_per_marker is not None
+        and args.body_level_2d_nearest_per_marker <= 0
+    ):
+        return _err("--body-level-2d-nearest-per-marker must be > 0")
+    if (
+        args.body_level_2d_assignment_nearest_per_marker is not None
+        and args.body_level_2d_assignment_nearest_per_marker <= 0
+    ):
+        return _err("--body-level-2d-assignment-nearest-per-marker must be > 0")
+    if (
+        args.body_level_2d_trigger_max_assignments is not None
+        and args.body_level_2d_trigger_max_assignments < 0
+    ):
+        return _err("--body-level-2d-trigger-max-assignments must be >= 0")
+    if (
+        args.body_level_2d_max_distance_scale is not None
+        and args.body_level_2d_max_distance_scale < 0.0
+    ):
+        return _err("--body-level-2d-max-distance-scale must be >= 0")
+    if args.body_level_2d_min_margin is not None and args.body_level_2d_min_margin < 0.0:
+        return _err("--body-level-2d-min-margin must be >= 0")
+    if args.body_level_2d_cache_max_bins is not None and args.body_level_2d_cache_max_bins <= 0:
+        return _err("--body-level-2d-cache-max-bins must be > 0")
+    if args.raw_scene_interval_frames is not None and args.raw_scene_interval_frames <= 0:
+        return _err("--raw-scene-interval-frames must be > 0")
     if (
         args.object_gating_pixel_max_px is not None
         and args.object_gating_pixel_max_px <= 0.0
@@ -3965,13 +4064,77 @@ def main(argv: list[str] | None = None) -> int:
             rigid_stabilization_overrides["position_continuity_guard_enforced"] = bool(
                 args.position_continuity_guard
             )
-        if args.anchor_guided_body_nbest is not None:
-            rigid_stabilization_overrides["anchor_guided_body_nbest"] = bool(
-                args.anchor_guided_body_nbest
-            )
         if args.temporal_body_nbest is not None:
             rigid_stabilization_overrides["temporal_body_nbest"] = bool(
                 args.temporal_body_nbest
+            )
+        if args.cluster_radius_m is not None:
+            rigid_stabilization_overrides["cluster_radius_m"] = float(
+                args.cluster_radius_m
+            )
+        if args.body_level_2d_recovery is not None:
+            rigid_stabilization_overrides["body_level_2d_recovery"] = bool(
+                args.body_level_2d_recovery
+            )
+        if args.body_level_2d_max_offsets is not None:
+            rigid_stabilization_overrides["body_level_2d_max_offsets"] = int(
+                args.body_level_2d_max_offsets
+            )
+        if args.body_level_2d_nearest_per_marker is not None:
+            rigid_stabilization_overrides["body_level_2d_nearest_per_marker"] = int(
+                args.body_level_2d_nearest_per_marker
+            )
+        if args.body_level_2d_assignment_nearest_per_marker is not None:
+            rigid_stabilization_overrides["body_level_2d_assignment_nearest_per_marker"] = int(
+                args.body_level_2d_assignment_nearest_per_marker
+            )
+        if args.body_level_2d_trigger_max_assignments is not None:
+            rigid_stabilization_overrides["body_level_2d_trigger_max_assignments"] = int(
+                args.body_level_2d_trigger_max_assignments
+            )
+        if args.body_level_2d_max_distance_scale is not None:
+            rigid_stabilization_overrides["body_level_2d_max_distance_scale"] = float(
+                args.body_level_2d_max_distance_scale
+            )
+        if args.body_level_2d_min_margin is not None:
+            rigid_stabilization_overrides["body_level_2d_min_margin"] = float(
+                args.body_level_2d_min_margin
+            )
+        if args.body_level_2d_candidate_cache is not None:
+            rigid_stabilization_overrides["body_level_2d_candidate_cache"] = bool(
+                args.body_level_2d_candidate_cache
+            )
+        if args.body_level_2d_cache_max_bins is not None:
+            rigid_stabilization_overrides["body_level_2d_cache_max_bins"] = int(
+                args.body_level_2d_cache_max_bins
+            )
+        if args.body_level_2d_cache_early_exit is not None:
+            rigid_stabilization_overrides["body_level_2d_cache_early_exit"] = bool(
+                args.body_level_2d_cache_early_exit
+            )
+        if args.body_level_2d_keep_nbest_diagnostics is not None:
+            rigid_stabilization_overrides["body_level_2d_keep_nbest_diagnostics"] = bool(
+                args.body_level_2d_keep_nbest_diagnostics
+            )
+        if args.skip_generic_search_when_object_gated is not None:
+            rigid_stabilization_overrides["skip_generic_search_when_object_gated"] = bool(
+                args.skip_generic_search_when_object_gated
+            )
+        if args.raw_scene_interval_frames is not None:
+            rigid_stabilization_overrides["raw_scene_interval_frames"] = int(
+                args.raw_scene_interval_frames
+            )
+        if args.runtime_diagnostics is not None:
+            rigid_stabilization_overrides["runtime_diagnostics_enabled"] = bool(
+                args.runtime_diagnostics
+            )
+        if args.temporal_2d_ownership_recovery is not None:
+            rigid_stabilization_overrides["temporal_2d_ownership_recovery"] = bool(
+                args.temporal_2d_ownership_recovery
+            )
+        if args.temporal_2d_motion_prediction is not None:
+            rigid_stabilization_overrides["temporal_2d_motion_prediction"] = bool(
+                args.temporal_2d_motion_prediction
             )
         try:
             summary = run_multi_rigid_scenario(
@@ -4005,6 +4168,11 @@ def main(argv: list[str] | None = None) -> int:
                     pipeline_variant=str(args.pipeline_variant),
                     subset_diagnostics_mode=str(args.subset_diagnostics_mode),
                     rigid_stabilization_profile=str(args.rigid_stabilization_profile),
+                    cluster_radius_m=(
+                        float(args.cluster_radius_m)
+                        if args.cluster_radius_m is not None
+                        else None
+                    ),
                     rigid_stabilization_overrides=rigid_stabilization_overrides,
                 ),
                 out_dir=args.out_dir,

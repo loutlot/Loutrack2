@@ -62,11 +62,31 @@ PRESETS: dict[str, list[Point3]] = {
 
 def _load_points(path: Path, body_name: str | None) -> list[Point3]:
     data = json.loads(path.read_text(encoding="utf-8"))
+    scale = 1.0
     if isinstance(data, dict) and "marker_positions" in data:
         points = data["marker_positions"]
+        if "marker_diameter_m" in data:
+            scale = 1000.0
+    elif isinstance(data, dict) and "custom_rigids" in data and body_name:
+        rigids = data["custom_rigids"]
+        if not isinstance(rigids, list):
+            raise ValueError("custom_rigids must be a list")
+        matches = [
+            rigid
+            for rigid in rigids
+            if isinstance(rigid, dict) and str(rigid.get("name", "")) == str(body_name)
+        ]
+        if not matches:
+            raise ValueError(f"Body {body_name!r} not found in custom_rigids")
+        body = matches[0]
+        points = body.get("marker_positions")
+        if "marker_diameter_m" in body:
+            scale = 1000.0
     elif isinstance(data, dict) and body_name:
         body = data[body_name]
         points = body.get("marker_positions", body) if isinstance(body, dict) else body
+        if isinstance(body, dict) and "marker_diameter_m" in body:
+            scale = 1000.0
     else:
         points = data
 
@@ -77,7 +97,13 @@ def _load_points(path: Path, body_name: str | None) -> list[Point3]:
     for index, point in enumerate(points):
         if not isinstance(point, list | tuple) or len(point) != 3:
             raise ValueError(f"Marker {index} must be a 3D coordinate")
-        parsed.append((float(point[0]), float(point[1]), float(point[2])))
+        parsed.append(
+            (
+                float(point[0]) * scale,
+                float(point[1]) * scale,
+                float(point[2]) * scale,
+            )
+        )
     return parsed
 
 
@@ -271,7 +297,15 @@ def build_fixture(
 
     if fillet_radius > 0:
         for center in joint_centers:
-            model = _fillet_edges_near(model, center, fillet_radius, marker_diameter / 2.0 + stem_diameter)
+            try:
+                model = _fillet_edges_near(
+                    model,
+                    center,
+                    fillet_radius,
+                    marker_diameter / 2.0 + stem_diameter,
+                )
+            except Exception:
+                pass
 
     return model
 

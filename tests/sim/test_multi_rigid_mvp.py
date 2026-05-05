@@ -21,6 +21,7 @@ from tools.sim.multi_rigid import (  # type: ignore
     MultiRigidScenarioConfig,
     load_camera_rig,
     load_mvp_patterns,
+    run_multi_rigid_scenario,
 )
 from host.receiver import PairedFrames  # type: ignore
 
@@ -49,6 +50,7 @@ def _make_mvp_generator():
         "rigid_names": ("waist", "wand"),
         "marker_layout": "current_4marker",
         "camera_rig_source": "dummy",
+        "rigids_path": "missing-test-rigids.json",
     }
 
     signature = inspect.signature(generator_cls)
@@ -451,6 +453,27 @@ def test_cube_top_camera_rig_aims_four_corners_at_center():
         assert float(target_camera[2]) > 0.0
 
 
+def test_multi_rigid_summary_reports_cluster_radius_override():
+    config = MultiRigidScenarioConfig(
+        seed=37,
+        camera_ids=DEFAULT_GENERATED_CAMERA_IDS,
+        frames=1,
+        rigid_names=("waist",),
+        scenario="five_rigid_body_occlusion_v1",
+        camera_rig_source="cube_top_2_4m_aim_center",
+        marker_layout=DESIGN_5MARKER_LAYOUT,
+        rigids_path="missing-test-rigids.json",
+        rigid_stabilization_profile="gui_live",
+        cluster_radius_m=0.06,
+        rigid_stabilization_overrides={"cluster_radius_m": 0.06},
+    )
+
+    summary = run_multi_rigid_scenario(config)
+
+    assert summary["cluster_radius_m"] == 0.06
+    assert summary["variant_metrics"]["cluster_radius_m"] == 0.06
+
+
 def test_body_occlusion_blob_area_gently_scales_with_camera_depth():
     config = MultiRigidScenarioConfig(
         seed=38,
@@ -748,9 +771,19 @@ def test_mesh_lite_mounts_rigids_on_body_surface_with_z_normal():
         float(np.linalg.norm(mounts["left_foot"].surface_position - left_leg.b)),
         left_leg.radius_m,
     )
+    assert left_leg.a is not None
+    assert np.allclose(
+        left_leg.a - left_leg.b,
+        -mounts["left_foot"].normal * float(np.linalg.norm(left_leg.a - left_leg.b)),
+    )
     assert np.isclose(
         float(np.linalg.norm(mounts["right_foot"].surface_position - right_leg.b)),
         right_leg.radius_m,
+    )
+    assert right_leg.a is not None
+    assert np.allclose(
+        right_leg.a - right_leg.b,
+        -mounts["right_foot"].normal * float(np.linalg.norm(right_leg.a - right_leg.b)),
     )
 
 

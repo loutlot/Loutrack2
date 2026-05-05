@@ -1,4 +1,24 @@
-- GUI tracking now removes the active-anchor default route and enables passive temporal body N-best assignment with rotation-jump cost.
+- Rigid tracking now ranks partial marker correspondences by pair-distance before Kabsch, caches subset geometry checks, and vectorizes reprojection scoring to reduce `src/host/rigid.py` hot-path candidate overhead.
+- GUI/sim tracking now keeps per-frame runtime diagnostics off by default and enables them only through `runtime_diagnostics_enabled` / `--runtime-diagnostics`.
+- Rigid tracking now removes the unused anchor-guided body N-best option from the formal GUI/sim configuration surface and deletes its dead estimator method.
+- `tools/sim` now records a hot-path estimate under `logs/sim/passive_stabilization_v2/hotpath_estimate_20260505`, sizing raw-scene CPU load, candidate-scoring cost, and per-body parallelization risk before further optimization.
+- GUI tracking now formally adopts controlled generic fallback skipping and compact object-gating diagnostics while leaving the rare body-aware hint fallback out of the production route.
+- `tools/sim` now records a body-aware fallback deep dive under `logs/sim/passive_stabilization_v2/bodyaware_deepdive_20260505`, separating adopted generic-skip and diagnostics gains from the non-adopted body-aware fallback path.
+- GUI `all_fast` tracking now keeps generic-search skipping enabled but only fires it when all five markers have unambiguous two-camera body-level evidence.
+- `tools/sim` now records strict `all_fast` validation under `logs/sim/passive_stabilization_v2/all_fast_strict_20260505`, supporting the controlled generic-search skip as the formal GUI route.
+- GUI tracking now skips generic cluster search during strong object-gated CONTINUE frames, thins body-level 2D diagnostics, and throttles raw-scene visualization updates.
+- GUI tracking now reuses body-level 2D candidate bins during reacquire and can early-exit once cached 4-of-5 evidence is available.
+- `tools/sim` now exposes generic 3D cluster radius and rigid estimator cluster/Kabsch-call counters for comparing layered clustering performance.
+- GUI tracking now uses `candidate_00534` custom rigids with body-level 2D N-best enabled and pose-continuity guarding disabled after the 20-cycle performance PDCA in `logs/sim/passive_stabilization_v2/perf_pdca_20260505`.
+- Object-gating can now use tunable whole-body 2D N-best assignment for translated marker constellations, and sim phase checks no longer score hidden-only prediction holds as recovery.
+- `tools/cad` can now generate printable fixtures directly from sim `custom_rigids` meter-coordinate files, skipping only local fillets that fail on candidate geometry.
+- `tools/sim` now treats foot-top rigids as local `+Z` upward and places mesh-lite foot occluders on the local `-Z` side of the marker surface.
+- `src/host` now keeps 3D marker point history for temporal 2D ownership experiments, with motion prediction isolated behind an explicit disabled flag.
+- `src/host` now has an experimental temporal 2D ownership recovery path that feeds confirmed 3D marker ownership back into the next frame's passive 2D assignment.
+- `src/host` now includes a disabled experimental body-level 2D recovery path for testing translated rigid-shape blob assignments before triangulation.
+- Passive multi-rigid recovery now holds previously tracked bodies out of anonymous global boot when their own hints disappear, reducing cross-body blob theft during reacquire.
+- Multi-rigid boot now ranks candidate point subsets by 2D reprojection evidence when camera context is available, improving passive boot without adding guards.
+- GUI tracking now removes the active-anchor tracking route and uses passive temporal body N-best plus rotation-jump cost for body ownership ranking.
 - `tools/sim` now routes `five_rigid_body_mesh_lite_v1` through the body-motion trajectory instead of leaving it static.
 - `tools/sim` now adds `five_rigid_body_mesh_lite_v1` for CAD surface-mounted capsule occlusion without deterministic marker-drop stacking.
 - `tools/sim` mesh-lite capsule occlusion now allows far-side self-occlusion while keeping only endpoint clearance for surface-mounted markers.

@@ -671,13 +671,12 @@ Readout:
 
 Formal GUI route:
 
-- `src/host/tracking_runtime.py` now exposes the active-anchor side-channel route in `GUI_DEFAULT_RIGID_STABILIZATION`.
-- `anchor_guided_body_nbest` is explicitly present but defaults to `false`.
+- `src/host/tracking_runtime.py` keeps the formal GUI route passive-first and no longer exposes the rejected anchor-guided N-best option.
 - The formal route is therefore:
   - `fast_ABCDHRF`
   - `subset_diagnostics_mode=off`
   - object-gating enforced
-  - PnP-free active-anchor side-channel
+  - passive temporal body N-best
   - full 3D rigid-hint hard realignment
   - no anchor-only 6DoF recovery
 
@@ -685,7 +684,7 @@ Trials:
 
 | Trial | Route | Result | Decision |
 | --- | --- | --- | --- |
-| `production_trial_14_anchor_guided_nbest_dropout002` | Active-anchor-guided non-anchor body N-best enabled by code path. | No valid-ratio improvement over the formal route; wrong `0`, confusion `2`, but rigid p95 about `28.04ms`. Most attempts were `anchor_guided_body_nbest_not_rankable`. | Reject as a default path. Keep as an experiment only. |
+| `production_trial_14_anchor_guided_nbest_dropout002` | Active-anchor-guided non-anchor body N-best enabled by code path. | No valid-ratio improvement over the formal route; wrong `0`, confusion `2`, but rigid p95 about `28.04ms`. Most attempts were not rankable. | Rejected and removed from the formal code surface. |
 | `production_trial_15_gui_formal_hard_nodrop` | Formal GUI route, no marker dropout. | All valid `1.0`, wrong/confusion `0/0`, phase go/no-go passed; rigid p95 about `1.87ms`, pair p95 about `7.09ms`. | Accuracy is production-like under the high-SNR/no-dropout premise; timing still needs work. |
 | `production_trial_17_gui_formal_fast_marginless_hard_nodrop` | Removed exact second-best body-assignment margin recomputation from the GUI hot path. | Accuracy unchanged, but timing did not reliably improve in this run: rigid p95 about `1.92ms`, pair p95 about `7.15ms`. | Keep the simplification because the removed work was diagnostic-only, but it is not the main no-drop bottleneck. |
 | `production_trial_19_anchor_only_fast_invalid_dropout002` | Short-circuit 5-marker anchor-only recovery to invalid instead of generic 3D search. | Valid ratios stayed intentionally sparse under dropout, wrong `0`, confusion `2`; rigid p95 improved from about `28.88ms` to about `2.50ms`, pair p95 from about `34.17ms` to about `8.31ms`. | Keep. This is a correct observability-based speed fix. |

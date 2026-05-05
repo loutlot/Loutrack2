@@ -16,8 +16,11 @@ from host.rigid import (
     RigidBodyEstimator,
     RigidBodyPose,
     SubsetSolveConfig,
+    TrackMode,
     WAIST_PATTERN,
     _quaternion_delta_rotvec,
+    compact_object_gating_diagnostics,
+    marker_pattern_from_points,
 )
 
 
@@ -188,6 +191,39 @@ def test_partial_marker_correspondence_is_pose_invariant() -> None:
     assert error < 1e-9
     assert np.allclose(rotation, np.eye(3), atol=1e-9)
     assert np.allclose(position, translation, atol=1e-9)
+
+
+def test_five_marker_partial_correspondence_tolerates_missing_and_scrambled_points() -> None:
+    pattern = marker_pattern_from_points(
+        "five_marker_correspondence_test",
+        np.vstack(
+            [
+                WAIST_PATTERN.marker_positions,
+                np.array([[0.0, -0.055, 0.035]], dtype=np.float64),
+            ]
+        ),
+        marker_diameter=WAIST_PATTERN.marker_diameter,
+    )
+    rotation = Rotation.from_euler("xyz", [0.22, -0.18, 0.31]).as_matrix()
+    translation = np.array([0.18, -0.09, 2.45], dtype=np.float64)
+    marker_indices = [4, 0, 2, 1]
+    observed = (
+        rotation @ pattern.marker_positions[marker_indices].T
+    ).T + translation.reshape(1, 3)
+
+    matched_obs, matched_ref, rms_error = KabschEstimator.find_correspondence(
+        observed,
+        pattern.marker_positions,
+    )
+    estimated_rotation, estimated_position, error = KabschEstimator.estimate(
+        matched_ref,
+        matched_obs,
+    )
+
+    assert rms_error < 1e-9
+    assert error < 1e-9
+    assert np.allclose(estimated_rotation, rotation, atol=1e-9)
+    assert np.allclose(estimated_position, translation, atol=1e-9)
 
 
 def test_reprojection_scoring_uses_one_to_one_blob_assignment() -> None:
@@ -474,6 +510,185 @@ def test_object_conditioned_gating_marks_low_marker_assignment_margin() -> None:
         for camera in gating["per_camera"].values()
         for assignment in camera["assignments"]
     ) == 2
+
+
+def test_object_gated_generic_skip_requires_complete_unambiguous_body_evidence() -> None:
+    pattern = marker_pattern_from_points(
+        "five_marker_skip_test",
+        np.vstack(
+            [
+                WAIST_PATTERN.marker_positions,
+                np.array([[0.0, -0.055, 0.035]], dtype=np.float64),
+            ]
+        ),
+        marker_diameter=WAIST_PATTERN.marker_diameter,
+    )
+    estimator = RigidBodyEstimator(
+        patterns=[pattern],
+        object_gating_config=ObjectGatingConfig(
+            skip_generic_search_when_object_gated=True,
+        ),
+    )
+    tracker = estimator.trackers[pattern.name]
+    tracker._mode = TrackMode.CONTINUE
+    tracker.track_count = 3
+
+    common = {
+        "object_gating_enforced": True,
+        "hint_marker_count": pattern.num_markers,
+        "gating_evaluated": True,
+        "gating_camera_count": 2,
+        "gating_assigned_marker_views": pattern.num_markers * 2,
+        "gating_marker_margin_assignment_count": 0,
+        "gating_duplicate_assignment_count": 0,
+    }
+
+    assert estimator._should_skip_generic_search_for_object_gated_continue(
+        pattern,
+        tracker,
+        gating_markers_with_two_or_more_rays=pattern.num_markers,
+        gating_ambiguous_assignment_count=0,
+        **common,
+    )
+    assert not estimator._should_skip_generic_search_for_object_gated_continue(
+        pattern,
+        tracker,
+        gating_markers_with_two_or_more_rays=pattern.num_markers - 1,
+        gating_ambiguous_assignment_count=0,
+        **common,
+    )
+    assert not estimator._should_skip_generic_search_for_object_gated_continue(
+        pattern,
+        tracker,
+        gating_markers_with_two_or_more_rays=pattern.num_markers,
+        gating_ambiguous_assignment_count=1,
+        **common,
+    )
+
+
+def test_compact_object_gating_diagnostics_omits_hot_path_assignment_lists() -> None:
+    payload = {
+        "evaluated": True,
+        "mode": "continue",
+        "assigned_marker_views": 10,
+        "markers_with_two_or_more_rays": 5,
+        "per_camera": {
+            "cam0": {
+                "assigned_marker_views": 5,
+                "body_shifted_assignment": True,
+                "assignments": [{"marker_idx": 0, "blob_index": 2}],
+                "body_level_2d_nbest": [{"score": 1.0}],
+            }
+        },
+    }
+
+    compact = compact_object_gating_diagnostics(payload)
+    detailed = compact_object_gating_diagnostics(payload, include_detail=True)
+
+    assert compact["assigned_marker_views"] == 10
+    assert compact["per_camera"]["cam0"]["assigned_marker_views"] == 5
+    assert "assignments" not in compact["per_camera"]["cam0"]
+    assert "body_level_2d_nbest" not in compact["per_camera"]["cam0"]
+    assert detailed["per_camera"]["cam0"]["assignments"]
+
+
+def test_body_level_2d_nbest_recovers_translated_constellation() -> None:
+    cameras = create_dummy_calibration(["cam0", "cam1"], focal_length=800.0)
+    pattern = marker_pattern_from_points(
+        "five_marker_test",
+        np.vstack(
+            [
+                WAIST_PATTERN.marker_positions,
+                np.array([[0.0, -0.055, 0.035]], dtype=np.float64),
+            ]
+        ),
+        marker_diameter=WAIST_PATTERN.marker_diameter,
+    )
+    points_world = pattern.marker_positions + np.array([0.0, 0.0, 2.5])
+    observations = _observations_for_points(cameras, points_world)
+    estimator = RigidBodyEstimator(
+        patterns=[pattern],
+        object_gating_config=ObjectGatingConfig(
+            pixel_min=4.0,
+            pixel_max=4.0,
+            body_level_2d_recovery=True,
+        ),
+    )
+    estimator.process_context(
+        points_world,
+        1_000_000,
+        camera_params=cameras,
+        observations_by_camera=observations,
+    )
+    frames = {
+        camera_id: _Frame(
+            [
+                {
+                    "x": float(obs["raw_uv"][0]) + 18.0,
+                    "y": float(obs["raw_uv"][1]) - 7.0,
+                    "area": 4.0,
+                }
+                for obs in camera_observations
+            ]
+        )
+        for camera_id, camera_observations in observations.items()
+    }
+
+    gating = estimator.evaluate_object_conditioned_gating(
+        timestamp=1_016_000,
+        camera_params=cameras,
+        frames_by_camera=frames,
+    )[pattern.name]
+
+    assert gating["assigned_marker_views"] == pattern.num_markers * len(cameras)
+    assert gating["markers_with_two_or_more_rays"] == pattern.num_markers
+    assert all(
+        camera_payload["body_shifted_assignment"] is True
+        for camera_payload in gating["per_camera"].values()
+    )
+    assert all(
+        camera_payload["body_level_2d_nbest_candidate_count"] >= 1
+        for camera_payload in gating["per_camera"].values()
+    )
+    assert all(
+        camera_payload["body_level_2d_nbest"]
+        for camera_payload in gating["per_camera"].values()
+    )
+
+
+def test_body_level_2d_cached_bin_can_early_exit_on_four_of_five() -> None:
+    projected = np.asarray(
+        [
+            [10.0, 10.0],
+            [30.0, 10.0],
+            [10.0, 30.0],
+            [30.0, 30.0],
+            [20.0, 20.0],
+        ],
+        dtype=np.float64,
+    )
+    offset = np.asarray([14.0, -6.0], dtype=np.float64)
+    blobs = projected[:4] + offset.reshape(1, 2)
+
+    result = RigidBodyEstimator._translated_body_assignment(
+        projected,
+        blobs,
+        np.ones(len(blobs), dtype=np.float64),
+        pixel_gate_px=4.0,
+        max_offsets=8,
+        nearest_per_marker=2,
+        assignment_nearest_per_marker=2,
+        max_distance_scale=0.12,
+        marker_count=5,
+        seed_offsets=[offset],
+        early_accept_coverage=4,
+    )
+
+    assert result is not None
+    assert result["early_accepted"] is True
+    assert result["candidate_count"] == 1
+    assert result["coverage"] == 4
+    assert result["offset_source"] == "cache"
 
 
 def test_object_conditioned_gating_can_stay_inactive_outside_reacquire() -> None:

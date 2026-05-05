@@ -594,6 +594,7 @@ def test_tracking_pipeline_maps_rigid_stabilization_flags_to_configs() -> None:
     )
 
     assert pipeline.reacquire_guard_event_logging is True
+    assert pipeline.runtime_diagnostics_enabled is True
     assert pipeline.rigid_estimator.reacquire_guard_config.shadow_enabled is False
     assert pipeline.rigid_estimator.reacquire_guard_config.enforced is True
     assert pipeline.rigid_estimator.reacquire_guard_config.post_reacquire_continue_frames == 1
@@ -614,6 +615,18 @@ def test_tracking_pipeline_maps_rigid_stabilization_flags_to_configs() -> None:
     assert pipeline.rigid_estimator.position_continuity_guard_config.max_accel_m_s2 == 25.0
     assert pipeline.rigid_estimator.position_continuity_guard_config.max_velocity_m_s == 4.0
     assert pipeline.rigid_estimator.subset_solve_config.enabled is False
+
+    quiet_pipeline = TrackingPipeline(
+        enable_logging=True,
+        rigid_stabilization={"runtime_diagnostics_enabled": False},
+    )
+    assert quiet_pipeline.runtime_diagnostics_enabled is False
+
+    debug_pipeline = TrackingPipeline(
+        enable_logging=False,
+        rigid_stabilization={"runtime_diagnostics_enabled": True},
+    )
+    assert debug_pipeline.runtime_diagnostics_enabled is True
 
     disabled_ambiguous_guard = TrackingPipeline(
         enable_logging=False,

@@ -252,6 +252,20 @@ class ObjectGatingConfig:
     ambiguous_blob_min_separation_px: float = 0.60
     ambiguous_blob_diameter_overlap_ratio: float = 0.30
     ambiguous_marker_assignment_min_margin_px: float = 0.29
+    body_level_2d_recovery: bool = False
+    body_level_2d_max_offsets: int = 12
+    body_level_2d_nearest_per_marker: int = 2
+    body_level_2d_assignment_nearest_per_marker: int = 3
+    body_level_2d_trigger_max_assignments: int = 3
+    body_level_2d_max_distance_scale: float = 0.12
+    body_level_2d_min_margin: float = 0.0
+    body_level_2d_candidate_cache: bool = False
+    body_level_2d_cache_max_bins: int = 4
+    body_level_2d_cache_early_exit: bool = False
+    body_level_2d_keep_nbest_diagnostics: bool = True
+    skip_generic_search_when_object_gated: bool = False
+    temporal_2d_ownership_recovery: bool = False
+    temporal_2d_motion_prediction: bool = False
 
     def thresholds_dict(self) -> Dict[str, Any]:
         return {
@@ -266,6 +280,40 @@ class ObjectGatingConfig:
             ),
             "ambiguous_marker_assignment_min_margin_px": float(
                 self.ambiguous_marker_assignment_min_margin_px
+            ),
+            "body_level_2d_recovery": bool(self.body_level_2d_recovery),
+            "body_level_2d_max_offsets": int(self.body_level_2d_max_offsets),
+            "body_level_2d_nearest_per_marker": int(
+                self.body_level_2d_nearest_per_marker
+            ),
+            "body_level_2d_assignment_nearest_per_marker": int(
+                self.body_level_2d_assignment_nearest_per_marker
+            ),
+            "body_level_2d_trigger_max_assignments": int(
+                self.body_level_2d_trigger_max_assignments
+            ),
+            "body_level_2d_max_distance_scale": float(
+                self.body_level_2d_max_distance_scale
+            ),
+            "body_level_2d_min_margin": float(self.body_level_2d_min_margin),
+            "body_level_2d_candidate_cache": bool(
+                self.body_level_2d_candidate_cache
+            ),
+            "body_level_2d_cache_max_bins": int(self.body_level_2d_cache_max_bins),
+            "body_level_2d_cache_early_exit": bool(
+                self.body_level_2d_cache_early_exit
+            ),
+            "body_level_2d_keep_nbest_diagnostics": bool(
+                self.body_level_2d_keep_nbest_diagnostics
+            ),
+            "skip_generic_search_when_object_gated": bool(
+                self.skip_generic_search_when_object_gated
+            ),
+            "temporal_2d_ownership_recovery": bool(
+                self.temporal_2d_ownership_recovery
+            ),
+            "temporal_2d_motion_prediction": bool(
+                self.temporal_2d_motion_prediction
             ),
             "enforce": bool(self.enforce),
             "activation_mode": str(self.activation_mode),
@@ -419,6 +467,79 @@ def _empty_object_gating(
         "per_marker_ray_count": [],
         "per_camera": {},
     }
+
+
+def compact_object_gating_diagnostics(
+    gating: Dict[str, Any],
+    *,
+    include_detail: bool = False,
+) -> Dict[str, Any]:
+    """Return a lightweight object-gating payload for GUI/status diagnostics."""
+    if not isinstance(gating, dict):
+        return {}
+    compact_keys = {
+        "enabled",
+        "enforced",
+        "diagnostics_only",
+        "evaluated",
+        "reason",
+        "mode",
+        "prediction_valid",
+        "confidence",
+        "pixel_gate_px",
+        "camera_count",
+        "marker_count",
+        "candidate_window_count",
+        "assigned_marker_views",
+        "unmatched_marker_views",
+        "duplicate_assignment_count",
+        "ambiguous_assignment_count",
+        "marker_margin_assignment_count",
+        "markers_with_two_or_more_rays",
+        "markers_with_one_ray",
+        "single_ray_candidates",
+        "generic_fallback_blob_count",
+        "allow_single_ray",
+        "per_marker_ray_count",
+        "body_assignment",
+        "thresholds",
+    }
+    payload = {key: gating[key] for key in compact_keys if key in gating}
+    per_camera = gating.get("per_camera")
+    if isinstance(per_camera, dict):
+        if include_detail:
+            payload["per_camera"] = {
+                str(camera_id): dict(camera_payload)
+                for camera_id, camera_payload in per_camera.items()
+                if isinstance(camera_payload, dict)
+            }
+        else:
+            payload["per_camera"] = {
+                str(camera_id): {
+                    key: camera_payload.get(key)
+                    for key in (
+                        "blob_count",
+                        "projected_marker_count",
+                        "assigned_marker_views",
+                        "unmatched_marker_views",
+                        "ambiguous_assignment_count",
+                        "marker_margin_assignment_count",
+                        "body_shifted_assignment",
+                        "body_level_2d_cache_hit",
+                        "body_level_2d_cache_early_exit",
+                        "body_shifted_mean_normalized_cost",
+                        "body_level_2d_nbest_candidate_count",
+                        "body_level_2d_nbest_margin",
+                        "temporal_2d_ownership_assignment",
+                        "temporal_2d_ownership_mean_cost",
+                    )
+                    if key in camera_payload
+                }
+                for camera_id, camera_payload in per_camera.items()
+                if isinstance(camera_payload, dict)
+            }
+    payload["detail_sampled"] = bool(include_detail)
+    return payload
 
 
 def _empty_rigid_hint_pose(reason: str = "not_evaluated") -> Dict[str, Any]:
@@ -821,6 +942,8 @@ class KabschEstimator:
     Finds optimal rotation and translation to align observed points
     with known marker positions.
     """
+
+    _PAIR_INDEX_CACHE: Dict[int, Tuple[np.ndarray, np.ndarray]] = {}
     
     @staticmethod
     def estimate(
@@ -914,6 +1037,37 @@ class KabschEstimator:
         errors = np.linalg.norm(transformed - reference, axis=1)
         rms_error = float(np.sqrt(np.sum(norm_weights * (errors ** 2))))
         return R, t, rms_error
+
+    @staticmethod
+    def _ordered_pair_distances(points: np.ndarray) -> np.ndarray:
+        arr = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+        point_count = int(len(arr))
+        if point_count < 2:
+            return np.zeros(0, dtype=np.float64)
+        pair_indices = KabschEstimator._PAIR_INDEX_CACHE.get(point_count)
+        if pair_indices is None:
+            pair_indices = np.triu_indices(point_count, k=1)
+            KabschEstimator._PAIR_INDEX_CACHE[point_count] = pair_indices
+        idx_a, idx_b = pair_indices
+        deltas = arr[idx_a] - arr[idx_b]
+        return np.sqrt(np.einsum("ij,ij->i", deltas, deltas))
+
+    @staticmethod
+    def _pair_distance_rms(
+        reference_distances: np.ndarray,
+        candidate_points: np.ndarray,
+    ) -> float:
+        candidate_distances = KabschEstimator._ordered_pair_distances(candidate_points)
+        if len(candidate_distances) != len(reference_distances):
+            return float("inf")
+        delta = candidate_distances - reference_distances
+        return float(np.sqrt(np.mean(delta * delta))) if len(delta) else 0.0
+
+    @staticmethod
+    def _ranked_kabsch_candidate_count(total_candidates: int) -> int:
+        if total_candidates <= 0:
+            return 0
+        return min(int(total_candidates), 48)
     
     @staticmethod
     def find_correspondence(
@@ -967,42 +1121,84 @@ class KabschEstimator:
             best_error = float('inf')
             best_ref = None
             best_obs = None
+            ranked: List[Tuple[float, Tuple[int, ...], Tuple[int, ...]]] = []
+            observed_pair_distances = KabschEstimator._ordered_pair_distances(
+                observed_points
+            )
             for subset in combinations(range(n_ref), n_obs):
                 ref_subset = reference_points[list(subset)]
                 for perm in permutations(range(n_obs)):
                     ref_perm = ref_subset[list(perm)]
-                    try:
-                        _, _, error = KabschEstimator.estimate(ref_perm, observed_points)
-                    except Exception:
-                        continue
-                    if error < best_error:
-                        best_error = float(error)
-                        best_ref = ref_perm
-                        best_obs = observed_points
+                    ranked.append(
+                        (
+                            KabschEstimator._pair_distance_rms(
+                                observed_pair_distances,
+                                ref_perm,
+                            ),
+                            tuple(int(index) for index in subset),
+                            tuple(int(index) for index in perm),
+                        )
+                    )
+
+            ranked.sort(key=lambda item: item[0])
+            max_kabsch = KabschEstimator._ranked_kabsch_candidate_count(len(ranked))
+            for _pair_error, subset, perm in ranked[:max_kabsch]:
+                ref_subset = reference_points[list(subset)]
+                ref_perm = ref_subset[list(perm)]
+                try:
+                    _, _, error = KabschEstimator.estimate(ref_perm, observed_points)
+                except Exception:
+                    continue
+                if error < best_error:
+                    best_error = float(error)
+                    best_ref = ref_perm
+                    best_obs = observed_points
 
             if best_ref is None or best_obs is None:
                 return np.array([]), np.array([]), float('inf')
             return best_obs, best_ref, best_error
-        
+
         else:
             # More observed than reference - find best subset
-            # Use distance-based matching
             best_error = float('inf')
             best_obs = None
             
-            # For small datasets, try all combinations AND permutations within each subset.
+            # For small datasets, rank by invariant pair-distance error first so
+            # only the most plausible correspondences pay the SVD/Kabsch cost.
             if n_obs <= 10 and n_ref <= 5:
+                ranked: List[Tuple[float, Tuple[int, ...], Tuple[int, ...]]] = []
+                reference_pair_distances = KabschEstimator._ordered_pair_distances(
+                    reference_points
+                )
                 for combo in combinations(range(n_obs), n_ref):
                     obs_subset = observed_points[list(combo)]
                     for perm in permutations(range(n_ref)):
                         obs_perm = obs_subset[list(perm)]
-                        try:
-                            _, _, error = KabschEstimator.estimate(obs_perm, reference_points)
-                            if error < best_error:
-                                best_error = error
-                                best_obs = obs_perm
-                        except Exception:
-                            continue
+                        ranked.append(
+                            (
+                                KabschEstimator._pair_distance_rms(
+                                    reference_pair_distances,
+                                    obs_perm,
+                                ),
+                                tuple(int(index) for index in combo),
+                                tuple(int(index) for index in perm),
+                            )
+                        )
+
+                ranked.sort(key=lambda item: item[0])
+                max_kabsch = KabschEstimator._ranked_kabsch_candidate_count(
+                    len(ranked)
+                )
+                for _pair_error, combo, perm in ranked[:max_kabsch]:
+                    obs_subset = observed_points[list(combo)]
+                    obs_perm = obs_subset[list(perm)]
+                    try:
+                        _, _, error = KabschEstimator.estimate(obs_perm, reference_points)
+                        if error < best_error:
+                            best_error = float(error)
+                            best_obs = obs_perm
+                    except Exception:
+                        continue
                 
                 if best_obs is not None:
                     return best_obs, reference_points, best_error
@@ -1441,6 +1637,17 @@ class RigidBodyTracker:
                 int(gating.get("assigned_marker_views", 0) or 0),
             )
 
+    def latest_object_gating_skip_counts(self) -> Tuple[int, int, int, int]:
+        """Return structural evidence counters used to skip generic search."""
+        with self._lock:
+            gating = self._last_object_gating
+            return (
+                int(gating.get("markers_with_two_or_more_rays", 0) or 0),
+                int(gating.get("ambiguous_assignment_count", 0) or 0),
+                int(gating.get("marker_margin_assignment_count", 0) or 0),
+                int(gating.get("duplicate_assignment_count", 0) or 0),
+            )
+
     def record_rigid_hint_pose(self, diagnostic: Dict[str, Any]) -> None:
         """Attach latest rigid-hint pose comparison diagnostics."""
         with self._lock:
@@ -1640,7 +1847,15 @@ class RigidBodyTracker:
             "last_rotation_innovation_deg": float(self._last_rotation_innovation_deg),
             "max_rotation_innovation_deg": float(self._max_rotation_innovation_deg),
             "reprojection_score": dict(self._last_reprojection_score),
-            "object_gating": dict(self._last_object_gating),
+            "object_gating": compact_object_gating_diagnostics(
+                self._last_object_gating,
+                include_detail=(
+                    self._mode != TrackMode.CONTINUE
+                    or int(self.total_frames) % 12 == 0
+                    or int(self._last_object_gating.get("ambiguous_assignment_count", 0) or 0) > 0
+                    or int(self._last_object_gating.get("duplicate_assignment_count", 0) or 0) > 0
+                ),
+            ),
             "last_pose_source": str(self._last_pose_source),
             "prediction_hold_frames": int(self._prediction_hold_frames),
             "rigid_hint_pose": dict(self._last_rigid_hint_pose),
@@ -1867,6 +2082,29 @@ class _PoseCandidate:
     invalid_reason: str = ""
 
 
+@dataclass(frozen=True)
+class _PreparedCameraObservations:
+    camera_id: str
+    camera: Any
+    uv: np.ndarray
+    blob_indices: np.ndarray
+    area_px2: np.ndarray
+    diameter_px: np.ndarray
+    uncertainty_px: np.ndarray
+
+    @property
+    def blob_count(self) -> int:
+        return int(len(self.uv))
+
+
+@dataclass(frozen=True)
+class _PreparedObservationContext:
+    coordinate_space: str
+    by_camera: Dict[str, _PreparedCameraObservations]
+    camera_count: int
+    total_blob_count: int
+
+
 class RigidBodyEstimator:
     """
     Complete rigid body estimation pipeline.
@@ -1901,7 +2139,6 @@ class RigidBodyEstimator:
         subset_time_budget_ms: Optional[float] = None,
         subset_max_hypotheses: Optional[int] = None,
         rigid_candidate_separation_enabled: bool = False,
-        anchor_guided_body_nbest_enabled: bool = False,
         temporal_body_nbest_enabled: bool = False,
         stage_callback: Optional[Callable[[str, float], None]] = None,
     ):
@@ -1943,7 +2180,6 @@ class RigidBodyEstimator:
             else None
         )
         self.rigid_candidate_separation_enabled = bool(rigid_candidate_separation_enabled)
-        self.anchor_guided_body_nbest_enabled = bool(anchor_guided_body_nbest_enabled)
         self.temporal_body_nbest_enabled = bool(temporal_body_nbest_enabled)
         self._stage_callback = stage_callback
         self._variant_metric_lock = threading.Lock()
@@ -1965,6 +2201,17 @@ class RigidBodyEstimator:
         }
         self._body_conflict_count = 0
         self._body_conflict_resolution_reasons: Counter[str] = Counter()
+        self._cluster_call_count = 0
+        self._cluster_input_point_total = 0
+        self._cluster_output_count_total = 0
+        self._cluster_output_count_max = 0
+        self._estimate_pose_call_count = 0
+        self._estimate_pose_point_total = 0
+        self._body_level_2d_candidate_cache: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        self._body_level_2d_cache_query_count = 0
+        self._body_level_2d_cache_hit_count = 0
+        self._body_level_2d_cache_early_exit_count = 0
+        self._body_level_2d_cache_bin_total = 0
         self._rigid_hint_marker_count_by_rigid: Dict[str, Counter[int]] = {
             p.name: Counter() for p in self.patterns
         }
@@ -1979,6 +2226,16 @@ class RigidBodyEstimator:
             }
             for p in self.patterns
         }
+        self._last_confirmed_marker_views_by_rigid: Dict[
+            str,
+            Dict[int, Dict[str, Dict[str, Any]]],
+        ] = {}
+        self._last_confirmed_marker_points_by_rigid: Dict[
+            str,
+            Dict[int, List[Dict[str, Any]]],
+        ] = {}
+        self._subset_reference_cache: Dict[Tuple[str, int, Tuple[int, ...]], np.ndarray] = {}
+        self._subset_ambiguity_cache: Dict[Tuple[str, int, Tuple[int, ...]], bool] = {}
         self.clusterer = PointClusterer(
             marker_diameter=marker_diameter,
             cluster_radius_m=self.cluster_radius_m,
@@ -1999,12 +2256,42 @@ class RigidBodyEstimator:
                 "subset_time_budget_ms": self.subset_time_budget_ms,
                 "subset_max_hypotheses": self.subset_max_hypotheses,
                 "rigid_candidate_separation_enabled": self.rigid_candidate_separation_enabled,
-                "anchor_guided_body_nbest_enabled": self.anchor_guided_body_nbest_enabled,
                 "temporal_body_nbest_enabled": self.temporal_body_nbest_enabled,
                 "rigid_candidate_separated_count": int(self._rigid_candidate_separated_count),
                 "rigid_candidate_fallback_count": int(self._rigid_candidate_fallback_count),
                 "rigid_candidate_fallback_reason_counts": dict(
                     self._rigid_candidate_fallback_reason_counts
+                ),
+                "cluster_radius_m": float(self.cluster_radius_m),
+                "cluster_call_count": int(self._cluster_call_count),
+                "cluster_input_point_total": int(self._cluster_input_point_total),
+                "cluster_output_count_total": int(self._cluster_output_count_total),
+                "cluster_output_count_max": int(self._cluster_output_count_max),
+                "cluster_output_count_mean": (
+                    float(self._cluster_output_count_total)
+                    / float(self._cluster_call_count)
+                    if self._cluster_call_count > 0
+                    else 0.0
+                ),
+                "estimate_pose_call_count": int(self._estimate_pose_call_count),
+                "estimate_pose_point_total": int(self._estimate_pose_point_total),
+                "estimate_pose_points_mean": (
+                    float(self._estimate_pose_point_total)
+                    / float(self._estimate_pose_call_count)
+                    if self._estimate_pose_call_count > 0
+                    else 0.0
+                ),
+                "body_level_2d_cache_query_count": int(
+                    self._body_level_2d_cache_query_count
+                ),
+                "body_level_2d_cache_hit_count": int(
+                    self._body_level_2d_cache_hit_count
+                ),
+                "body_level_2d_cache_early_exit_count": int(
+                    self._body_level_2d_cache_early_exit_count
+                ),
+                "body_level_2d_cache_bin_total": int(
+                    self._body_level_2d_cache_bin_total
                 ),
             }
         metrics["passive_stabilization_v2"] = self.get_passive_stabilization_metrics()
@@ -2081,6 +2368,32 @@ class RigidBodyEstimator:
                 for rigid_name, payload in self._last_rigid_hint_visibility_by_rigid.items()
             }
 
+    @staticmethod
+    def _pattern_subset_cache_key(
+        pattern: MarkerPattern,
+        marker_indices: Tuple[int, ...],
+    ) -> Tuple[str, int, Tuple[int, ...]]:
+        return (
+            str(pattern.name),
+            int(pattern.num_markers),
+            tuple(int(index) for index in marker_indices),
+        )
+
+    def _reference_points_for_indices(
+        self,
+        pattern: MarkerPattern,
+        marker_indices: Tuple[int, ...],
+    ) -> np.ndarray:
+        key = self._pattern_subset_cache_key(pattern, marker_indices)
+        cached = self._subset_reference_cache.get(key)
+        if cached is None:
+            cached = np.asarray(
+                [pattern.marker_positions[int(index)] for index in marker_indices],
+                dtype=np.float64,
+            )
+            self._subset_reference_cache[key] = cached
+        return cached
+
     def _record_subset_stage(self, started_ns: int) -> None:
         if self._stage_callback is None:
             return
@@ -2094,6 +2407,46 @@ class RigidBodyEstimator:
         with self._variant_metric_lock:
             self._rigid_candidate_fallback_count += 1
             self._rigid_candidate_fallback_reason_counts[str(reason or "unknown")] += 1
+
+    def _should_skip_generic_search_for_object_gated_continue(
+        self,
+        pattern: MarkerPattern,
+        tracker: RigidBodyTracker,
+        *,
+        object_gating_enforced: bool,
+        hint_marker_count: int,
+        gating_evaluated: bool,
+        gating_camera_count: int,
+        gating_assigned_marker_views: int,
+        gating_markers_with_two_or_more_rays: int,
+        gating_ambiguous_assignment_count: int,
+        gating_marker_margin_assignment_count: int,
+        gating_duplicate_assignment_count: int,
+    ) -> bool:
+        """Return true only when body-level 2D evidence makes generic search redundant."""
+        marker_count = int(pattern.num_markers)
+        if (
+            not bool(self.object_gating_config.skip_generic_search_when_object_gated)
+            or not bool(object_gating_enforced)
+            or tracker.mode != TrackMode.CONTINUE
+            or marker_count < 5
+            or int(tracker.track_count) <= 0
+            or not bool(gating_evaluated)
+            or int(gating_camera_count) < 2
+            or int(hint_marker_count) < max(3, marker_count - 2)
+        ):
+            return False
+        if int(gating_assigned_marker_views) < marker_count * 2:
+            return False
+        if int(gating_markers_with_two_or_more_rays) < marker_count:
+            return False
+        if int(gating_ambiguous_assignment_count) > 0:
+            return False
+        if int(gating_marker_margin_assignment_count) > 0:
+            return False
+        if int(gating_duplicate_assignment_count) > 0:
+            return False
+        return True
 
     def _record_mode_frame(self, rigid_name: str, mode: TrackMode) -> None:
         with self._variant_metric_lock:
@@ -2194,14 +2547,6 @@ class RigidBodyEstimator:
             or evidence_markers > 0
             or active_anchor_evidence > 0
         )
-        if (
-            int(pattern.num_markers) >= 5
-            and has_current_evidence
-            and active_anchor_evidence <= 0
-        ):
-            return False
-        if int(pattern.num_markers) >= 5 and not has_current_evidence:
-            return False
         if (
             int(pattern.num_markers) >= 5
             and
@@ -2319,36 +2664,25 @@ class RigidBodyEstimator:
             rigid_hint_triangulated_points,
             hint_markers=hint_markers,
         )
-        temporal_nbest = self._try_temporal_body_hint_subset_candidate(
-            pattern,
-            tracker,
-            timestamp,
-            rigid_hint_triangulated_points,
-            hint_markers,
-            camera_params,
-            observations_by_camera,
-            coordinate_space=coordinate_space,
-        )
-        if temporal_nbest is not None:
-            return temporal_nbest
         if marker_points is None:
-            anchor_guided = self._try_anchor_guided_body_nbest_candidate(
+            temporal_nbest = self._try_temporal_body_hint_subset_candidate(
                 pattern,
                 tracker,
                 timestamp,
-                points_3d,
+                rigid_hint_triangulated_points,
+                hint_markers,
                 camera_params,
                 observations_by_camera,
                 coordinate_space=coordinate_space,
             )
-            if anchor_guided is not None:
-                return anchor_guided
+            if temporal_nbest is not None:
+                return temporal_nbest
             self._record_rigid_candidate_fallback("insufficient_rigid_hint_points")
             return None
         marker_indices, observed = marker_points
-        reference = np.asarray(
-            [pattern.marker_positions[index] for index in marker_indices],
-            dtype=np.float64,
+        reference = self._reference_points_for_indices(
+            pattern,
+            tuple(int(index) for index in marker_indices),
         )
         try:
             rotation, position, rms_error = KabschEstimator.estimate(reference, observed)
@@ -2398,6 +2732,13 @@ class RigidBodyEstimator:
                 return None
         score = dict(score)
         score["rigid_hint_marker_indices"] = [int(index) for index in marker_indices]
+        score["rigid_hint_marker_points_3d"] = [
+            {
+                "marker_idx": int(index),
+                "point": [float(value) for value in np.asarray(point, dtype=np.float64).reshape(3)],
+            }
+            for index, point in zip(marker_indices, observed)
+        ]
         score["rigid_hint_real_ray_count"] = int(score.get("matched_marker_views", 0))
         allowed, subset_reason = self._mode_subset_allowed(
             pattern,
@@ -2460,7 +2801,7 @@ class RigidBodyEstimator:
                 predicted_markers - point.reshape(1, 3),
                 axis=1,
             )
-            ranked = [int(index) for index in np.argsort(distances)[:3]]
+            ranked = [int(index) for index in np.argsort(distances)[:2]]
             if int(assigned_marker_idx) not in ranked:
                 ranked.append(int(assigned_marker_idx))
             observed_items.append(
@@ -2474,7 +2815,7 @@ class RigidBodyEstimator:
         if len(observed_items) < 3:
             return None
         candidates: List[Dict[str, Any]] = []
-        subset_sizes = [size for size in (5, 4, 3) if size <= len(observed_items)]
+        subset_sizes = [3]
         for observed_subset_indices in (
             combo
             for subset_size in subset_sizes
@@ -2597,169 +2938,6 @@ class RigidBodyEstimator:
         self._record_rigid_candidate_separated()
         return pose, score
 
-    def _try_anchor_guided_body_nbest_candidate(
-        self,
-        pattern: MarkerPattern,
-        tracker: RigidBodyTracker,
-        timestamp: int,
-        points_3d: np.ndarray,
-        camera_params: Optional[Dict[str, Any]],
-        observations_by_camera: Optional[Dict[str, List[Any]]],
-        *,
-        coordinate_space: str,
-    ) -> Optional[Tuple[RigidBodyPose, Dict[str, Any]]]:
-        """Enumerate non-anchor body hypotheses around one decoded physical anchor."""
-        if (
-            not self.anchor_guided_body_nbest_enabled
-            or len(self.patterns) <= 1
-            or int(pattern.num_markers) < 5
-            or int(tracker.track_count) <= 0
-            or not camera_params
-        ):
-            return None
-        prediction = tracker.peek_prediction(timestamp)
-        if not prediction.valid:
-            return None
-        anchor_observations = self._active_anchor_observations_for_pattern(
-            pattern,
-            tracker.latest_object_gating(),
-            camera_params,
-        )
-        if len({str(item["camera_id"]) for item in anchor_observations}) < 2:
-            return None
-        anchor_point = self._triangulate_same_marker_observations(
-            anchor_observations,
-            coordinate_space,
-        )
-        if anchor_point is None:
-            return None
-        generic_points = np.asarray(points_3d, dtype=np.float64).reshape(-1, 3)
-        if len(generic_points) < 3:
-            return None
-
-        anchor_marker_idx = int(anchor_observations[0].get("marker_idx", 0))
-        if anchor_marker_idx < 0 or anchor_marker_idx >= int(pattern.num_markers):
-            return None
-        anchor_position = (
-            anchor_point
-            - prediction.rotation @ pattern.marker_positions[int(anchor_marker_idx)]
-        )
-        predicted_markers = (
-            prediction.rotation @ pattern.marker_positions.T
-        ).T + anchor_position.reshape(1, 3)
-
-        non_anchor_indices = [
-            index for index in range(int(pattern.num_markers)) if index != anchor_marker_idx
-        ]
-        candidate_points_by_marker: Dict[int, List[int]] = {}
-        for marker_idx in non_anchor_indices:
-            distances = np.linalg.norm(
-                generic_points - predicted_markers[int(marker_idx)].reshape(1, 3),
-                axis=1,
-            )
-            ranked = np.argsort(distances)
-            selected: List[int] = []
-            for point_idx in ranked[:3]:
-                point_idx = int(point_idx)
-                if np.linalg.norm(generic_points[point_idx] - anchor_point) <= pattern.marker_diameter * 0.35:
-                    continue
-                selected.append(point_idx)
-                if len(selected) >= 2:
-                    break
-            if selected:
-                candidate_points_by_marker[int(marker_idx)] = selected
-
-        required_non_anchor = 2 if tracker.mode == TrackMode.CONTINUE else 3
-        if len(candidate_points_by_marker) < required_non_anchor:
-            return None
-
-        candidates: List[Dict[str, Any]] = []
-        marker_pool = sorted(candidate_points_by_marker)
-        subset_sizes = [required_non_anchor]
-        if len(marker_pool) >= 4:
-            subset_sizes.append(4)
-        for subset_size in sorted(set(subset_sizes), reverse=True):
-            if subset_size > len(marker_pool):
-                continue
-            for marker_subset in combinations(marker_pool, subset_size):
-                point_options = [candidate_points_by_marker[index] for index in marker_subset]
-                for point_combo in self._small_unique_index_products(point_options):
-                    observed = np.asarray(
-                        [anchor_point]
-                        + [generic_points[int(point_idx)] for point_idx in point_combo],
-                        dtype=np.float64,
-                    )
-                    marker_indices = tuple([anchor_marker_idx] + [int(index) for index in marker_subset])
-                    weights = np.asarray([4.0] + [1.0 for _ in point_combo], dtype=np.float64)
-                    candidate = self._build_subset_candidate(
-                        pattern,
-                        timestamp,
-                        source="anchor_guided_body_nbest",
-                        observed=observed,
-                        marker_indices=marker_indices,
-                        weights=weights,
-                        camera_params=camera_params,
-                        observations_by_camera=observations_by_camera,
-                        coordinate_space=coordinate_space,
-                        generic_pose=RigidBodyPose(
-                            timestamp=int(timestamp),
-                            position=anchor_position.copy(),
-                            rotation=prediction.rotation.copy(),
-                            quaternion=prediction.quaternion.copy(),
-                            rms_error=0.0,
-                            observed_markers=1,
-                            valid=True,
-                        ),
-                        generic_score=_empty_reprojection_score("anchor_prediction_prior"),
-                        observed_indices=tuple(int(index) for index in point_combo),
-                    )
-                    if candidate.get("rankable") and not candidate.get("flip_risk"):
-                        candidates.append(candidate)
-        if not candidates:
-            self._record_rigid_candidate_fallback("anchor_guided_body_nbest_not_rankable")
-            return None
-
-        candidates.sort(
-            key=lambda item: (
-                float(item.get("combined_score", 0.0)),
-                float(item.get("score", 0.0)),
-                int(item.get("observed_markers", 0)),
-                int(item.get("matched_marker_views", 0)),
-                -float(item.get("p95_error_px", 0.0)),
-                -float(item.get("rms_error_m", 0.0)),
-            ),
-            reverse=True,
-        )
-        best = candidates[0]
-        pose = self._pose_from_payload(best.get("pose"), fallback_timestamp=timestamp)
-        if pose is None or not pose.valid:
-            self._record_rigid_candidate_fallback("anchor_guided_body_nbest_invalid_pose")
-            return None
-        score = dict(best.get("score_detail") or _empty_reprojection_score("anchor_guided_body_nbest"))
-        score["rigid_hint_marker_indices"] = [
-            int(index) for index in best.get("marker_indices", [])
-        ]
-        score["rigid_hint_real_ray_count"] = int(score.get("matched_marker_views", 0))
-        score["anchor_guided_body_nbest"] = True
-        score["anchor_marker_idx"] = int(anchor_marker_idx)
-        score["anchor_guided_body_nbest_candidates"] = int(len(candidates))
-        score["anchor_guided_body_nbest_combined_score"] = float(
-            best.get("combined_score", 0.0)
-        )
-        allowed, subset_reason = self._mode_subset_allowed(
-            pattern,
-            tracker.mode,
-            score,
-            prediction_valid=True,
-        )
-        if not allowed:
-            self._record_rigid_candidate_fallback(
-                f"anchor_guided_body_nbest_gate:{subset_reason}"
-            )
-            return None
-        self._record_rigid_candidate_separated()
-        return pose, score
-
     @staticmethod
     def _small_unique_index_products(options: List[List[int]]) -> List[Tuple[int, ...]]:
         products: List[Tuple[int, ...]] = [tuple()]
@@ -2782,6 +2960,10 @@ class RigidBodyEstimator:
         pattern: MarkerPattern,
         points_3d: np.ndarray,
         timestamp: int,
+        camera_params: Optional[Dict[str, Any]] = None,
+        observations_by_camera: Optional[Dict[str, List[Any]]] = None,
+        *,
+        coordinate_space: str = "raw_pixel",
     ) -> Optional[RigidBodyPose]:
         """Bootstrap one rigid from a small mixed point cloud when clustering splits markers."""
         if len(self.patterns) <= 1:
@@ -2815,12 +2997,37 @@ class RigidBodyEstimator:
         ranked_combos.sort(key=lambda item: item[0])
 
         best_pose: Optional[RigidBodyPose] = None
-        best_error = float("inf")
-        for _signature_error, combo in ranked_combos[: self._MULTI_PATTERN_BOOT_TOP_CANDIDATES]:
+        best_rank: Tuple[float, float, float] = (-float("inf"), -float("inf"), -float("inf"))
+        use_2d_boot_rank = bool(
+            int(pattern.num_markers) >= 5 and camera_params and observations_by_camera
+        )
+        max_ranked = (
+            min(len(ranked_combos), self._MULTI_PATTERN_BOOT_TOP_CANDIDATES * 16)
+            if use_2d_boot_rank
+            else self._MULTI_PATTERN_BOOT_TOP_CANDIDATES
+        )
+        for _signature_error, combo in ranked_combos[:max_ranked]:
             pose = self.estimate_pose(points_3d[list(combo)], pattern, timestamp)
-            if pose.valid and pose.rms_error < best_error:
+            if not pose.valid:
+                continue
+            rank = (-float(pose.rms_error), 0.0, 0.0)
+            if use_2d_boot_rank:
+                score = self._score_pose_reprojection(
+                    pose,
+                    pattern,
+                    camera_params,
+                    observations_by_camera,
+                    coordinate_space=coordinate_space,
+                )
+                if score.get("scored", False):
+                    rank = (
+                        float(score.get("score", 0.0)),
+                        float(score.get("matched_marker_views", 0)),
+                        -float(score.get("p95_error_px", 0.0)),
+                    )
+            if rank > best_rank:
                 best_pose = pose
-                best_error = float(pose.rms_error)
+                best_rank = rank
         if best_pose is not None and best_pose.rms_error <= self.max_rms_error_m:
             return best_pose
         three_marker_pose = self._try_multi_pattern_boot_partial_candidate(
@@ -3030,6 +3237,8 @@ class RigidBodyEstimator:
             next_trackers[pattern.name] = tracker
         self.patterns = next_patterns
         self.trackers = next_trackers
+        self._subset_reference_cache.clear()
+        self._subset_ambiguity_cache.clear()
 
     def evaluate_object_conditioned_gating(
         self,
@@ -3105,7 +3314,128 @@ class RigidBodyEstimator:
             )
             tracker.record_object_gating(result)
             results[pattern.name] = result
+        self._resolve_object_gating_assignment_conflicts(results)
+        for pattern in self.patterns:
+            tracker = self.trackers.get(pattern.name)
+            result = results.get(pattern.name)
+            if tracker is not None and isinstance(result, dict):
+                tracker.record_object_gating(result)
         return results
+
+    @staticmethod
+    def _resolve_object_gating_assignment_conflicts(
+        results: Dict[str, Dict[str, Any]],
+    ) -> None:
+        """Keep each camera blob owned by the strongest body-level 2D assignment."""
+        ownership: Dict[Tuple[str, int], List[Tuple[str, Dict[str, Any], Dict[str, Any]]]] = {}
+        for rigid_name, gating in results.items():
+            if not isinstance(gating, dict):
+                continue
+            per_camera = gating.get("per_camera")
+            if not isinstance(per_camera, dict):
+                continue
+            for camera_id, camera_payload in per_camera.items():
+                if not isinstance(camera_payload, dict):
+                    continue
+                for assignment in camera_payload.get("assignments", []) or []:
+                    if not isinstance(assignment, dict):
+                        continue
+                    try:
+                        blob_index = int(assignment["blob_index"])
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    ownership.setdefault((str(camera_id), blob_index), []).append(
+                        (str(rigid_name), camera_payload, assignment)
+                    )
+
+        removed_by_rigid: Dict[str, int] = {}
+        for owners in ownership.values():
+            if len({item[0] for item in owners}) <= 1:
+                continue
+            ranked = sorted(
+                owners,
+                key=lambda item: (
+                    1 if bool(item[2].get("temporal_2d_ownership")) else 0,
+                    0 if bool(item[2].get("body_shifted")) else 1,
+                    float(item[2].get("temporal_2d_confidence", 0.0) or 0.0),
+                    -float(item[2].get("normalized_distance", 0.0) or 0.0),
+                    -float(item[2].get("distance_px", 0.0) or 0.0),
+                    item[0],
+                ),
+                reverse=True,
+            )
+            winner = ranked[0]
+            for loser in ranked[1:]:
+                if loser[0] == winner[0]:
+                    continue
+                loser[2]["_drop_body_conflict"] = True
+                removed_by_rigid[loser[0]] = int(removed_by_rigid.get(loser[0], 0)) + 1
+
+        for rigid_name, gating in results.items():
+            if not isinstance(gating, dict):
+                continue
+            marker_count = int(gating.get("marker_count", 0) or 0)
+            marker_ray_counts = [0 for _ in range(max(0, marker_count))]
+            assigned_marker_views = 0
+            active_anchor_assignment_count = 0
+            ambiguous_assignment_count = 0
+            marker_margin_assignment_count = 0
+            per_camera = gating.get("per_camera")
+            if not isinstance(per_camera, dict):
+                continue
+            for camera_payload in per_camera.values():
+                if not isinstance(camera_payload, dict):
+                    continue
+                kept = [
+                    assignment
+                    for assignment in camera_payload.get("assignments", []) or []
+                    if isinstance(assignment, dict)
+                    and not bool(assignment.pop("_drop_body_conflict", False))
+                ]
+                camera_payload["assignments"] = kept
+                camera_payload["assigned_marker_views"] = int(len(kept))
+                camera_payload["unmatched_marker_views"] = int(
+                    max(0, int(camera_payload.get("projected_marker_count", 0) or 0) - len(kept))
+                )
+                camera_payload["active_anchor_assignment_count"] = int(
+                    sum(1 for assignment in kept if assignment.get("active_anchor"))
+                )
+                camera_payload["ambiguous_assignment_count"] = int(
+                    sum(1 for assignment in kept if assignment.get("ambiguous"))
+                )
+                camera_payload["marker_margin_assignment_count"] = int(
+                    sum(1 for assignment in kept if assignment.get("marker_margin_ambiguous"))
+                )
+                for assignment in kept:
+                    marker_idx = int(assignment.get("marker_idx", -1))
+                    if 0 <= marker_idx < len(marker_ray_counts):
+                        marker_ray_counts[marker_idx] += 1
+                    assigned_marker_views += 1
+                    if assignment.get("active_anchor"):
+                        active_anchor_assignment_count += 1
+                    if assignment.get("ambiguous"):
+                        ambiguous_assignment_count += 1
+                    if assignment.get("marker_margin_ambiguous"):
+                        marker_margin_assignment_count += 1
+            gating["assigned_marker_views"] = int(assigned_marker_views)
+            gating["unmatched_marker_views"] = int(
+                sum(
+                    int(payload.get("unmatched_marker_views", 0) or 0)
+                    for payload in per_camera.values()
+                    if isinstance(payload, dict)
+                )
+            )
+            gating["duplicate_assignment_count"] = int(removed_by_rigid.get(str(rigid_name), 0))
+            gating["ambiguous_assignment_count"] = int(ambiguous_assignment_count)
+            gating["marker_margin_assignment_count"] = int(marker_margin_assignment_count)
+            gating["active_anchor_assignment_count"] = int(active_anchor_assignment_count)
+            gating["markers_with_two_or_more_rays"] = int(
+                sum(1 for count in marker_ray_counts if count >= 2)
+            )
+            gating["markers_with_one_ray"] = int(
+                sum(1 for count in marker_ray_counts if count == 1)
+            )
+            gating["per_marker_ray_count"] = [int(value) for value in marker_ray_counts]
 
     def _evaluate_object_gating_for_pattern(
         self,
@@ -3238,7 +3568,11 @@ class RigidBodyEstimator:
             ).reshape(1, -1)
             effective_gate_px = pixel_gate_px * np.maximum(blob_uncertainty_px, 1.0)
             normalized_distances = distances / np.maximum(blob_uncertainty_px, 1e-6)
-            cost = np.where(distances <= effective_gate_px, normalized_distances, 1e9)
+            cost = np.where(
+                distances <= effective_gate_px,
+                normalized_distances,
+                1e9,
+            )
             for blob_idx, anchor_rigid in enumerate(anchor_rigids):
                 if not anchor_rigid:
                     continue
@@ -3286,6 +3620,163 @@ class RigidBodyEstimator:
                     used_blobs.add(blob_idx)
                     raw_assignments.append((marker_idx, blob_idx, float(distances[row, col])))
                     raw_assignment_costs.append(float(cost[row, col]))
+            temporal_assignment = None
+            if (
+                bool(config.temporal_2d_ownership_recovery)
+                and len(self.patterns) > 1
+                and int(pattern.num_markers) >= 5
+                and int(tracker.track_count) > 0
+                and int(len(raw_assignments)) < max(3, marker_count - 1)
+            ):
+                temporal_assignment = self._temporal_2d_ownership_assignment(
+                    pattern,
+                    timestamp,
+                    str(camera_id),
+                    camera,
+                    coordinate_space,
+                    bool(config.temporal_2d_motion_prediction),
+                    projected_uvs,
+                    blob_uvs,
+                    blob_uncertainty_px.reshape(-1),
+                    raw_assignments,
+                )
+                if temporal_assignment is not None:
+                    raw_assignments = list(temporal_assignment["assignments"])
+                    raw_assignment_costs = list(temporal_assignment["costs"])
+            body_shifted = None
+            shifted_used = False
+            cached_offsets: List[np.ndarray] = []
+            cache_key = (str(pattern.name), str(camera_id))
+            cache_hit = False
+            cache_allowed = bool(
+                config.body_level_2d_candidate_cache
+                and tracker.mode == TrackMode.REACQUIRE
+            )
+            if cache_allowed:
+                self._body_level_2d_cache_query_count += 1
+                cached = self._body_level_2d_candidate_cache.get(cache_key)
+                if isinstance(cached, dict):
+                    age_us = max(0, int(timestamp) - int(cached.get("timestamp", 0) or 0))
+                    raw_cached_offsets = cached.get("offsets_px")
+                    if not isinstance(raw_cached_offsets, list):
+                        raw_cached_offsets = [cached.get("offset_px", [0.0, 0.0])]
+                    for offset_payload in raw_cached_offsets[: max(1, int(config.body_level_2d_cache_max_bins))]:
+                        try:
+                            cached_offset = np.asarray(
+                                offset_payload,
+                                dtype=np.float64,
+                            ).reshape(2)
+                        except (TypeError, ValueError):
+                            continue
+                        if age_us <= 250_000 and np.isfinite(cached_offset).all():
+                            cached_offsets.append(cached_offset)
+                    if cached_offsets:
+                        cache_hit = True
+                        self._body_level_2d_cache_hit_count += 1
+                        self._body_level_2d_cache_bin_total += int(len(cached_offsets))
+            if (
+                int(pattern.num_markers) >= 5
+                and bool(config.body_level_2d_recovery)
+                and int(tracker.track_count) > 0
+                and int(len(raw_assignments))
+                <= max(0, int(config.body_level_2d_trigger_max_assignments))
+            ):
+                body_shifted = self._translated_body_assignment(
+                    projected_uvs,
+                    blob_uvs,
+                    blob_uncertainty_px.reshape(-1),
+                    pixel_gate_px=float(pixel_gate_px),
+                    max_offsets=int(config.body_level_2d_max_offsets),
+                    nearest_per_marker=int(config.body_level_2d_nearest_per_marker),
+                    assignment_nearest_per_marker=int(
+                        config.body_level_2d_assignment_nearest_per_marker
+                    ),
+                    max_distance_scale=float(config.body_level_2d_max_distance_scale),
+                    marker_count=marker_count,
+                    seed_offsets=cached_offsets,
+                    early_accept_coverage=(
+                        max(4, marker_count - 1)
+                        if bool(config.body_level_2d_cache_early_exit)
+                        else 0
+                    ),
+                )
+                if (
+                    body_shifted is not None
+                    and len(body_shifted.get("assignments", [])) >= max(3, len(raw_assignments))
+                    and float(body_shifted.get("margin", 0.0) or 0.0)
+                    >= float(config.body_level_2d_min_margin)
+                ):
+                    raw_assignments = list(body_shifted["assignments"])
+                    raw_assignment_costs = list(body_shifted["costs"])
+                    shifted_used = True
+                    if body_shifted.get("early_accepted"):
+                        self._body_level_2d_cache_early_exit_count += 1
+                    if bool(config.body_level_2d_candidate_cache):
+                        offset_bins: List[List[float]] = []
+                        for item in body_shifted.get("nbest", []) or []:
+                            offset_values = item.get("offset_px") if isinstance(item, dict) else None
+                            if not isinstance(offset_values, list) or len(offset_values) < 2:
+                                continue
+                            offset_bins.append([float(offset_values[0]), float(offset_values[1])])
+                            if len(offset_bins) >= max(1, int(config.body_level_2d_cache_max_bins)):
+                                break
+                        if not offset_bins:
+                            offset_bins.append(
+                                [
+                                    float(value)
+                                    for value in body_shifted.get("offset_px", [0.0, 0.0])[:2]
+                                ]
+                            )
+                        self._body_level_2d_candidate_cache[cache_key] = {
+                            "timestamp": int(timestamp),
+                            "offset_px": list(offset_bins[0]),
+                            "offsets_px": offset_bins,
+                        }
+            if (
+                bool(config.body_level_2d_candidate_cache)
+                and not shifted_used
+                and len(raw_assignments) >= max(3, marker_count - 1)
+            ):
+                offsets: List[np.ndarray] = []
+                for assignment in raw_assignments:
+                    marker_idx = int(assignment[0])
+                    blob_idx = int(assignment[1])
+                    if (
+                        0 <= marker_idx < len(projected_uvs)
+                        and 0 <= blob_idx < len(blob_uvs)
+                    ):
+                        offsets.append(
+                            np.asarray(blob_uvs[blob_idx] - projected_uvs[marker_idx], dtype=np.float64)
+                        )
+                if offsets:
+                    offset_array = np.asarray(offsets, dtype=np.float64).reshape(-1, 2)
+                    median_offset = np.median(offset_array, axis=0)
+                    if np.isfinite(median_offset).all():
+                        offset_bins = [[float(value) for value in median_offset.reshape(2)]]
+                        if raw_assignment_costs:
+                            ranked_indices = np.argsort(
+                                np.asarray(raw_assignment_costs, dtype=np.float64)
+                            )
+                        else:
+                            ranked_indices = np.arange(len(offset_array))
+                        for offset_index in ranked_indices:
+                            if len(offset_bins) >= max(1, int(config.body_level_2d_cache_max_bins)):
+                                break
+                            offset = offset_array[int(offset_index)].reshape(2)
+                            if not np.isfinite(offset).all():
+                                continue
+                            key = (round(float(offset[0]), 2), round(float(offset[1]), 2))
+                            if any(
+                                (round(float(existing[0]), 2), round(float(existing[1]), 2)) == key
+                                for existing in offset_bins
+                            ):
+                                continue
+                            offset_bins.append([float(offset[0]), float(offset[1])])
+                        self._body_level_2d_candidate_cache[cache_key] = {
+                            "timestamp": int(timestamp),
+                            "offset_px": list(offset_bins[0]),
+                            "offsets_px": offset_bins,
+                        }
             best_assignment_cost = float(sum(raw_assignment_costs))
             second_assignment_cost = float("inf")
             # The exact second-best body assignment required one Hungarian
@@ -3385,7 +3876,6 @@ class RigidBodyEstimator:
                             other_assignment_idx = assigned_by_blob.get(int(other_blob_value))
                             if other_assignment_idx is not None:
                                 ambiguous_indices.add(other_assignment_idx)
-
             assignments: List[Dict[str, Any]] = []
             for assignment_idx, assignment in enumerate(raw_assignments):
                 assignment_is_ambiguous = assignment_idx in ambiguous_indices
@@ -3435,6 +3925,21 @@ class RigidBodyEstimator:
                             if assignment_anchor_marker is not None
                             else None
                         ),
+                        "body_shifted": bool(shifted_used),
+                        "temporal_2d_ownership": bool(
+                            temporal_assignment is not None
+                            and assignment_idx < len(raw_assignments)
+                            and len(raw_assignments[assignment_idx]) >= 4
+                        ),
+                        "temporal_2d_confidence": float(
+                            raw_assignments[assignment_idx][3]
+                            if (
+                                temporal_assignment is not None
+                                and assignment_idx < len(raw_assignments)
+                                and len(raw_assignments[assignment_idx]) >= 4
+                            )
+                            else 0.0
+                        ),
                     }
                 )
 
@@ -3460,6 +3965,46 @@ class RigidBodyEstimator:
                 ),
                 "active_anchor_assignment_count": int(
                     sum(1 for assignment in assignments if assignment.get("active_anchor"))
+                ),
+                "body_shifted_assignment": bool(shifted_used),
+                "body_level_2d_cache_hit": bool(cache_hit),
+                "body_level_2d_cache_early_exit": bool(
+                    isinstance(body_shifted, dict)
+                    and bool(body_shifted.get("early_accepted", False))
+                ),
+                "body_shifted_offset_px": (
+                    [float(value) for value in body_shifted.get("offset_px", [])]
+                    if shifted_used and isinstance(body_shifted, dict)
+                    else []
+                ),
+                "body_shifted_mean_normalized_cost": (
+                    float(body_shifted.get("mean_normalized_cost", 0.0))
+                    if shifted_used and isinstance(body_shifted, dict)
+                    else 0.0
+                ),
+                "body_level_2d_nbest_candidate_count": (
+                    int(body_shifted.get("candidate_count", 0))
+                    if isinstance(body_shifted, dict)
+                    else 0
+                ),
+                "body_level_2d_nbest_margin": (
+                    float(body_shifted.get("margin", 0.0))
+                    if isinstance(body_shifted, dict)
+                    else 0.0
+                ),
+                "body_level_2d_nbest": (
+                    body_shifted.get("nbest", [])
+                    if (
+                        bool(config.body_level_2d_keep_nbest_diagnostics)
+                        and isinstance(body_shifted, dict)
+                    )
+                    else []
+                ),
+                "temporal_2d_ownership_assignment": bool(temporal_assignment is not None),
+                "temporal_2d_ownership_mean_cost": (
+                    float(temporal_assignment.get("mean_normalized_cost", 0.0))
+                    if isinstance(temporal_assignment, dict)
+                    else 0.0
                 ),
                 "assignments": assignments,
             }
@@ -3509,6 +4054,382 @@ class RigidBodyEstimator:
             "per_marker_ray_count": [int(value) for value in marker_ray_counts],
             "per_camera": per_camera,
         }
+
+    def _temporal_2d_ownership_assignment(
+        self,
+        pattern: MarkerPattern,
+        timestamp: int,
+        camera_id: str,
+        camera: Any,
+        coordinate_space: str,
+        use_motion_prediction: bool,
+        projected_uvs: np.ndarray,
+        blob_uvs: np.ndarray,
+        blob_uncertainties: np.ndarray,
+        existing_assignments: List[Tuple[int, int, float]],
+    ) -> Optional[Dict[str, Any]]:
+        """Recover marker-to-blob candidates from short-lived confirmed 3D ownership."""
+        views_by_marker = self._last_confirmed_marker_views_by_rigid.get(pattern.name, {})
+        if not views_by_marker:
+            return None
+        projected = np.asarray(projected_uvs, dtype=np.float64).reshape(-1, 2)
+        blobs = np.asarray(blob_uvs, dtype=np.float64).reshape(-1, 2)
+        uncertainties = np.asarray(blob_uncertainties, dtype=np.float64).reshape(-1)
+        if len(projected) <= 0 or len(blobs) <= 0 or not np.isfinite(projected).all():
+            return None
+        if len(uncertainties) != len(blobs):
+            uncertainties = np.ones(len(blobs), dtype=np.float64)
+        uncertainties = np.maximum(uncertainties, 1e-6)
+        used_markers = {int(item[0]) for item in existing_assignments}
+        used_blobs = {int(item[1]) for item in existing_assignments}
+        marker_rows: List[Dict[str, Any]] = []
+        max_age_us = 250_000
+        body_span_px = max(1.0, float(np.linalg.norm(np.ptp(projected, axis=0))))
+        search_radius_px = max(18.0, body_span_px * 0.85)
+        predicted_points = (
+            self._predicted_marker_points_from_history(pattern.name, timestamp)
+            if use_motion_prediction
+            else {}
+        )
+        for marker_idx, views_by_camera in sorted(views_by_marker.items()):
+            marker_idx = int(marker_idx)
+            if marker_idx in used_markers or marker_idx < 0 or marker_idx >= len(projected):
+                continue
+            if not isinstance(views_by_camera, dict):
+                continue
+            view = views_by_camera.get(str(camera_id))
+            if not isinstance(view, dict):
+                continue
+            age_us = max(0, int(timestamp) - int(view.get("timestamp", 0) or 0))
+            if age_us > max_age_us:
+                continue
+            try:
+                previous_uv = np.asarray(view.get("observed_uv"), dtype=np.float64).reshape(2)
+            except (TypeError, ValueError):
+                continue
+            if not np.isfinite(previous_uv).all():
+                continue
+            motion_uv = None
+            predicted_point = predicted_points.get(marker_idx)
+            if predicted_point is not None:
+                motion_uv = self._project_world_point_to_camera(
+                    predicted_point,
+                    camera,
+                    coordinate_space,
+                )
+                if motion_uv is not None and not np.isfinite(motion_uv).all():
+                    motion_uv = None
+            age_confidence = max(0.0, 1.0 - float(age_us) / float(max_age_us))
+            marker_rows.append(
+                {
+                    "marker_idx": marker_idx,
+                    "previous_uv": previous_uv,
+                    "projected_uv": projected[marker_idx],
+                    "motion_uv": motion_uv,
+                    "confidence": float(age_confidence),
+                }
+            )
+        if not marker_rows:
+            return None
+
+        cost = np.zeros((len(marker_rows), len(blobs)), dtype=np.float64)
+        distance_px = np.zeros_like(cost)
+        confidence = np.zeros_like(cost)
+        for row, marker in enumerate(marker_rows):
+            projected_delta = np.linalg.norm(
+                blobs - marker["projected_uv"].reshape(1, 2),
+                axis=1,
+            )
+            previous_delta = np.linalg.norm(
+                blobs - marker["previous_uv"].reshape(1, 2),
+                axis=1,
+            )
+            combined_delta = np.minimum(projected_delta, previous_delta + 0.25 * body_span_px)
+            motion_uv = marker.get("motion_uv")
+            if motion_uv is not None:
+                motion_to_pose = float(
+                    np.linalg.norm(
+                        np.asarray(motion_uv, dtype=np.float64).reshape(2)
+                        - marker["projected_uv"].reshape(2)
+                    )
+                )
+                motion_delta = np.linalg.norm(
+                    blobs - np.asarray(motion_uv, dtype=np.float64).reshape(1, 2),
+                    axis=1,
+                )
+                combined_delta = np.minimum(
+                    combined_delta,
+                    motion_delta + 0.50 * motion_to_pose,
+                )
+            distance_px[row, :] = combined_delta
+            confidence[row, :] = float(marker["confidence"]) / (
+                1.0 + combined_delta / search_radius_px
+            )
+            cost[row, :] = combined_delta / uncertainties + (1.0 - float(marker["confidence"])) * 2.0
+        for blob_index in used_blobs:
+            if 0 <= blob_index < cost.shape[1]:
+                cost[:, blob_index] = 1e9
+        row_ind, col_ind = linear_sum_assignment(cost)
+        assignments: List[Tuple[int, ...]] = list(existing_assignments)
+        costs: List[float] = []
+        added = 0
+        for row, col in zip(row_ind, col_ind):
+            if float(cost[row, col]) >= 1e9:
+                continue
+            if float(distance_px[row, col]) > search_radius_px:
+                continue
+            marker_idx = int(marker_rows[int(row)]["marker_idx"])
+            assignments.append(
+                (
+                    marker_idx,
+                    int(col),
+                    float(distance_px[row, col]),
+                    float(confidence[row, col]),
+                )
+            )
+            costs.append(float(cost[row, col]))
+            added += 1
+        if added <= 0:
+            return None
+        return {
+            "assignments": assignments,
+            "costs": [0.0 for _ in existing_assignments] + costs,
+            "mean_normalized_cost": float(
+                np.mean(np.asarray(costs, dtype=np.float64)) if costs else 0.0
+            ),
+        }
+
+    def _predicted_marker_points_from_history(
+        self,
+        rigid_name: str,
+        timestamp: int,
+    ) -> Dict[int, np.ndarray]:
+        history_by_marker = self._last_confirmed_marker_points_by_rigid.get(str(rigid_name), {})
+        predictions: Dict[int, np.ndarray] = {}
+        max_age_us = 250_000
+        max_dt_s = 0.25
+        max_speed_m_s = 8.0
+        for marker_idx, history in history_by_marker.items():
+            if not isinstance(history, list) or not history:
+                continue
+            latest = history[-1]
+            try:
+                latest_ts = int(latest.get("timestamp", 0) or 0)
+                latest_point = np.asarray(latest.get("point"), dtype=np.float64).reshape(3)
+            except (TypeError, ValueError):
+                continue
+            age_us = max(0, int(timestamp) - latest_ts)
+            if age_us > max_age_us or not np.isfinite(latest_point).all():
+                continue
+            predicted = latest_point.copy()
+            if len(history) >= 2:
+                previous = history[-2]
+                try:
+                    previous_ts = int(previous.get("timestamp", 0) or 0)
+                    previous_point = np.asarray(previous.get("point"), dtype=np.float64).reshape(3)
+                except (TypeError, ValueError):
+                    previous_ts = 0
+                    previous_point = np.zeros(3, dtype=np.float64)
+                dt_s = float(latest_ts - previous_ts) / 1_000_000.0
+                if (
+                    0.0 < dt_s <= max_dt_s
+                    and np.isfinite(previous_point).all()
+                ):
+                    velocity = (latest_point - previous_point) / dt_s
+                    speed = float(np.linalg.norm(velocity))
+                    if np.isfinite(speed) and speed > max_speed_m_s:
+                        velocity *= max_speed_m_s / max(speed, 1e-9)
+                    predicted = latest_point + velocity * min(float(age_us) / 1_000_000.0, max_dt_s)
+            if np.isfinite(predicted).all():
+                predictions[int(marker_idx)] = predicted
+        return predictions
+
+    @staticmethod
+    def _translated_body_assignment(
+        projected_uvs: np.ndarray,
+        blob_uvs: np.ndarray,
+        blob_uncertainties: np.ndarray,
+        *,
+        pixel_gate_px: float,
+        max_offsets: int,
+        nearest_per_marker: int,
+        assignment_nearest_per_marker: int,
+        max_distance_scale: float,
+        marker_count: int,
+        seed_offsets: Optional[List[np.ndarray]] = None,
+        early_accept_coverage: int = 0,
+    ) -> Optional[Dict[str, Any]]:
+        """Rank whole-body 2D marker assignments after candidate translations.
+
+        This is a passive body-level evidence path: when the absolute predicted
+        position has drifted, keep the predicted orientation/shape and let the
+        2D body constellation choose among several translated hypotheses before
+        triangulation.
+        """
+        projected = np.asarray(projected_uvs, dtype=np.float64).reshape(-1, 2)
+        blobs = np.asarray(blob_uvs, dtype=np.float64).reshape(-1, 2)
+        uncertainties = np.asarray(blob_uncertainties, dtype=np.float64).reshape(-1)
+        if (
+            len(projected) <= 0
+            or len(blobs) < 2
+            or int(marker_count) <= 0
+            or not np.isfinite(projected).all()
+            or not np.isfinite(blobs).all()
+        ):
+            return None
+        if len(uncertainties) != len(blobs):
+            uncertainties = np.ones(len(blobs), dtype=np.float64)
+        uncertainties = np.maximum(uncertainties, 1e-6)
+        base_deltas = projected[:, None, :] - blobs[None, :, :]
+        base_distances = np.sqrt(np.sum(base_deltas * base_deltas, axis=2))
+        base_normalized = base_distances / uncertainties.reshape(1, -1)
+
+        offset_items: List[Tuple[float, str, np.ndarray]] = []
+        for seed_offset in seed_offsets or []:
+            try:
+                seed = np.asarray(seed_offset, dtype=np.float64).reshape(2)
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(seed).all():
+                offset_items.append((-1.0, "cache", seed))
+        offset_items.append((0.0, "zero", np.zeros(2, dtype=np.float64)))
+        nearest_per_marker = min(max(1, int(nearest_per_marker)), len(blobs))
+        for marker_idx in range(min(int(marker_count), len(projected))):
+            ranked_blob_indices = np.argsort(base_normalized[marker_idx])[:nearest_per_marker]
+            for blob_idx in ranked_blob_indices:
+                offset_items.append(
+                    (
+                        float(base_normalized[marker_idx, int(blob_idx)]),
+                        "nearest",
+                        blobs[int(blob_idx)] - projected[marker_idx],
+                    )
+                )
+        offset_items.sort(key=lambda item: item[0])
+        candidate_offsets: List[Tuple[str, np.ndarray]] = []
+        seen_offsets: set[Tuple[int, int]] = set()
+        for _cost, source, offset in offset_items:
+            key = (int(round(float(offset[0]) * 4.0)), int(round(float(offset[1]) * 4.0)))
+            if key in seen_offsets:
+                continue
+            seen_offsets.add(key)
+            candidate_offsets.append((source, np.asarray(offset, dtype=np.float64).reshape(2)))
+            if len(candidate_offsets) >= max(1, int(max_offsets)):
+                break
+        if not candidate_offsets:
+            return None
+
+        scale = max(
+            1.0,
+            float(np.linalg.norm(np.ptp(projected, axis=0))),
+        )
+        max_distance_px = max(float(pixel_gate_px), float(max_distance_scale) * scale)
+        candidates: List[Dict[str, Any]] = []
+        for offset_source, offset in candidate_offsets:
+            shifted = projected + offset.reshape(1, 2)
+            deltas = shifted[:, None, :] - blobs[None, :, :]
+            distances = np.sqrt(np.sum(deltas * deltas, axis=2))
+            normalized = distances / uncertainties.reshape(1, -1)
+            row_count = normalized.shape[0]
+            candidate_cols: set[int] = set()
+            per_row_limit = min(
+                max(1, int(assignment_nearest_per_marker)),
+                normalized.shape[1],
+            )
+            for row in range(row_count):
+                candidate_cols.update(
+                    int(col) for col in np.argsort(normalized[row])[:per_row_limit]
+                )
+            if len(candidate_cols) < min(3, int(marker_count)):
+                continue
+            col_lookup = np.asarray(sorted(candidate_cols), dtype=np.int64)
+            reduced_normalized = normalized[:, col_lookup]
+            row_ind, reduced_col_ind = linear_sum_assignment(reduced_normalized)
+            col_ind = col_lookup[reduced_col_ind]
+            assignments: List[Tuple[int, int, float]] = []
+            costs: List[float] = []
+            for row, col in zip(row_ind, col_ind):
+                if float(distances[row, col]) > max_distance_px * float(uncertainties[col]):
+                    continue
+                assignments.append((int(row), int(col), float(distances[row, col])))
+                costs.append(float(normalized[row, col]))
+            if len(assignments) < min(3, int(marker_count)):
+                continue
+            mean_cost = float(np.mean(np.asarray(costs, dtype=np.float64)))
+            p95_cost = float(np.percentile(np.asarray(costs, dtype=np.float64), 95))
+            offset_norm = float(np.linalg.norm(offset) / scale)
+            coverage = int(len({int(item[0]) for item in assignments}))
+            score = (
+                2.0 * float(coverage)
+                - mean_cost
+                - 0.25 * p95_cost
+                - 0.15 * offset_norm
+            )
+            candidates.append(
+                {
+                    "score": float(score),
+                    "coverage": int(coverage),
+                    "offset_source": str(offset_source),
+                    "assignments": assignments,
+                    "costs": costs,
+                    "offset_px": [float(offset[0]), float(offset[1])],
+                    "offset_norm": float(offset_norm),
+                    "mean_normalized_cost": mean_cost,
+                    "p95_normalized_cost": p95_cost,
+                }
+            )
+            if (
+                str(offset_source) == "cache"
+                and int(early_accept_coverage) > 0
+                and int(coverage) >= int(early_accept_coverage)
+            ):
+                best = dict(candidates[-1])
+                best["candidate_count"] = int(len(candidates))
+                best["margin"] = float(best.get("score", 0.0))
+                best["early_accepted"] = True
+                best["nbest"] = [
+                    {
+                        "score": float(best.get("score", 0.0)),
+                        "coverage": int(best.get("coverage", 0)),
+                        "offset_px": [float(value) for value in best.get("offset_px", [])],
+                        "offset_source": str(best.get("offset_source", "")),
+                        "mean_normalized_cost": float(
+                            best.get("mean_normalized_cost", 0.0)
+                        ),
+                        "p95_normalized_cost": float(best.get("p95_normalized_cost", 0.0)),
+                    }
+                ]
+                return best
+        if not candidates:
+            return None
+        candidates.sort(
+            key=lambda item: (
+                int(item.get("coverage", 0)),
+                float(item.get("score", 0.0)),
+                -float(item.get("mean_normalized_cost", 0.0)),
+                -float(item.get("offset_norm", 0.0)),
+            ),
+            reverse=True,
+        )
+        best = dict(candidates[0])
+        second = candidates[1] if len(candidates) > 1 else {}
+        best["candidate_count"] = int(len(candidates))
+        best["margin"] = float(
+            float(best.get("score", 0.0))
+            - float(second.get("score", 0.0) if second else 0.0)
+        )
+        best["nbest"] = [
+            {
+                "score": float(item.get("score", 0.0)),
+                "coverage": int(item.get("coverage", 0)),
+                "offset_px": [float(value) for value in item.get("offset_px", [])],
+                "offset_source": str(item.get("offset_source", "")),
+                "mean_normalized_cost": float(item.get("mean_normalized_cost", 0.0)),
+                "p95_normalized_cost": float(item.get("p95_normalized_cost", 0.0)),
+            }
+            for item in candidates[:5]
+        ]
+        best["early_accepted"] = False
+        return best
 
     def _object_gating_active_for_tracker(
         self,
@@ -3561,9 +4482,11 @@ class RigidBodyEstimator:
             pattern: MarkerPattern for this body
             timestamp: Frame timestamp
             
-        Returns:
+            Returns:
             RigidBodyPose estimate
         """
+        self._estimate_pose_call_count += 1
+        self._estimate_pose_point_total += int(len(points_3d))
         if len(points_3d) < 3:
             return RigidBodyPose(
                 timestamp=timestamp,
@@ -3662,6 +4585,91 @@ class RigidBodyEstimator:
                 views.add((str(item.get("camera_id", "")), blob_index))
         return views
 
+    def _record_confirmed_2d_ownership(
+        self,
+        candidate: _PoseCandidate,
+        timestamp: int,
+    ) -> None:
+        score = candidate.score if isinstance(candidate.score, dict) else {}
+        if (
+            not candidate.pose.valid
+            or candidate.invalid_reason
+            or candidate.source != "rigid_hint"
+            or not score.get("rigid_hint_marker_indices")
+            or candidate.source
+            in {
+                "prediction",
+                "prediction_hold",
+                "prediction_hold_2d_constrained",
+                "pose_continuity_guard",
+                "position_continuity_guard",
+            }
+        ):
+            return
+        if not score.get("scored", False):
+            return
+        if float(score.get("p95_error_px", 0.0) or 0.0) > self.reprojection_match_gate_px:
+            return
+        matched = score.get("matched_observations", [])
+        if not isinstance(matched, list):
+            return
+        rigid_bucket = self._last_confirmed_marker_views_by_rigid.setdefault(
+            candidate.rigid_name,
+            {},
+        )
+        point_bucket = self._last_confirmed_marker_points_by_rigid.setdefault(
+            candidate.rigid_name,
+            {},
+        )
+        for payload in score.get("rigid_hint_marker_points_3d", []) or []:
+            if not isinstance(payload, dict):
+                continue
+            try:
+                marker_idx = int(payload.get("marker_idx", -1))
+                point = np.asarray(payload.get("point"), dtype=np.float64).reshape(3)
+            except (TypeError, ValueError):
+                continue
+            if (
+                marker_idx < 0
+                or marker_idx >= int(candidate.pattern.num_markers)
+                or not np.isfinite(point).all()
+            ):
+                continue
+            history = point_bucket.setdefault(marker_idx, [])
+            if not history or int(history[-1].get("timestamp", -1)) != int(timestamp):
+                history.append(
+                    {
+                        "timestamp": int(timestamp),
+                        "point": [float(value) for value in point],
+                    }
+                )
+                del history[:-2]
+        for item in matched:
+            if not isinstance(item, dict):
+                continue
+            try:
+                marker_idx = int(item.get("marker_idx", -1))
+                blob_index = int(item.get("blob_index", -1))
+                observed_uv = np.asarray(item.get("observed_uv"), dtype=np.float64).reshape(2)
+            except (TypeError, ValueError):
+                continue
+            if (
+                marker_idx < 0
+                or marker_idx >= int(candidate.pattern.num_markers)
+                or blob_index < 0
+                or not np.isfinite(observed_uv).all()
+            ):
+                continue
+            camera_id = str(item.get("camera_id", ""))
+            if not camera_id:
+                continue
+            rigid_bucket.setdefault(marker_idx, {})[camera_id] = {
+                "timestamp": int(timestamp),
+                "blob_index": int(blob_index),
+                "observed_uv": [float(value) for value in observed_uv],
+                "source": str(candidate.source or ""),
+            }
+
     def _candidate_rank_score(
         self,
         *,
@@ -3690,7 +4698,9 @@ class RigidBodyEstimator:
         if prediction.valid:
             position_delta = float(np.linalg.norm(pose.position - prediction.position))
             rotation_delta = _quaternion_angle_deg(prediction.quaternion, pose.quaternion)
-            temporal_penalty = min(0.25, position_delta / 1.0 + rotation_delta / 720.0)
+            rotation_cost = (rotation_delta / 45.0) ** 2
+            position_cost = position_delta / 0.20
+            temporal_penalty = min(1.0, 0.18 * rotation_cost + 0.12 * position_cost)
         return float(score_value + 0.01 * matched + source_bonus - 0.01 * p95 - temporal_penalty)
 
     def _resolve_frame_local_candidate_ownership(self, candidates: List[_PoseCandidate]) -> None:
@@ -3898,6 +4908,7 @@ class RigidBodyEstimator:
             },
             pose_source=candidate.source,
         )
+        self._record_confirmed_2d_ownership(candidate, timestamp)
         return candidate.pose
 
     @staticmethod
@@ -3913,16 +4924,30 @@ class RigidBodyEstimator:
         tracker = candidate.tracker
         if int(tracker.track_count) <= 0:
             return None
-        if int(candidate.pattern.num_markers) >= 5:
+        if (
+            int(candidate.pattern.num_markers) >= 5
+            and int(tracker.prediction_hold_frames)
+            >= RigidBodyEstimator._PARTIAL_OCCLUSION_HOLD_MAX_FRAMES
+        ):
             return None
         prediction = tracker.peek_prediction(timestamp)
         if not prediction.valid:
             return None
+        with tracker._lock:
+            held_quaternion = tracker._quaternion.copy()
+        held_rotation = Rotation.from_quat(
+            [
+                held_quaternion[1],
+                held_quaternion[2],
+                held_quaternion[3],
+                held_quaternion[0],
+            ]
+        ).as_matrix()
         return RigidBodyPose(
             timestamp=int(timestamp),
             position=prediction.position.copy(),
-            rotation=prediction.rotation.copy(),
-            quaternion=prediction.quaternion.copy(),
+            rotation=held_rotation,
+            quaternion=held_quaternion,
             rms_error=0.0,
             observed_markers=0,
             valid=True,
@@ -4097,8 +5122,6 @@ class RigidBodyEstimator:
                 if marker_idx < 0 or marker_idx >= pattern.num_markers:
                     continue
                 if not np.isfinite(observed_uv).all():
-                    continue
-                if not bool(assignment.get("active_anchor")):
                     continue
                 observations.append(
                     {
@@ -4356,6 +5379,13 @@ class RigidBodyEstimator:
             nonlocal clusters
             if clusters is None:
                 clusters = self.clusterer.cluster(points_3d)
+                self._cluster_call_count += 1
+                self._cluster_input_point_total += int(len(points_3d))
+                self._cluster_output_count_total += int(len(clusters))
+                self._cluster_output_count_max = max(
+                    int(self._cluster_output_count_max),
+                    int(len(clusters)),
+                )
                 if len(self.patterns) == 1 and len(points_3d) >= 3:
                     min_points = max(3, self.patterns[0].num_markers - 1)
                     if not any(len(cluster) >= min_points for cluster in clusters):
@@ -4432,6 +5462,18 @@ class RigidBodyEstimator:
                 self._record_rigid_candidate_fallback(prediction_reason)
 
             gating = tracker.latest_object_gating()
+            (
+                gating_evaluated,
+                _gating_marker_count,
+                gating_camera_count,
+                gating_assigned_marker_views,
+            ) = tracker.latest_object_gating_counts()
+            (
+                gating_markers_with_two_or_more_rays,
+                gating_ambiguous_assignment_count,
+                gating_marker_margin_assignment_count,
+                gating_duplicate_assignment_count,
+            ) = tracker.latest_object_gating_skip_counts()
             if (
                 not skip_unseen_tracked_generic
                 and object_gating_enforced
@@ -4442,6 +5484,32 @@ class RigidBodyEstimator:
             ):
                 skip_unseen_tracked_generic = True
                 prediction_reason = "anchor_only_no_6dof_recovery"
+                self._record_rigid_candidate_fallback(prediction_reason)
+            if (
+                not skip_unseen_tracked_generic
+                and best_pose is None
+                and self._should_skip_generic_search_for_object_gated_continue(
+                    pattern,
+                    tracker,
+                    object_gating_enforced=object_gating_enforced,
+                    hint_marker_count=len(hint_markers_by_rigid.get(pattern.name, {})),
+                    gating_evaluated=gating_evaluated,
+                    gating_camera_count=gating_camera_count,
+                    gating_assigned_marker_views=gating_assigned_marker_views,
+                    gating_markers_with_two_or_more_rays=(
+                        gating_markers_with_two_or_more_rays
+                    ),
+                    gating_ambiguous_assignment_count=(
+                        gating_ambiguous_assignment_count
+                    ),
+                    gating_marker_margin_assignment_count=(
+                        gating_marker_margin_assignment_count
+                    ),
+                    gating_duplicate_assignment_count=gating_duplicate_assignment_count,
+                )
+            ):
+                skip_unseen_tracked_generic = True
+                prediction_reason = "object_gated_continue_skip_generic"
                 self._record_rigid_candidate_fallback(prediction_reason)
 
             if (
@@ -4480,6 +5548,9 @@ class RigidBodyEstimator:
                     pattern,
                     points_3d,
                     timestamp,
+                    camera_params,
+                    observations_by_camera,
+                    coordinate_space=coordinate_space,
                 )
                 if boot_pose is not None:
                     best_pose = boot_pose
@@ -4702,6 +5773,7 @@ class RigidBodyEstimator:
                 partial_hold_reasons = {
                     "tracked_rigid_partial_marker_hold_prediction",
                     "tracked_rigid_unseen_hold_prediction",
+                    "object_gated_continue_skip_generic",
                 }
                 if prediction_reason in partial_hold_reasons and prediction.valid:
                     predicted = RigidBodyPose(
@@ -4998,9 +6070,11 @@ class RigidBodyEstimator:
             return reasons
         if int(score.get("matched_marker_views", 0) or 0) < min_views:
             reasons.append("insufficient_boot_matched_views")
+        marker_coverage = len(self._score_marker_indices(score))
         if (
             int(score.get("missing_marker_views", 0) or 0)
             > self._MULTI_PATTERN_BOOT_MAX_MISSING_MARKER_VIEWS
+            and marker_coverage < int(pattern.num_markers)
         ):
             reasons.append("too_many_boot_missing_marker_views")
         if (
@@ -5576,9 +6650,9 @@ class RigidBodyEstimator:
             score = dict(generic_score or _empty_reprojection_score())
         else:
             observed = np.asarray([by_marker[index]["point"] for index in marker_indices], dtype=np.float64)
-            reference = np.asarray(
-                [pattern.marker_positions[index] for index in marker_indices],
-                dtype=np.float64,
+            reference = self._reference_points_for_indices(
+                pattern,
+                tuple(int(index) for index in marker_indices),
             )
             try:
                 rotation, position, rms_error = KabschEstimator.estimate(reference, observed)
@@ -5912,10 +6986,7 @@ class RigidBodyEstimator:
         generic_score: Dict[str, Any],
         observed_indices: Optional[Tuple[int, ...]] = None,
     ) -> Dict[str, Any]:
-        reference = np.asarray(
-            [pattern.marker_positions[index] for index in marker_indices],
-            dtype=np.float64,
-        )
+        reference = self._reference_points_for_indices(pattern, marker_indices)
         ambiguous = self._subset_is_ambiguous(pattern, tuple(sorted(marker_indices)))
         try:
             rotation, position, rms_error = KabschEstimator.estimate_weighted(
@@ -6001,7 +7072,6 @@ class RigidBodyEstimator:
             if source in {
                 "rigid_hint_subset",
                 "temporal_body_nbest",
-                "anchor_guided_body_nbest",
             }
             else 0.0
         )
@@ -6140,10 +7210,8 @@ class RigidBodyEstimator:
         if generic_pose is None or not generic_pose.valid:
             return False
         predicted = (
-            generic_pose.rotation @ np.asarray(
-                [pattern.marker_positions[index] for index in marker_indices],
-                dtype=np.float64,
-            ).T
+            generic_pose.rotation
+            @ self._reference_points_for_indices(pattern, marker_indices).T
         ).T + generic_pose.position.reshape(1, 3)
         residuals = np.linalg.norm(np.asarray(observed, dtype=np.float64) - predicted, axis=1)
         return bool(float(np.mean(residuals)) > self.subset_solve_config.prediction_gate_m)
@@ -6187,20 +7255,35 @@ class RigidBodyEstimator:
         pattern: MarkerPattern,
         marker_indices: Tuple[int, ...],
     ) -> bool:
-        if len(marker_indices) >= pattern.num_markers:
+        normalized_indices = tuple(sorted(int(index) for index in marker_indices))
+        if len(normalized_indices) >= pattern.num_markers:
             return False
-        reference = pattern.marker_positions
-        profile = self._subset_distance_profile(reference[list(marker_indices)])
-        for other in combinations(range(pattern.num_markers), len(marker_indices)):
-            if tuple(other) == tuple(marker_indices):
+        cache_key = self._pattern_subset_cache_key(pattern, normalized_indices)
+        cached = self._subset_ambiguity_cache.get(cache_key)
+        if cached is not None:
+            return bool(cached)
+
+        profile = self._subset_distance_profile(
+            self._reference_points_for_indices(pattern, normalized_indices)
+        )
+        ambiguous = False
+        for other in combinations(range(pattern.num_markers), len(normalized_indices)):
+            if tuple(other) == normalized_indices:
                 continue
-            other_profile = self._subset_distance_profile(reference[list(other)])
+            other_profile = self._subset_distance_profile(
+                self._reference_points_for_indices(
+                    pattern,
+                    tuple(int(index) for index in other),
+                )
+            )
             if len(profile) != len(other_profile):
                 continue
             delta = float(np.linalg.norm(profile - other_profile))
             if delta <= self.subset_solve_config.ambiguous_subset_delta_m:
-                return True
-        return False
+                ambiguous = True
+                break
+        self._subset_ambiguity_cache[cache_key] = bool(ambiguous)
+        return ambiguous
 
     @staticmethod
     def _subset_distance_profile(points: np.ndarray) -> np.ndarray:
@@ -6381,6 +7464,76 @@ class RigidBodyEstimator:
         diameter = self._blob_diameter_px_from_area(float(payload.get("area", 0.0) or 0.0))
         return diameter, self._reprojection_uncertainty_px(diameter)
 
+    @staticmethod
+    def _blob_diameters_and_uncertainties_from_areas(
+        areas: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        area_arr = np.asarray(areas, dtype=np.float64).reshape(-1)
+        diameters = np.zeros(len(area_arr), dtype=np.float64)
+        valid_areas = np.isfinite(area_arr) & (area_arr > 0.0)
+        diameters[valid_areas] = np.sqrt(4.0 * area_arr[valid_areas] / np.pi)
+        uncertainties = np.ones(len(area_arr), dtype=np.float64)
+        valid_diameters = np.isfinite(diameters) & (diameters > 0.0)
+        uncertainties[valid_diameters] = np.maximum(
+            1.0,
+            4.0 / diameters[valid_diameters],
+        )
+        return diameters, uncertainties
+
+    def _prepare_observation_context(
+        self,
+        camera_params: Optional[Dict[str, Any]],
+        observations_by_camera: Optional[Dict[str, List[Any]]],
+        *,
+        coordinate_space: str,
+    ) -> Optional[_PreparedObservationContext]:
+        if not camera_params or not observations_by_camera:
+            return None
+        space = "undistorted_pixel" if coordinate_space == "undistorted_pixel" else "raw_pixel"
+        prepared: Dict[str, _PreparedCameraObservations] = {}
+        total_blob_count = 0
+        for camera_id, observations in observations_by_camera.items():
+            camera = camera_params.get(camera_id)
+            if camera is None:
+                continue
+            payloads = self._extract_observation_payloads(observations, space)
+            if not payloads:
+                continue
+            uvs = np.asarray(
+                [payload["uv"] for payload in payloads],
+                dtype=np.float64,
+            ).reshape(-1, 2)
+            blob_indices = np.asarray(
+                [int(payload.get("blob_index", index)) for index, payload in enumerate(payloads)],
+                dtype=np.int64,
+            ).reshape(-1)
+            areas = np.asarray(
+                [float(payload.get("area", 0.0) or 0.0) for payload in payloads],
+                dtype=np.float64,
+            ).reshape(-1)
+            diameters, uncertainties = self._blob_diameters_and_uncertainties_from_areas(
+                areas
+            )
+            camera_key = str(camera_id)
+            prepared[camera_key] = _PreparedCameraObservations(
+                camera_id=camera_key,
+                camera=camera,
+                uv=uvs,
+                blob_indices=blob_indices,
+                area_px2=areas,
+                diameter_px=diameters,
+                uncertainty_px=uncertainties,
+            )
+            total_blob_count += int(len(uvs))
+        if not prepared:
+            return None
+        return _PreparedObservationContext(
+            coordinate_space=space,
+            by_camera=prepared,
+            camera_count=int(len(prepared)),
+            total_blob_count=int(total_blob_count),
+        )
+
     def _score_pose_reprojection(
         self,
         pose: RigidBodyPose,
@@ -6389,13 +7542,19 @@ class RigidBodyEstimator:
         observations_by_camera: Optional[Dict[str, List[Any]]],
         *,
         coordinate_space: str,
+        observation_context: Optional[_PreparedObservationContext] = None,
     ) -> Dict[str, Any]:
         if not pose.valid:
             return _empty_reprojection_score("invalid_pose")
-        if not camera_params or not observations_by_camera:
+        context = observation_context or self._prepare_observation_context(
+            camera_params,
+            observations_by_camera,
+            coordinate_space=coordinate_space,
+        )
+        if context is None:
             return _empty_reprojection_score("no_2d_context")
 
-        space = "undistorted_pixel" if coordinate_space == "undistorted_pixel" else "raw_pixel"
+        space = context.coordinate_space
         markers_world = (pose.rotation @ pattern.marker_positions.T).T + pose.position.reshape(1, 3)
         residuals: List[float] = []
         normalized_residuals: List[float] = []
@@ -6406,43 +7565,22 @@ class RigidBodyEstimator:
         scored_cameras = 0
         matched_observations: List[Dict[str, Any]] = []
 
-        for camera_id, observations in observations_by_camera.items():
-            camera = camera_params.get(camera_id)
-            if camera is None:
-                continue
-            observed_payloads = self._extract_observation_payloads(observations, space)
-            if not observed_payloads:
-                continue
-            observed_uvs = [payload["uv"] for payload in observed_payloads]
-
-            projected_uvs = self._project_markers_to_camera(markers_world, camera, space)
+        for camera_obs in context.by_camera.values():
+            observed_uvs = camera_obs.uv
+            projected_uvs = self._project_markers_to_camera(
+                markers_world,
+                camera_obs.camera,
+                space,
+            )
             if not projected_uvs:
                 continue
+            projected_arr = np.asarray(projected_uvs, dtype=np.float64).reshape(-1, 2)
 
             scored_cameras += 1
             expected += len(projected_uvs)
-            uncertainty_px = np.asarray(
-                [
-                    self._payload_reprojection_uncertainty_px(payload)[1]
-                    for payload in observed_payloads
-                ],
-                dtype=np.float64,
-            ).reshape(1, -1)
-            cost_px = np.asarray(
-                [
-                    [
-                        float(
-                            np.linalg.norm(
-                                np.asarray(projected, dtype=np.float64)
-                                - np.asarray(observed, dtype=np.float64)
-                            )
-                        )
-                        for observed in observed_uvs
-                    ]
-                    for projected in projected_uvs
-                ],
-                dtype=np.float64,
-            )
+            uncertainty_px = camera_obs.uncertainty_px.reshape(1, -1)
+            deltas = projected_arr[:, None, :] - observed_uvs[None, :, :]
+            cost_px = np.sqrt(np.sum(deltas * deltas, axis=2))
             cost = cost_px / np.maximum(uncertainty_px, 1e-6)
             effective_gate_px = self.reprojection_match_gate_px * np.maximum(
                 uncertainty_px,
@@ -6457,19 +7595,21 @@ class RigidBodyEstimator:
                 if normalized_error >= invalid_cost:
                     continue
                 error = float(cost_px[row, col])
-                diameter_px, uncertainty = self._payload_reprojection_uncertainty_px(
-                    observed_payloads[int(col)]
-                )
+                diameter_px = float(camera_obs.diameter_px[int(col)])
+                uncertainty = float(camera_obs.uncertainty_px[int(col)])
                 matched += 1
                 residuals.append(error)
                 normalized_residuals.append(normalized_error)
                 assigned_blob_indices.add(int(col))
-                observation = observed_payloads[int(col)]
                 matched_observations.append(
                     {
-                        "camera_id": str(camera_id),
+                        "camera_id": camera_obs.camera_id,
                         "marker_idx": int(row),
-                        "blob_index": int(observation.get("blob_index", int(col))),
+                        "blob_index": int(camera_obs.blob_indices[int(col)]),
+                        "observed_uv": [
+                            float(value)
+                            for value in observed_uvs[int(col)].reshape(2)
+                        ],
                         "error_px": error,
                         "normalized_error": normalized_error,
                         "blob_diameter_px": float(diameter_px),
@@ -6477,7 +7617,7 @@ class RigidBodyEstimator:
                     }
                 )
 
-            unexpected_blobs += max(0, len(observed_uvs) - len(assigned_blob_indices))
+            unexpected_blobs += max(0, camera_obs.blob_count - len(assigned_blob_indices))
 
         if expected <= 0:
             return _empty_reprojection_score("no_projectable_markers")
@@ -6585,6 +7725,15 @@ class RigidBodyEstimator:
                         "camera_id": camera_id,
                         "marker_idx": int(marker_idx),
                         "blob_index": int(blob_index),
+                        "observed_uv": [
+                            float(value)
+                            for value in np.asarray(
+                                observation.get("undistorted_uv")
+                                or observation.get("raw_uv")
+                                or [observation.get("x", 0.0), observation.get("y", 0.0)],
+                                dtype=np.float64,
+                            ).reshape(2)
+                        ],
                         "error_px": error,
                         "normalized_error": normalized_error,
                         "blob_diameter_px": float(diameter_px),
@@ -6756,6 +7905,7 @@ class RigidBodyEstimator:
                         "camera_id": camera_id,
                         "marker_idx": int(marker_idx),
                         "blob_index": int(blob_index),
+                        "observed_uv": [float(value) for value in observed_uv.reshape(2)],
                         "error_px": error,
                         "normalized_error": normalized_error,
                         "blob_diameter_px": float(diameter_px),

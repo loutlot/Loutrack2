@@ -1775,8 +1775,18 @@ def test_tracking_page_surfaces_start_stop_status_messages() -> None:
     assert "reacquire_guard_event_logging: false" in HTML_PAGE
     assert "reacquire_guard_enforced: true" in HTML_PAGE
     assert "object_gating_enforced: true" in HTML_PAGE
-    assert "pose_continuity_guard_enabled: true" in HTML_PAGE
-    assert "pose_continuity_guard_enforced: true" in HTML_PAGE
+    assert "body_level_2d_recovery: true" in HTML_PAGE
+    assert "body_level_2d_max_offsets: 8" in HTML_PAGE
+    assert "body_level_2d_assignment_nearest_per_marker: 2" in HTML_PAGE
+    assert "body_level_2d_candidate_cache: true" in HTML_PAGE
+    assert "body_level_2d_cache_max_bins: 4" in HTML_PAGE
+    assert "body_level_2d_cache_early_exit: true" in HTML_PAGE
+    assert "body_level_2d_keep_nbest_diagnostics: false" in HTML_PAGE
+    assert "skip_generic_search_when_object_gated: true" in HTML_PAGE
+    assert "raw_scene_interval_frames: 4" in HTML_PAGE
+    assert "runtime_diagnostics_enabled: false" in HTML_PAGE
+    assert "pose_continuity_guard_enabled: false" in HTML_PAGE
+    assert "pose_continuity_guard_enforced: false" in HTML_PAGE
     assert "pose_continuity_max_rotation_deg: 90" in HTML_PAGE
     assert "pose_continuity_max_angular_velocity_deg_s: 2500" in HTML_PAGE
     assert "pose_continuity_max_angular_accel_deg_s2: 200000" in HTML_PAGE

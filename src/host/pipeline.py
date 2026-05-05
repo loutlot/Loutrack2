@@ -21,7 +21,8 @@ from .geo import (
 from .rigid import (
     RigidBodyEstimator, RigidBodyPose, 
     MarkerPattern, WAIST_PATTERN, ReacquireGuardConfig, ObjectGatingConfig,
-    PoseContinuityGuardConfig, PositionContinuityGuardConfig, SubsetSolveConfig
+    PoseContinuityGuardConfig, PositionContinuityGuardConfig, SubsetSolveConfig,
+    compact_object_gating_diagnostics,
 )
 from .metrics import MetricsCollector
 from .logger import FrameLogger
@@ -171,6 +172,7 @@ def _empty_triangulation_quality() -> Dict[str, Any]:
 
 def _rigid_stabilization_configs(settings: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     payload = settings if isinstance(settings, dict) else {}
+    runtime_diagnostics_enabled = payload.get("runtime_diagnostics_enabled")
     ambiguous_blob_min_separation_px = payload.get(
         "object_gating_ambiguous_blob_min_separation_px",
         0.60,
@@ -213,6 +215,48 @@ def _rigid_stabilization_configs(settings: Optional[Dict[str, Any]]) -> Dict[str
             ambiguous_marker_assignment_min_margin_px=float(
                 ambiguous_marker_assignment_min_margin_px
             ),
+            body_level_2d_recovery=bool(
+                payload.get("body_level_2d_recovery", False)
+            ),
+            body_level_2d_max_offsets=int(
+                payload.get("body_level_2d_max_offsets", 12) or 12
+            ),
+            body_level_2d_nearest_per_marker=int(
+                payload.get("body_level_2d_nearest_per_marker", 2) or 2
+            ),
+            body_level_2d_assignment_nearest_per_marker=int(
+                payload.get("body_level_2d_assignment_nearest_per_marker", 3) or 3
+            ),
+            body_level_2d_trigger_max_assignments=int(
+                payload.get("body_level_2d_trigger_max_assignments", 3)
+            ),
+            body_level_2d_max_distance_scale=float(
+                payload.get("body_level_2d_max_distance_scale", 0.12) or 0.12
+            ),
+            body_level_2d_min_margin=float(
+                payload.get("body_level_2d_min_margin", 0.0) or 0.0
+            ),
+            body_level_2d_candidate_cache=bool(
+                payload.get("body_level_2d_candidate_cache", False)
+            ),
+            body_level_2d_cache_max_bins=int(
+                payload.get("body_level_2d_cache_max_bins", 4) or 4
+            ),
+            body_level_2d_cache_early_exit=bool(
+                payload.get("body_level_2d_cache_early_exit", False)
+            ),
+            body_level_2d_keep_nbest_diagnostics=bool(
+                payload.get("body_level_2d_keep_nbest_diagnostics", True)
+            ),
+            skip_generic_search_when_object_gated=bool(
+                payload.get("skip_generic_search_when_object_gated", False)
+            ),
+            temporal_2d_ownership_recovery=bool(
+                payload.get("temporal_2d_ownership_recovery", False)
+            ),
+            temporal_2d_motion_prediction=bool(
+                payload.get("temporal_2d_motion_prediction", False)
+            ),
         ),
         "pose_continuity_guard_config": PoseContinuityGuardConfig(
             enabled=bool(payload.get("pose_continuity_guard_enabled", False)),
@@ -244,11 +288,21 @@ def _rigid_stabilization_configs(settings: Optional[Dict[str, Any]]) -> Dict[str
             enabled=bool(payload.get("subset_ransac", True)),
             diagnostics_only=True,
         ),
-        "anchor_guided_body_nbest_enabled": bool(
-            payload.get("anchor_guided_body_nbest", False)
-        ),
         "temporal_body_nbest_enabled": bool(
             payload.get("temporal_body_nbest", False)
+        ),
+        "cluster_radius_m": (
+            float(payload["cluster_radius_m"])
+            if payload.get("cluster_radius_m") is not None
+            else 0.08
+        ),
+        "raw_scene_interval_frames": int(
+            payload.get("raw_scene_interval_frames", 1) or 1
+        ),
+        "runtime_diagnostics_enabled": (
+            None
+            if runtime_diagnostics_enabled is None
+            else bool(runtime_diagnostics_enabled)
         ),
     }
 
@@ -334,10 +388,25 @@ class TrackingPipeline:
             or default_subset_diagnostics_mode_for_variant(self.pipeline_variant)
         )
         stabilization_configs = _rigid_stabilization_configs(rigid_stabilization)
+        self.raw_scene_interval_frames = max(
+            1,
+            int(stabilization_configs.get("raw_scene_interval_frames", 1) or 1),
+        )
+        runtime_diagnostics_enabled = stabilization_configs.get(
+            "runtime_diagnostics_enabled"
+        )
+        self.runtime_diagnostics_enabled = (
+            bool(enable_logging)
+            if runtime_diagnostics_enabled is None
+            else bool(runtime_diagnostics_enabled)
+        )
+        self._raw_scene_submit_counter = 0
         if rigid_stabilization and "reacquire_guard_event_logging" in rigid_stabilization:
             self.reacquire_guard_event_logging = bool(
                 rigid_stabilization.get("reacquire_guard_event_logging")
             )
+        if self.reacquire_guard_event_logging:
+            self.runtime_diagnostics_enabled = True
         
         # Initialize components
         self.frame_processor = FrameProcessor(
@@ -372,11 +441,9 @@ class TrackingPipeline:
             subset_diagnostics_mode=self.subset_diagnostics_mode,
             subset_time_budget_ms=subset_time_budget_ms_for_variant(self.pipeline_variant),
             subset_max_hypotheses=subset_max_hypotheses_for_variant(self.pipeline_variant),
+            cluster_radius_m=float(stabilization_configs.get("cluster_radius_m", 0.08)),
             rigid_candidate_separation_enabled=_variant_has_rigid_candidate_separation(
                 self.pipeline_variant
-            ),
-            anchor_guided_body_nbest_enabled=bool(
-                stabilization_configs.get("anchor_guided_body_nbest_enabled", False)
             ),
             temporal_body_nbest_enabled=bool(
                 stabilization_configs.get("temporal_body_nbest_enabled", False)
@@ -638,6 +705,13 @@ class TrackingPipeline:
                 self._raw_scene_worker = None
 
     def _submit_raw_scene_pair(self, paired_frames: PairedFrames) -> None:
+        self._raw_scene_submit_counter += 1
+        if (
+            self.raw_scene_interval_frames > 1
+            and (self._raw_scene_submit_counter - 1) % self.raw_scene_interval_frames != 0
+        ):
+            self._record_variant_metric("raw_scene_skipped_count")
+            return
         with self._raw_scene_condition:
             if self._raw_scene_worker is None or not self._raw_scene_worker.is_alive():
                 return
@@ -707,6 +781,7 @@ class TrackingPipeline:
             "full_blob_count": int(counts.get("full_blob_count", 0)),
             "filtered_blob_count": int(counts.get("filtered_blob_count", 0)),
             "raw_scene_update_count": int(counts.get("raw_scene_update_count", 0)),
+            "raw_scene_skipped_count": int(counts.get("raw_scene_skipped_count", 0)),
             "raw_scene_coalesced_count": int(counts.get("raw_scene_coalesced_count", 0)),
             "raw_scene_error_count": int(counts.get("raw_scene_error_count", 0)),
             "subset_sampled_count": int(rigid_metrics.get("subset_sampled_count", 0)),
@@ -966,7 +1041,8 @@ class TrackingPipeline:
                     coordinate_space="raw_pixel",
                 )
                 self._record_stage("object_gating_ms", self._elapsed_ms(object_stage_started_ns))
-                self._record_object_gating_events(timestamp, object_gating)
+                if self.runtime_diagnostics_enabled:
+                    self._record_object_gating_events(timestamp, object_gating)
             stage_started_ns = time.perf_counter_ns()
             if self._calibration_loaded:
                 result = self._process_geometry_with_variant(
@@ -974,7 +1050,11 @@ class TrackingPipeline:
                     object_gating,
                 )
                 points_3d = result.get("points_3d", [])
-                self._record_rigid_hint_events(timestamp, result.get("rigid_hint_quality", {}))
+                if self.runtime_diagnostics_enabled:
+                    self._record_rigid_hint_events(
+                        timestamp,
+                        result.get("rigid_hint_quality", {}),
+                    )
             else:
                 points_3d = []
             self._record_stage("triangulation_ms", self._elapsed_ms(stage_started_ns))
@@ -1026,7 +1106,7 @@ class TrackingPipeline:
                         triangulation_quality.get("triangulation_angle_deg_summary", {})
                     ),
                     "assignment_diagnostics": dict(result.get("assignment_diagnostics", {})),
-                    "object_gating": dict(object_gating),
+                    "object_gating": self._object_gating_snapshot(object_gating),
                     "pair_timestamp_range_us": paired_frames.timestamp_range_us,
                 }
             
@@ -1054,15 +1134,16 @@ class TrackingPipeline:
                 poses = self.rigid_estimator.process_points(points_array, timestamp)
             self._record_stage("rigid_ms", self._elapsed_ms(stage_started_ns))
             self._record_stage("rigid_pose_ms", self._elapsed_ms(stage_started_ns))
-            if hasattr(self.rigid_estimator, "get_tracking_event_status"):
-                tracking_status = self.rigid_estimator.get_tracking_event_status()
-            else:
-                tracking_status = self.rigid_estimator.get_tracking_status()
-            self._record_reacquire_guard_events(timestamp, tracking_status)
-            self._record_position_continuity_guard_events(timestamp, tracking_status)
-            self._record_pose_continuity_guard_events(timestamp, tracking_status)
-            self._record_rigid_hint_pose_events(timestamp, tracking_status)
-            self._record_subset_hypothesis_events(timestamp, tracking_status)
+            if self.runtime_diagnostics_enabled:
+                if hasattr(self.rigid_estimator, "get_tracking_event_status"):
+                    tracking_status = self.rigid_estimator.get_tracking_event_status()
+                else:
+                    tracking_status = self.rigid_estimator.get_tracking_status()
+                self._record_reacquire_guard_events(timestamp, tracking_status)
+                self._record_position_continuity_guard_events(timestamp, tracking_status)
+                self._record_pose_continuity_guard_events(timestamp, tracking_status)
+                self._record_rigid_hint_pose_events(timestamp, tracking_status)
+                self._record_subset_hypothesis_events(timestamp, tracking_status)
             
             # Update metrics
             stage_started_ns = time.perf_counter_ns()
@@ -1100,7 +1181,8 @@ class TrackingPipeline:
                     paired_frames,
                     dict(self._active_pair_stage_ms),
                 )
-            self._maybe_log_diagnostics_event()
+            if self.runtime_diagnostics_enabled:
+                self._maybe_log_diagnostics_event()
             
         except Exception as e:
             if self._error_callback:
@@ -1150,6 +1232,25 @@ class TrackingPipeline:
             name: dict(status.get("object_gating", {}))
             for name, status in tracking_status.items()
             if isinstance(status, dict) and isinstance(status.get("object_gating"), dict)
+        }
+
+    def _object_gating_snapshot(
+        self,
+        object_gating: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        include_detail = int(self.frames_processed) % 12 == 0
+        return {
+            str(name): compact_object_gating_diagnostics(
+                gating,
+                include_detail=(
+                    include_detail
+                    or str(gating.get("mode", "")) != "continue"
+                    or int(gating.get("ambiguous_assignment_count", 0) or 0) > 0
+                    or int(gating.get("duplicate_assignment_count", 0) or 0) > 0
+                ),
+            )
+            for name, gating in object_gating.items()
+            if isinstance(gating, dict)
         }
 
     def _diagnostics_snapshot(self) -> Dict[str, Any]:
